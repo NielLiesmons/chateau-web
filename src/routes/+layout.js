@@ -1,3 +1,2 @@
-// Disable SSR and enable prerendering for static export
+// Disable SSR - render client-side only
 export const ssr = false;
-export const prerender = true;
