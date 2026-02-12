@@ -3,7 +3,9 @@ node_modules
 /build
 /.svelte-kit
 /package
-.vercel/output/static
+.vercel/output/static/
+.vercel/output/functions/
+.vercel/project.json
 .env
 .env.*
 !.env.example
