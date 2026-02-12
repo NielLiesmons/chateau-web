@@ -6,7 +6,7 @@
   let heroElement;
   let exploreButton;
   let scrollY = 0;
-  let windowWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
+  let windowWidth = 1920;
 
   function handleExploreButtonMouseMove(event) {
     if (!exploreButton) return;
@@ -105,10 +105,13 @@
   }
 
   onMount(() => {
+    // Set initial values
+    windowWidth = window.innerWidth;
+    scrollY = window.scrollY;
+    
     window.addEventListener('scroll', handleScroll, { passive: true });
     window.addEventListener('resize', handleResize, { passive: true });
-    handleScroll();
-    handleResize();
+    
     return () => {
       window.removeEventListener('scroll', handleScroll);
       window.removeEventListener('resize', handleResize);
