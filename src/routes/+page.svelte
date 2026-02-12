@@ -1,9 +1,9 @@
-<script lang="ts">
+<script>
   import Header from '$lib/components/Header.svelte';
   import ParallaxHero from '$lib/components/ParallaxHero.svelte';
   import Modal from '$lib/components/Modal.svelte';
 
-  let comingSoonModalOpen = $state(false);
+  let comingSoonModalOpen = false;
 
   function openComingSoonModal() {
     comingSoonModalOpen = true;

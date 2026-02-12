@@ -1,23 +1,12 @@
-<script lang="ts">
+<script>
   import { fade, fly } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import { browser } from "$app/environment";
 
-  interface Props {
-    open?: boolean;
-    ariaLabel?: string;
-    zIndex?: number;
-    maxWidth?: string;
-    children?: import("svelte").Snippet;
-  }
-
-  let {
-    open = $bindable(false),
-    ariaLabel = "Modal dialog",
-    zIndex = 50,
-    maxWidth = "max-w-lg",
-    children,
-  }: Props = $props();
+  export let open = false;
+  export let ariaLabel = "Modal dialog";
+  export let zIndex = 50;
+  export let maxWidth = "max-w-lg";
 
   function lockBodyScroll() {
     if (browser) {
@@ -31,23 +20,21 @@
     }
   }
 
-  $effect(() => {
-    if (browser) {
-      if (open) {
-        lockBodyScroll();
-      } else {
-        unlockBodyScroll();
-      }
+  $: if (browser) {
+    if (open) {
+      lockBodyScroll();
+    } else {
+      unlockBodyScroll();
     }
-  });
+  }
 
-  function handleBackdropClick(e: MouseEvent) {
+  function handleBackdropClick(e) {
     if (e.target === e.currentTarget) {
       open = false;
     }
   }
 
-  function handleKeydown(e: KeyboardEvent) {
+  function handleKeydown(e) {
     if (e.key === "Escape") {
       open = false;
     }
@@ -77,7 +64,7 @@
       tabindex="-1"
     >
       <div class="modal-content p-6">
-        {@render children?.()}
+        <slot />
       </div>
     </div>
   </div>

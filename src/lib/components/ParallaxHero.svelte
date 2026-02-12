@@ -1,18 +1,14 @@
-<script lang="ts">
+<script>
   import { onMount } from 'svelte';
 
-  interface Props {
-    onExplore?: () => void;
-  }
+  export let onExplore = undefined;
 
-  let { onExplore }: Props = $props();
+  let heroElement;
+  let exploreButton;
+  let scrollY = 0;
+  let windowWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
 
-  let heroElement: HTMLElement | undefined;
-  let exploreButton: HTMLElement | undefined;
-  let scrollY = $state(0);
-  let windowWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1920);
-
-  function handleExploreButtonMouseMove(event: MouseEvent) {
+  function handleExploreButtonMouseMove(event) {
     if (!exploreButton) return;
     const rect = exploreButton.getBoundingClientRect();
     const x = event.clientX - rect.left;
@@ -89,14 +85,14 @@
     return sizeDifference * 1.2;
   }
 
-  const emojiPositions = $derived(emojiConfigs.map((config) => {
+  $: emojiPositions = emojiConfigs.map((config) => {
     return {
       ...config,
       parallaxSpeed: calculateParallaxSpeed(config.size),
       opacity: calculateOpacity(config.size),
       blur: calculateBlur(config.size)
     };
-  }));
+  });
 
   function handleResize() {
     windowWidth = window.innerWidth;

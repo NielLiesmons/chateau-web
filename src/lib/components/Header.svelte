@@ -1,14 +1,10 @@
-<script lang="ts">
+<script>
   import { Search } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
-  interface Props {
-    onGetStarted?: () => void;
-  }
+  export let onGetStarted = undefined;
 
-  let { onGetStarted }: Props = $props();
-
-  let scrolled = $state(false);
+  let scrolled = false;
 
   onMount(() => {
     const handleScroll = () => {
