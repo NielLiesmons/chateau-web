@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+:root {
+  /* White variants */
+  --white: 0 0% 100%;
+  --white66: 0 0% 100% / 0.66;
+  --white33: 0 0% 100% / 0.33;
+  --white16: 0 0% 100% / 0.16;
+  --white11: 0 0% 100% / 0.11;
+  --white8: 0 0% 100% / 0.08;
+
+  /* Black variants */
+  --black: 0 0% 7%;
+  --black33: 0 0% 0% / 0.33;
+
+  /* Gray variants */
+  --gray: 0 0% 14%;
+  --gray66: 0 0% 20% / 0.66;
+
+  /* Blurple color variants */
+  --blurpleLightColor: 241 100% 75%;
+  --blurpleColor: 241 99% 67%;
+
+  /* Font */
+  --font-sans: system-ui, -apple-system, sans-serif;
+
+  /* Semantic colors */
+  --background: var(--black);
+  --foreground: var(--white);
+  --primary: var(--blurpleColor);
+  --border: 0 0% 100% / 0.16;
+  --muted-foreground: var(--white66);
+
+  /* Gradients */
+  --gradient-gray: radial-gradient(circle at top left, #FFFFFF 0%, #CCCCCC 100%);
+  --gradient-blurple-light: radial-gradient(circle at top left, #CDCCFF 0%, #5C5FFF 100%);
+  --gradient-subtle: linear-gradient(to bottom, transparent 0%, hsl(var(--black) / 0.5) 100%);
+  --bg-dither: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='4' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.bg-gradient-subtle {
+  background: var(--gradient-subtle);
+}
+
+.bg-dither {
+  background-image: var(--bg-dither);
+  background-size: 200px 200px;
+}
+
+.border-subtle {
+  border: 0.33px solid hsl(var(--white16));
+}
+
+.text-muted-foreground {
+  color: hsl(var(--muted-foreground));
+}
