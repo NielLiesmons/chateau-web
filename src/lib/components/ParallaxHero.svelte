@@ -1,49 +1,69 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
 
-  let heroElement;
-  let scrollY = 0;
-  let windowWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
+  interface Props {
+    onExplore?: () => void;
+  }
+
+  let { onExplore }: Props = $props();
+
+  let heroElement: HTMLElement | undefined;
+  let exploreButton: HTMLElement | undefined;
+  let scrollY = $state(0);
+  let windowWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1920);
+
+  function handleExploreButtonMouseMove(event: MouseEvent) {
+    if (!exploreButton) return;
+    const rect = exploreButton.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    exploreButton.style.setProperty('--mouse-x', `${x}px`);
+    exploreButton.style.setProperty('--mouse-y', `${y}px`);
+  }
 
   // Content type emoji configuration - using transparent PNG emojis
-  // These will float around the hero section
-  export let emojiConfigs = [
-    // Featured content types (large, prominent positions)
-    { imageUrl: `/images/emoji/community.png`, x: -400, y: -170, size: 1.9, rotationX: 12, rotationY: -15 },
-    { imageUrl: `/images/emoji/forum.png`, x: 380, y: -190, size: 2.0, rotationX: 20, rotationY: 14 },
-    { imageUrl: `/images/emoji/chat.png`, x: -456, y: 155, size: 2.0, rotationX: -20, rotationY: -20 },
-    { imageUrl: `/images/emoji/group.png`, x: 470, y: 160, size: 1.9, rotationX: -16, rotationY: 16 },
-    { imageUrl: `/images/emoji/note.png`, x: -105, y: -310, size: 1.9, rotationX: 25, rotationY: -22 },
+  // Desktop-first layout that scales and translates for mobile
+  // Smaller sizes and simple rotation only (no 3D tilt)
+  const emojiConfigs = [
+    // Featured content types (medium-large, prominent positions)
+    { imageUrl: `/images/emoji/community.png`, x: -480, y: -190, size: 1.4, rotation: 12 }, // moved up
+    { imageUrl: `/images/emoji/forum.png`, x: 460, y: -210, size: 1.5, rotation: -15 }, // moved up
+    { imageUrl: `/images/emoji/chat.png`, x: -400, y: 155, size: 1.5, rotation: 20 }, // moved more towards center
+    { imageUrl: `/images/emoji/group.png`, x: 420, y: 160, size: 1.4, rotation: -18 }, // moved more towards center
+    { imageUrl: `/images/emoji/note.png`, x: -140, y: -310, size: 1.4, rotation: 8 },
+    { imageUrl: `/images/emoji/article.png`, x: 220, y: -290, size: 1.3, rotation: -12 },
     
-    // Middle emojis
-    { imageUrl: `/images/emoji/thread.png`, x: -360, y: 0, size: 1.3, rotationX: -18, rotationY: -20 },
-    { imageUrl: `/images/emoji/comment.png`, x: 360, y: -10, size: 1.2, rotationX: 16, rotationY: 18 },
+    // Middle emojis - moved away from center
+    { imageUrl: `/images/emoji/thread.png`, x: -500, y: 0, size: 1.0, rotation: -10 },
+    { imageUrl: `/images/emoji/comment.png`, x: 500, y: -10, size: 0.95, rotation: 15 },
     
-    // Secondary emojis (medium-large, fill out the space)
-    { imageUrl: `/images/emoji/article.png`, x: -840, y: -400, size: 1.6, rotationX: -20, rotationY: 25 },
-    { imageUrl: `/images/emoji/podcast.png`, x: 840, y: -400, size: 1.5, rotationX: -18, rotationY: -22 },
-    { imageUrl: `/images/emoji/video.png`, x: -840, y: 600, size: 1.4, rotationX: 20, rotationY: 18 },
-    { imageUrl: `/images/emoji/music.png`, x: 840, y: 600, size: 1.3, rotationX: 18, rotationY: -20 },
-    { imageUrl: `/images/emoji/event.png`, x: -720, y: -300, size: 1.8, rotationX: 20, rotationY: -15 },
-    { imageUrl: `/images/emoji/live.png`, x: 720, y: -300, size: 1.8, rotationX: 20, rotationY: 15 },
-    { imageUrl: `/images/emoji/book.png`, x: -720, y: 500, size: 1.7, rotationX: -20, rotationY: 25 },
-    { imageUrl: `/images/emoji/wiki.png`, x: 720, y: 500, size: 1.7, rotationX: -20, rotationY: -25 },
-    { imageUrl: `/images/emoji/poll.png`, x: -600, y: -200, size: 1.6, rotationX: 18, rotationY: -18 },
-    { imageUrl: `/images/emoji/task.png`, x: 600, y: -200, size: 1.6, rotationX: 18, rotationY: 18 },
+    // Bottom center left and right (NEW)
+    { imageUrl: `/images/emoji/video.png`, x: -230, y: 240, size: 1.1, rotation: 18 },
+    { imageUrl: `/images/emoji/music.png`, x: 230, y: 240, size: 1.1, rotation: -20 },
+    
+    // Secondary emojis (medium, fill out the space)
+    { imageUrl: `/images/emoji/podcast.png`, x: -890, y: -400, size: 1.2, rotation: 25 },
+    { imageUrl: `/images/emoji/event.png`, x: 890, y: -400, size: 1.1, rotation: -22 },
+    { imageUrl: `/images/emoji/live.png`, x: -890, y: 600, size: 1.0, rotation: 18 },
+    { imageUrl: `/images/emoji/book.png`, x: 890, y: 600, size: 1.0, rotation: -20 },
+    { imageUrl: `/images/emoji/wiki.png`, x: -770, y: -300, size: 1.3, rotation: -15 },
+    { imageUrl: `/images/emoji/poll.png`, x: 770, y: -300, size: 1.3, rotation: 15 },
+    { imageUrl: `/images/emoji/task.png`, x: -770, y: 500, size: 1.2, rotation: 25 },
+    { imageUrl: `/images/emoji/badge.png`, x: 770, y: 500, size: 1.2, rotation: -25 },
     
     // More grid positions
-    { imageUrl: `/images/emoji/album.png`, x: -840, y: 0, size: 1.2, rotationX: 16, rotationY: 22 },
-    { imageUrl: `/images/emoji/badge.png`, x: 840, y: 300, size: 0.95, rotationX: -10, rotationY: -16 },
-    { imageUrl: `/images/emoji/mail.png`, x: -580, y: -20, size: 0.9, rotationX: 12, rotationY: 15 },
-    { imageUrl: `/images/emoji/profile.png`, x: 580, y: -20, size: 0.85, rotationX: 10, rotationY: -14 },
-    { imageUrl: `/images/emoji/zap.png`, x: -720, y: 100, size: 0.8, rotationX: -8, rotationY: 12 },
-    { imageUrl: `/images/emoji/supporter.png`, x: 720, y: 100, size: 0.75, rotationX: -6, rotationY: -10 },
+    { imageUrl: `/images/emoji/album.png`, x: -890, y: 0, size: 0.9, rotation: 22 },
+    { imageUrl: `/images/emoji/supporter.png`, x: 890, y: 300, size: 0.7, rotation: -16 },
+    { imageUrl: `/images/emoji/mail.png`, x: -680, y: -20, size: 0.7, rotation: 15 },
+    { imageUrl: `/images/emoji/profile.png`, x: 680, y: -20, size: 0.65, rotation: -14 },
+    { imageUrl: `/images/emoji/zap.png`, x: -770, y: 100, size: 0.6, rotation: 12 },
+    { imageUrl: `/images/emoji/repository.png`, x: 770, y: 100, size: 0.55, rotation: -10 },
   ];
 
   // Calculate parallax speed based on size
   function calculateParallaxSpeed(size) {
     const minSize = 0.5;
-    const maxSize = 2.8;
+    const maxSize = 2.0;
     const minSpeed = 0.15;
     const maxSpeed = 0.9;
     const normalizedSize = Math.max(minSize, Math.min(maxSize, size));
@@ -54,7 +74,7 @@
   // Calculate opacity based on size
   function calculateOpacity(size) {
     const minSize = 0.5;
-    const maxSize = 2.8;
+    const maxSize = 2.0;
     const minOpacity = 0.33;
     const maxOpacity = 1.0;
     const normalizedSize = Math.max(minSize, Math.min(maxSize, size));
@@ -64,19 +84,19 @@
 
   // Calculate blur based on size
   function calculateBlur(size) {
-    const baseSize = 1.9;
+    const baseSize = 1.4;
     const sizeDifference = Math.abs(size - baseSize);
     return sizeDifference * 1.2;
   }
 
-  $: emojiPositions = emojiConfigs.map((config) => {
+  const emojiPositions = $derived(emojiConfigs.map((config) => {
     return {
       ...config,
       parallaxSpeed: calculateParallaxSpeed(config.size),
       opacity: calculateOpacity(config.size),
       blur: calculateBlur(config.size)
     };
-  });
+  }));
 
   function handleResize() {
     windowWidth = window.innerWidth;
@@ -102,8 +122,7 @@
 
 <section
   bind:this={heroElement}
-  class="relative h-[500px] sm:h-[480px] md:h-[520px] lg:h-[560px] flex items-center justify-center overflow-hidden"
-  style="perspective: 2000px; perspective-origin: center center;"
+  class="relative h-[500px] sm:h-[480px] md:h-[520px] lg:h-[600px] flex items-center justify-center overflow-hidden"
 >
   <!-- Background gradient orbs -->
   <div
@@ -134,22 +153,33 @@
   <!-- Content type emojis with parallax -->
   <div
     class="absolute left-0 right-0 top-0 h-[490px] sm:h-full pointer-events-none"
-    style="transform-style: preserve-3d;"
   >
     {#each emojiPositions as emojiData, index}
       {@const parallaxOffset = -scrollY * emojiData.parallaxSpeed}
       {@const cappedWidth = Math.min(windowWidth, 1440)}
       {@const baseSize = Math.max(30, (cappedWidth / 100) * 3.5)}
-      {@const scaledSize = baseSize * emojiData.size}
       {@const baseXFactor = 0.6}
       {@const mobileBoost = windowWidth < 768 ? (1 - windowWidth / 768) * 0.15 : 0}
       {@const xFactor = baseXFactor + mobileBoost}
       {@const positionScaleX = 1.0 + (cappedWidth / 1920 - 1) * xFactor}
       {@const yFactor = 0.5}
       {@const positionScaleY = 1.0 + (cappedWidth / 1920 - 1) * yFactor}
-      {@const scaledX = emojiData.x * positionScaleX}
-      {@const scaledY = emojiData.y * positionScaleY}
-      {@const translateZ = emojiData.size > 2.0 ? 150 : emojiData.size > 1.5 ? 120 : emojiData.size > 1.0 ? 100 : emojiData.size > 0.8 ? 0 : -100}
+      {@const isTopFeatured = index === 0 || index === 1}
+      {@const isBottomFeatured = index === 2 || index === 3}
+      {@const isMiddle = index === 6 || index === 7}
+      {@const mobileOffsetX =
+        windowWidth < 768
+          ? isTopFeatured
+            ? emojiData.x > 0 ? -60 : 60
+            : isBottomFeatured
+              ? emojiData.x > 0 ? -70 : 70
+              : isMiddle
+                ? emojiData.x > 0 ? -45 : 45
+                : emojiData.x > 0 ? -30 : 30
+          : 0}
+      {@const mobileYFactor = windowWidth < 768 ? 0.25 : 0}
+      {@const scaledX = emojiData.x * positionScaleX + mobileOffsetX}
+      {@const scaledY = emojiData.y * positionScaleY * (1 + mobileYFactor)}
       
       <div
         class="absolute flex items-center justify-center"
@@ -160,11 +190,8 @@
             translate(-50%, -50%)
             translateX({scaledX}px)
             translateY({parallaxOffset + scaledY}px)
-            translateZ({translateZ}px)
-            rotateX({emojiData.rotationX}deg)
-            rotateY({emojiData.rotationY}deg)
+            rotate({emojiData.rotation}deg)
             scale({emojiData.size});
-          transform-style: preserve-3d;
           opacity: {emojiData.opacity};
           filter: blur({emojiData.blur}px);
         "
@@ -179,8 +206,6 @@
           style="
             width: {baseSize}px;
             height: {baseSize}px;
-            backface-visibility: hidden;
-            transform: translateZ(0);
           "
         />
       </div>
@@ -188,8 +213,8 @@
   </div>
 
   <!-- Central text -->
-  <div class="relative z-10 text-center px-4 -mt-2 sm:mt-0">
-    <h1 class="text-5xl sm:text-6xl lg:text-7xl xl:text-8xl leading-tight mb-6 font-bold">
+  <div class="relative z-10 text-center px-4 mt-8 sm:mt-12 lg:mt-0">
+    <h1 class="text-5xl sm:text-6xl lg:text-7xl xl:text-8xl font-bold mb-4 hero-title">
       <span
         style="background: var(--gradient-gray); -webkit-background-clip: text; background-clip: text; color: transparent;"
       >
@@ -202,9 +227,18 @@
         Collaboration.
       </span>
     </h1>
-    <p class="text-lg sm:text-xl text-muted-foreground max-w-[260px] sm:max-w-none mx-auto">
-      Building communities together
+    <p class="hero-description text-muted-foreground max-w-[320px] sm:max-w-none mx-auto mb-8">
+      Chat, Forum, Tasks and literally anything else
     </p>
+    <button
+      type="button"
+      bind:this={exploreButton}
+      onclick={onExplore}
+      onmousemove={handleExploreButtonMouseMove}
+      class="btn-glass-large"
+    >
+      Explore Communities
+    </button>
   </div>
 </section>
 
@@ -222,6 +256,81 @@
     }
     50% {
       transform: translate(30px, -30px) scale(1.1);
+    }
+  }
+
+  /* Exact btn-glass-large style from webapp */
+  .btn-glass-large {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 46px;
+    padding: 0 24px;
+    font-size: 16px;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--white4));
+    border: 1.4px solid hsl(var(--white16));
+    border-radius: 16px;
+    cursor: pointer;
+    backdrop-filter: blur(var(--blur-sm));
+    -webkit-backdrop-filter: blur(var(--blur-sm));
+    transition: transform 0.2s ease;
+    transform: scale(1);
+    position: relative;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  .btn-glass-large::before {
+    content: '';
+    position: absolute;
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.15) 0%, transparent 70%);
+    filter: blur(20px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease, left 0.1s ease-out, top 0.1s ease-out;
+    left: var(--mouse-x, 50%);
+    top: var(--mouse-y, 50%);
+    transform: translate(-50%, -50%);
+  }
+
+  .btn-glass-large:hover::before {
+    opacity: 1;
+  }
+
+  .btn-glass-large:hover {
+    transform: scale(1.015);
+  }
+
+  .btn-glass-large:active {
+    transform: scale(0.98);
+  }
+
+  @media (max-width: 767px) {
+    .btn-glass-large {
+      height: 42px;
+      padding: 0 18px;
+    }
+  }
+
+  /* Hero title - tighter line height */
+  .hero-title {
+    line-height: 1.1;
+  }
+
+  /* Hero description sizing - same as app name */
+  .hero-description {
+    font-size: 1.125rem; /* 18px on mobile */
+    line-height: 1.5;
+  }
+
+  @media (min-width: 1024px) {
+    .hero-description {
+      font-size: 1.375rem; /* 22px on desktop */
     }
   }
 </style>
