@@ -1,7 +1,5 @@
 <script>
   import '../app.css';
-  
-  let { children } = $props();
 </script>
 
 <div class="min-h-screen relative bg-background">
@@ -11,6 +9,6 @@
   <div class="fixed inset-0 bg-dither pointer-events-none opacity-40"></div>
 
   <div class="relative z-10">
-    {@render children()}
+    <slot />
   </div>
 </div>
