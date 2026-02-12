@@ -1,2 +1,3 @@
-// Disable SSR for entire app - it's a client-side only landing page
+// Disable SSR and enable prerendering for static export
 export const ssr = false;
+export const prerender = true;

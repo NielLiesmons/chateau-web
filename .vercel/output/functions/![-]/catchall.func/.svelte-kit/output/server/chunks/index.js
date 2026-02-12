@@ -1373,12 +1373,12 @@ export {
   COMMENT_NODE as C,
   DIRTY as D,
   ERROR_VALUE as E,
-  clsx as F,
-  ensure_array_like as G,
+  attributes as F,
+  clsx as G,
   HYDRATION_ERROR as H,
   INERT as I,
-  element as J,
-  slot as K,
+  ensure_array_like as J,
+  element as K,
   LEGACY_PROPS as L,
   MAYBE_DIRTY as M,
   bind_props as N,
@@ -1415,7 +1415,7 @@ export {
   uneval as u,
   is_passive_event as v,
   render as w,
-  sanitize_props as x,
-  rest_props as y,
-  attributes as z
+  slot as x,
+  sanitize_props as y,
+  rest_props as z
 };

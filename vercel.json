@@ -1,4 +1,11 @@
 {
   "buildCommand": "pnpm build",
-  "framework": "sveltekit"
+  "outputDirectory": "build",
+  "framework": null,
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
 }
