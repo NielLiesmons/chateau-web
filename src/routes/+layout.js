@@ -1,2 +1,3 @@
-// Disable SSR - render client-side only
+// Disable SSR and enable caching
 export const ssr = false;
+export const csr = true;
