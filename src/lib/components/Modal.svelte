@@ -4,6 +4,8 @@
   import { browser } from "$app/environment";
 
   export let open = false;
+  /** Optional: called when modal is closed (backdrop click or Escape) */
+  export let onClose = null;
   export let ariaLabel = "Modal dialog";
   export let zIndex = 50;
   export let maxWidth = "max-w-lg";
@@ -28,15 +30,20 @@
     }
   }
 
+  function close() {
+    if (typeof onClose === "function") onClose();
+    open = false;
+  }
+
   function handleBackdropClick(e) {
     if (e.target === e.currentTarget) {
-      open = false;
+      close();
     }
   }
 
   function handleKeydown(e) {
     if (e.key === "Escape") {
-      open = false;
+      close();
     }
   }
 </script>

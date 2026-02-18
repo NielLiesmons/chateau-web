@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<meta name="theme-color" content="#000000" />
+	<meta name="color-scheme" content="dark" />
+	<style>
+		html,
+		body {
+			background: #050505;
+			color-scheme: dark;
+		}
+	</style>
+	<link rel="icon" href="./favicon.png" />
+	<link rel="manifest" href="./manifest.json" />
+	
+		<link rel="modulepreload" href="./_app/immutable/entry/start.vbg5U-jh.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/DGij43mE.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/D3QfO92x.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/BjvSjcul.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/Bq_urSBn.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/D0iwhpLH.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/SNci0htn.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/BZTQL2dC.js">
+		<link rel="modulepreload" href="./_app/immutable/entry/app.DfTgaMZB.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/Ct5FWWRu.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/DsnmJJEf.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/BzP6EuCB.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/D09YTBsp.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/DK2YmtLx.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/jvGfUjpY.js">
+		<link rel="modulepreload" href="./_app/immutable/chunks/Cv4tKeMm.js">
+</head>
+
+<body data-sveltekit-preload-data="hover">
+	<div style="display: contents">
+			<script>
+				{
+					__sveltekit_1llt6vn = {
+						base: new URL(".", location).pathname.slice(0, -1)
+					};
+
+					const element = document.currentScript.parentElement;
+
+					Promise.all([
+						import("./_app/immutable/entry/start.vbg5U-jh.js"),
+						import("./_app/immutable/entry/app.DfTgaMZB.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element);
+					});
+
+					if ('serviceWorker' in navigator) {
+						addEventListener('load', function () {
+							navigator.serviceWorker.register('./service-worker.js');
+						});
+					}
+				}
+			</script>
+		</div>
+	<script async src="https://scripts.simpleanalyticscdn.com/latest.js"></script>
+</body>
+
+</html>

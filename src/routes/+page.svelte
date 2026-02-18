@@ -1,112 +1,17 @@
-<script>
-  import Header from '$lib/components/Header.svelte';
-  import ParallaxHero from '$lib/components/ParallaxHero.svelte';
-  import Modal from '$lib/components/Modal.svelte';
+<script lang="js">
+	import { goto } from '$app/navigation';
+	import ChateauParallaxHero from '$lib/components/landing/ChateauParallaxHero.svelte';
 
-  let comingSoonModalOpen = false;
-
-  function openComingSoonModal() {
-    comingSoonModalOpen = true;
-  }
+	function handleExplore() {
+		goto('/communities');
+	}
 </script>
 
 <svelte:head>
-  <title>Chateau - Community Collaboration</title>
-  <meta name="description" content="Chat, Forum, Tasks and literally anything else" />
+	<title>Chateau - Community Collaboration</title>
+	<meta name="description" content="Chat, Forum, Tasks and literally anything else" />
 </svelte:head>
 
-<Header onGetStarted={openComingSoonModal} />
-
-<main class="pt-16">
-  <ParallaxHero onExplore={openComingSoonModal} />
+<main>
+	<ChateauParallaxHero onExplore={handleExplore} />
 </main>
-
-<Modal bind:open={comingSoonModalOpen} ariaLabel="Coming soon">
-  <div class="modal-content">
-    <div class="logo-container">
-      <svg width="80" height="80" viewBox="0 0 38 48" fill="none" xmlns="http://www.w3.org/2000/svg" class="logo">
-        <defs>
-          <linearGradient id="modal-logo-gradient" x1="100%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#5C5FFF" />
-            <stop offset="100%" stop-color="#4542FF" />
-          </linearGradient>
-        </defs>
-        <path d="M12.9331 46.8902L0.0607555 2.20135C-0.173983 1.38641 0.292202 0.534787 1.10201 0.299195C1.91182 0.0636028 2.75859 0.533255 2.99333 1.34819L15.8657 46.037C16.1005 46.852 15.6343 47.7036 14.8245 47.9392C14.0147 48.1748 13.1679 47.7051 12.9331 46.8902Z" fill="url(#modal-logo-gradient)"/>
-        <path d="M21.7663 1.39501C13.241 -0.316389 8.55784 -0.0736039 6.67019 0.176475C6.13863 0.246896 5.8744 0.800356 6.10004 1.28991C6.53476 2.2331 7.24506 3.78105 7.97765 5.40646C8.51885 6.60726 8.95486 7.6941 9.26865 8.51995C9.60411 9.40282 10.5604 9.92704 11.482 9.74561C12.4674 9.55164 13.9551 9.28876 16.0978 8.97692C19.3497 8.50368 22.9139 8.48585 24.8112 8.52028C25.1227 8.52593 25.1957 8.9502 24.9068 9.06739C23.2045 9.758 20.082 11.0742 17.3395 12.4995C14.9353 13.749 13.4495 14.8922 12.6445 15.6081C12.1233 16.0716 11.9119 16.7656 11.9858 17.4619C12.0876 18.4219 12.2487 19.9079 12.4308 21.4668C12.5805 22.7483 12.9067 24.4589 13.2039 25.8843C13.3792 26.7247 14.6933 26.8959 15.1691 26.1835C16.8451 23.6744 20.3135 19.5512 26.8793 15.4386C35.3623 10.1253 37.464 4.95103 37.9815 2.56559C38.118 1.93645 37.474 1.49021 36.8581 1.6653C34.7513 2.26428 29.9639 3.04065 21.7663 1.39501Z" fill="url(#modal-logo-gradient)"/>
-      </svg>
-    </div>
-
-    <h2 class="modal-title">Coming Soon</h2>
-    <p class="modal-subtitle">
-      We're building something special. Stay tuned!
-    </p>
-
-    <button
-      type="button"
-      onclick={() => comingSoonModalOpen = false}
-      class="btn-primary-large w-full"
-    >
-      Close
-    </button>
-  </div>
-</Modal>
-
-<style>
-  .modal-content {
-    padding: 32px 24px 24px;
-    text-align: center;
-  }
-
-  .logo-container {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 24px;
-  }
-
-  .logo {
-    width: 80px;
-    height: auto;
-  }
-
-  .modal-title {
-    font-size: 1.875rem;
-    font-weight: 700;
-    margin-bottom: 8px;
-    color: hsl(var(--foreground));
-  }
-
-  .modal-subtitle {
-    font-size: 1rem;
-    color: hsl(var(--muted-foreground));
-    margin-bottom: 24px;
-  }
-
-  .btn-primary-large {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 42px;
-    padding: 0 24px;
-    font-size: 16px;
-    font-weight: 500;
-    color: hsl(var(--primary-foreground));
-    background-image: var(--gradient-blurple);
-    background-color: transparent;
-    border: none;
-    border-radius: 16px;
-    cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    transform: scale(1);
-  }
-
-  .btn-primary-large:hover {
-    transform: scale(1.025);
-    box-shadow:
-      0 0 30px hsl(var(--primary) / 0.5),
-      0 10px 60px -30px hsl(var(--primary) / 0.8);
-  }
-
-  .btn-primary-large:active {
-    transform: scale(0.98);
-  }
-</style>

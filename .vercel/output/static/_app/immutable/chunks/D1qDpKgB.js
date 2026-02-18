@@ -1,0 +1,1 @@
+import{a8 as u,k as o,a9 as _,l as t,C as g,v as l,aa as i,y as d,u as p,A as v}from"./BjvSjcul.js";function E(n,r){let a=null,y=t;var s;if(t){a=p;for(var e=v(document.head);e!==null&&(e.nodeType!==g||e.data!==n);)e=l(e);if(e===null)i(!1);else{var f=l(e);e.remove(),d(f)}}t||(s=document.head.appendChild(u()));try{o(()=>r(s),_)}finally{y&&(i(!0),d(a))}}export{E as h};
