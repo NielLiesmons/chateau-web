@@ -19,24 +19,6 @@
     onClick = () => {}
   } = $props();
 
-  let contentEl = $state(null);
-  let contentTruncated = $state(false);
-
-  $effect(() => {
-    const el = contentEl;
-    if (!el) {
-      contentTruncated = false;
-      return;
-    }
-    const check = () => {
-      contentTruncated = el.scrollHeight > el.clientHeight;
-    };
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  });
-
   const hasCommenters = $derived(commenters && commenters.length > 0);
   const displayName = $derived(
     author.name || (author.npub ? author.npub.slice(0, 12) + "..." : "") || "Anonymous"
@@ -107,12 +89,7 @@
       {/if}
       {#if content}
         <div class="row content-row">
-          <div class="content-wrap" bind:this={contentEl}>
-            <p class="post-content">{content}</p>
-            {#if contentTruncated}
-              <div class="content-fade" aria-hidden="true"></div>
-            {/if}
-          </div>
+          <p class="post-content">{content}</p>
         </div>
       {/if}
       {#if labels && labels.length > 0}
@@ -213,7 +190,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 5px;
     padding: 0;
   }
 
@@ -259,14 +236,8 @@
   }
 
   .content-row {
-    position: relative;
     padding: 0 0 0 12px;
-  }
-
-  .content-wrap {
-    position: relative;
-    max-height: 72px;
-    overflow: hidden;
+    margin-top: 2px;
   }
 
   .post-content {
@@ -275,20 +246,15 @@
     margin: 0;
     white-space: pre-wrap;
     color: hsl(var(--white66));
-  }
-
-  .content-fade {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 20px;
-    background: linear-gradient(to bottom, transparent, hsl(var(--gray66)));
-    pointer-events: none;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   .labels-row {
-    margin-top: 2px;
+    margin-top: 4px;
     padding: 0;
   }
 

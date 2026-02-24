@@ -23,6 +23,7 @@
 	import ForumPost from '$lib/components/ForumPost.svelte';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
 	import CommunityBottomBar from '$lib/components/community/CommunityBottomBar.svelte';
+	import ForumPostModal from '$lib/components/modals/ForumPostModal.svelte';
 
 	const SECTION_PILLS = [
 		{ id: 'forum', label: 'Forum' },
@@ -49,6 +50,32 @@
 	let joinSubmitting = $state(false);
 	let joinError = $state('');
 	let joinFetched = $state(false);
+	let addPostModalOpen = $state(false);
+
+	function openCreatePost() {
+		addPostModalOpen = true;
+	}
+
+	function closeCreatePost() {
+		addPostModalOpen = false;
+	}
+
+	async function handleForumPostSubmit({ title, text, labels = /** @type {string[]} */ ([]) }) {
+		if (!communityPubkey || !currentPubkey) throw new Error('Not signed in');
+		const ev = await signEvent({
+			kind: EVENT_KINDS.FORUM_POST,
+			content: text,
+			tags: [
+				['h', communityPubkey],
+				['title', title],
+				...labels.map(l => /** @type {[string, string]} */ (['t', l]))
+			],
+			created_at: Math.floor(Date.now() / 1000)
+		});
+		await putEvents([ev]);
+		const relays = community?.relays?.length ? community.relays : DEFAULT_COMMUNITY_RELAYS;
+		await publishToRelays(relays, ev);
+	}
 	const formAddress = $derived(profileListEvent ? parseProfileList(profileListEvent)?.form : null);
 
 	$effect(() => {
@@ -324,12 +351,22 @@
 			isMember={isMember}
 			hasForm={hasForm}
 			communityName={displayName}
+			modalOpen={addPostModalOpen}
 			onJoin={() => (joinModalOpen = true)}
 			onComment={() => {}}
 			onZap={() => {}}
+			onAdd={openCreatePost}
 		/>
 	</main>
 {/if}
+
+<ForumPostModal
+	bind:isOpen={addPostModalOpen}
+	communityName={community?.displayName ?? community?.name ?? ''}
+	getCurrentPubkey={getCurrentPubkey}
+	onsubmit={handleForumPostSubmit}
+	onclose={closeCreatePost}
+/>
 
 {#if joinModalOpen}
 	<div

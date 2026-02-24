@@ -254,6 +254,7 @@ $effect(() => {
 			border-radius: 24px;
 			border-bottom: 0.33px solid hsl(var(--white8));
 			box-shadow: 0 40px 64px 12px hsl(var(--black));
+			padding: 12px;
 		}
 	}
 

@@ -25,6 +25,7 @@
 	import CommunityBottomBar from '$lib/components/community/CommunityBottomBar.svelte';
 	import ForumPostDetail from '$lib/components/community/ForumPostDetail.svelte';
 	import Modal from '$lib/components/Modal.svelte';
+	import ForumPostModal from '$lib/components/modals/ForumPostModal.svelte';
 	import Checkbox from '$lib/components/common/Checkbox.svelte';
 	import { Pen, Cross, Bell, ChevronRight } from '$lib/components/icons';
 	import BadgeStack from '$lib/components/common/BadgeStack.svelte';
@@ -1310,6 +1311,24 @@
 			newPostSubmitting = false;
 		}
 	}
+	async function handleForumPostSubmit({ title, text, labels = /** @type {string[]} */ ([]) }) {
+		if (!selectedCommunity?.pubkey || !currentPubkey) throw new Error('Not signed in');
+		const ev = await signEvent({
+			kind: EVENT_KINDS.FORUM_POST,
+			content: text,
+			tags: [
+				['h', selectedCommunity.pubkey],
+				['title', title],
+				...labels.map(l => /** @type {[string, string]} */ (['t', l]))
+			],
+			created_at: Math.floor(Date.now() / 1000)
+		});
+		await putEvents([ev]);
+		await publishToRelays(
+			selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS,
+			ev
+		);
+	}
 
 	function formatDate(ts) {
 		if (!ts) return '';
@@ -1327,7 +1346,10 @@
 		if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
 		return d.toLocaleDateString(undefined, { dateStyle: 'short' });
 	}
-	const CONTENT_TYPE_EMOJI = { forum: '📋', tasks: '☑️', chat: '💬', apps: '📦' };
+	/** Emoji images from static/images/emoji for LEFT column only (e.g. content pill in community list) */
+	const LEFT_PAGE_EMOJI_IMG = {
+		forum: '/images/emoji/forum.png'
+	};
 </script>
 
 <svelte:head>
@@ -1383,7 +1405,7 @@
 							pictureUrl={profile?.content ? (() => { try { return JSON.parse(profile.content).picture; } catch { return null; } })() : null}
 							name={displayName}
 							pubkey={comm.pubkey}
-							size="lg"
+							size="lgXl"
 						/>
 						<div class="community-card-body">
 							<div class="community-card-row1">
@@ -1392,7 +1414,7 @@
 							</div>
 							<div class="community-card-row2">
 								{#if forumCount > 0}
-									<span class="content-pill" title="Forum"><span class="content-emoji">{CONTENT_TYPE_EMOJI.forum}</span><span class="content-count">{forumCount}</span></span>
+									<span class="content-pill" title="Forum"><img src={LEFT_PAGE_EMOJI_IMG.forum} alt="" class="content-emoji-img" /><span class="content-count">{forumCount}</span></span>
 								{/if}
 							</div>
 						</div>
@@ -1402,8 +1424,9 @@
 		</div>
 	</aside>
 
-	<!-- Right column: community header + pills + content, or post detail when ?post= is set -->
+	<!-- Right column: viewport creates containing block so modals/bars are scoped here -->
 	<div class="right-column">
+		<div class="right-page-viewport">
 		{#if !selectedCommunity}
 			<div class="panel-placeholder">
 				<EmptyState message="Select a community" minHeight={280} />
@@ -1580,6 +1603,7 @@
 					onAdminSave={saveCommunityAdminAll}
 					adminSaveSubmitting={adminSaveSubmitting}
 					communityName={selectedCommunity.displayName || selectedCommunity.name || ''}
+					modalOpen={addPostModalOpen}
 					onJoin={() => (joinModalOpen = true)}
 					onComment={() => {}}
 					onZap={() => {}}
@@ -1588,10 +1612,8 @@
 				/>
 			{/if}
 		{/if}
-	</div>
-</main>
-
-<Modal open={communityInfoModalOpen} onClose={() => { communityInfoModalOpen = false; communityEditModalOpen = false; }} ariaLabel="Community info">
+		<!-- Modals and overlays scoped to right page (inside viewport containing block) -->
+		<Modal open={communityInfoModalOpen} onClose={() => { communityInfoModalOpen = false; communityEditModalOpen = false; }} ariaLabel="Community info">
 	{#if communityInfoModalOpen && selectedCommunity}
 		{@const commTags = selectedCommunity.raw?.tags ?? []}
 		{@const blossomUrls = commTags.filter((t) => t[0] === 'blossom').map((t) => t[1]).filter(Boolean)}
@@ -2045,73 +2067,13 @@
 </Modal>
 {/key}
 
-<Modal open={addPostModalOpen} onClose={closeCreatePost} ariaLabel="New forum post">
-	{#if addPostModalOpen}
-		<h2 class="join-modal-title">New post</h2>
-		<form class="join-form" onsubmit={(e) => { e.preventDefault(); submitNewPost(); }}>
-			<div class="join-form-field">
-				<InputTextField
-					bind:value={newPostTitle}
-					title="Title"
-					placeholder="Post title"
-					singleLine={true}
-					id="new-post-title"
-					oninput={() => {}}
-					onkeydown={() => {}}
-					onfocus={() => {}}
-					onblur={() => {}}
-				/>
-			</div>
-			<div class="join-form-field">
-				<InputTextField
-					bind:value={newPostContent}
-					title="Content"
-					placeholder="Write your post…"
-					singleLine={false}
-					size="medium"
-					id="new-post-content"
-					oninput={() => {}}
-					onkeydown={() => {}}
-					onfocus={() => {}}
-					onblur={() => {}}
-				/>
-			</div>
-			<div class="join-form-field">
-				<label class="labels-label" for="new-post-labels">Labels</label>
-				<div class="labels-row">
-					<input
-						id="new-post-labels"
-						type="text"
-						class="labels-input"
-						placeholder="Add label (spaces and capitals allowed)"
-						bind:value={newPostLabelInput}
-						onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), addPostLabel())}
-					/>
-					<button type="button" class="btn-secondary-small" onclick={addPostLabel}>Add</button>
-				</div>
-				{#if newPostLabels.length > 0}
-					<div class="labels-chips">
-						{#each newPostLabels as label}
-							<span class="label-chip">
-								{label}
-								<button type="button" class="label-chip-remove" onclick={() => removePostLabel(label)} aria-label="Remove label">
-									<Cross variant="outline" size={10} strokeWidth={1.4} color="hsl(var(--white66))" />
-								</button>
-							</span>
-						{/each}
-					</div>
-				{/if}
-			</div>
-			{#if newPostError}
-				<p class="text-sm text-red-500">{newPostError}</p>
-			{/if}
-			<div class="join-modal-actions">
-				<button type="button" class="btn-secondary-small" onclick={closeCreatePost}>Cancel</button>
-				<button type="submit" class="btn-primary-small" disabled={newPostSubmitting}>{newPostSubmitting ? 'Publishing…' : 'Publish'}</button>
-			</div>
-		</form>
-	{/if}
-</Modal>
+<ForumPostModal
+	bind:isOpen={addPostModalOpen}
+	communityName={selectedCommunity?.name ?? ''}
+	getCurrentPubkey={getCurrentPubkey}
+	onsubmit={handleForumPostSubmit}
+	onclose={closeCreatePost}
+/>
 
 {#key joinModalOpen ? 'open' : 'closed'}
 <Modal open={joinModalOpen} onClose={closeJoinModal} ariaLabel="Join community">
@@ -2187,6 +2149,9 @@
 	{/if}
 </Modal>
 {/key}
+		</div>
+	</div>
+</main>
 
 <style>
 	.communities-layout {
@@ -2228,7 +2193,7 @@
 		align-items: center;
 		gap: 0.5rem;
 		padding: 0 12px;
-		border: 0.33px solid hsl(var(--white33));
+		border: 0.33px solid hsl(var(--white16));
 		border-radius: 12px;
 		background: transparent;
 		color: hsl(var(--foreground));
@@ -2288,7 +2253,7 @@
 		margin-right: 16px;
 		width: calc(100% - 32px);
 		box-sizing: border-box;
-		padding: 12px;
+		padding: 8px 12px 8px 8px;
 		border-radius: 12px;
 		background: hsl(var(--white4));
 	}
@@ -2336,9 +2301,11 @@
 		font-size: 0.75rem;
 		color: hsl(var(--muted-foreground));
 	}
-	.content-emoji {
-		font-size: 14px;
-		line-height: 1;
+	.content-emoji-img {
+		width: 14px;
+		height: 14px;
+		object-fit: contain;
+		flex-shrink: 0;
 	}
 	.content-count {
 		font-weight: 500;
@@ -2350,16 +2317,15 @@
 		min-height: 0;
 		position: relative;
 	}
-	/* Bottom bar fixed within the right column only (not full screen) */
-	.right-column :global(.bottom-bar-wrapper) {
-		left: 360px;
-		right: 0;
-	}
-	/* DetailHeader (forum post) fixed within the right column only */
-	.right-column :global(.detail-header) {
-		left: 360px;
-		right: 0;
-		width: auto;
+	/* Viewport creates containing block: fixed modals/bars are scoped and centered to this column */
+	.right-page-viewport {
+		position: relative;
+		transform: translateZ(0);
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
 	}
 	.detail-header-row {
 		display: flex;
@@ -3247,8 +3213,9 @@
 	.panel-content:has(.forum-list) {
 		padding: 0;
 	}
+	/* No top padding: title sits 16px below fixed header via ForumPostDetail .content-scroll padding-top */
 	.panel-content-detail {
-		padding: 16px 16px 100px;
+		padding: 0 16px 100px;
 	}
 	.forum-list {
 		display: flex;
@@ -3335,18 +3302,19 @@
 		color: hsl(var(--foreground));
 	}
 	@media (max-width: 767px) {
-		.right-column :global(.bottom-bar-wrapper) {
-			left: 0;
-		}
 		.communities-layout {
 			grid-template-columns: 1fr;
-		}
-		.right-column {
-			display: none;
+			grid-template-rows: auto minmax(0, 1fr);
 		}
 		.left-column {
 			border-right: none;
-			border-bottom: none;
+			border-bottom: 1px solid hsl(var(--white11));
+			max-height: 40vh;
+			min-height: 120px;
+			overflow-y: auto;
+		}
+		.right-column {
+			min-height: 0;
 		}
 	}
 </style>

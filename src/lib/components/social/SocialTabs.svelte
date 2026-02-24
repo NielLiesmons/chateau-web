@@ -16,27 +16,49 @@ import Spinner from "$lib/components/common/Spinner.svelte";
 import { Zap } from "$lib/components/icons";
 import { queryEvent } from "$lib/nostr";
 import { EVENT_KINDS, PLATFORM_FILTER } from "$lib/config";
-let { app = {}, stack = null, version = "", publisherProfile = null, zaps = [], zapperProfiles = new Map(), className = "", comments = [], commentsLoading = false, commentsError = "", zapsLoading = false, profiles = {}, profilesLoading = false, getAppSlug = () => "", getStackSlug = () => "", pubkeyToNpub = () => "", searchProfiles = async () => [], searchEmojis = async () => [], onCommentSubmit, onZapReceived, onGetStarted, mainEventIds = [], showDetailsTab = true, detailsShareableId = "", detailsPublicationLabel = "Publication", detailsNpub = "", detailsPubkey = "", detailsRawData: detailsRawDataProp = null, } = $props();
-const staticTabs = $derived([
+let {
+    app = {}, stack = null, version = "", publisherProfile = null,
+    zaps = [], zapperProfiles = new Map(), className = "",
+    comments = [], commentsLoading = false, commentsError = "",
+    zapsLoading = false, profiles = {}, profilesLoading = false,
+    getAppSlug = () => "", getStackSlug = () => "",
+    pubkeyToNpub = () => "", searchProfiles = async () => [],
+    searchEmojis = async () => [], onCommentSubmit, onZapReceived, onGetStarted,
+    mainEventIds = [],
+    // Details tab overrides — when provided, skip Dexie auto-fetch.
+    // Accepts the same props as chateau-web's SocialTabs for a unified API.
+    detailsRawData: detailsRawDataProp = null,
+    detailsShareableId = "",
+    detailsPublicationLabel = "",
+    detailsNpub = "",
+    detailsPubkey = "",
+    showDetailsTab = true,
+} = $props();
+const tabs = $derived([
     { id: "comments", label: "Comments" },
     { id: "zaps", label: "Zaps" },
     { id: "labels", label: "Labels" },
     ...(showDetailsTab ? [{ id: "details", label: "Details" }] : []),
 ]);
 let activeTab = $state("comments");
-/** Full Nostr event for Details tab: from prop (e.g. forum post nevent) or fetched for app/stack. */
-let detailsRawDataFetched = $state(null);
-const detailsRawData = $derived(detailsRawDataProp != null ? detailsRawDataProp : detailsRawDataFetched);
+/** Full Nostr event auto-fetched from Dexie when no detailsRawData prop is supplied. */
+let autoFetchedDetails = $state(null);
 $effect(() => {
-    if (activeTab !== "details" || detailsRawDataProp != null) {
-        detailsRawDataFetched = null;
+    if (activeTab !== "details") {
+        autoFetchedDetails = null;
+        return;
+    }
+    // If a pre-fetched event was supplied as a prop, skip the Dexie lookup.
+    if (detailsRawDataProp) {
+        autoFetchedDetails = null;
         return;
     }
     const target = stack ?? app;
     if (!target?.pubkey || !target?.dTag) {
-        detailsRawDataFetched = null;
+        autoFetchedDetails = null;
         return;
     }
+    // Always fetch from Dexie — no rawEvent embedded in models
     const kind = stack ? EVENT_KINDS.APP_STACK : EVENT_KINDS.APP;
     const filter = {
         kinds: [kind],
@@ -45,14 +67,11 @@ $effect(() => {
         ...(kind === EVENT_KINDS.APP ? PLATFORM_FILTER : {}),
     };
     queryEvent(filter).then((fromStore) => {
-        if (fromStore) detailsRawDataFetched = fromStore;
-        else detailsRawDataFetched = null;
+        autoFetchedDetails = fromStore ?? null;
     });
 });
-const detailsShareableIdResolved = $derived(detailsShareableId || (stack ? (stack.pubkey && stack.dTag ? getStackSlug(stack.pubkey, stack.dTag) : "") : (app?.pubkey && app?.dTag ? getAppSlug(app.pubkey, app.dTag) : "")));
-const detailsPublicationLabelResolved = $derived(detailsPublicationLabel || (stack ? "Stack" : "App"));
-const detailsNpubResolved = $derived(detailsNpub || safeNpubFromPubkey(stack?.pubkey ?? app?.pubkey));
-const detailsPubkeyResolved = $derived(detailsPubkey || (stack?.pubkey ?? app?.pubkey ?? ""));
+/** Resolved details data: explicit prop wins over Dexie auto-fetch. */
+const resolvedDetailsRawData = $derived(detailsRawDataProp ?? autoFetchedDetails);
 const totalZapAmount = $derived(zaps.reduce((sum, zap) => sum + (zap.amountSats || 0), 0));
 const zapsWithComments = $derived(zaps.filter((z) => z.comment && z.comment.trim()));
 const totalCommentCount = $derived(comments.length + zapsWithComments.length);
@@ -99,8 +118,9 @@ function enrichComment(comment) {
     };
 }
 const commentIds = $derived(new Set(comments.map((c) => c.id)));
-// Model: main feed = zaps on the main event (app/stack/forum post) + root comments. For each item in the feed we have zaps (and comments) on that event; when you open its modal we reuse that same data.
-// Root = comment with no parent, or whose parent is the main event (not another comment). Forum post comments have parentId = post id (the #e tag), so we treat as root when parentId is not in commentIds.
+// Model: main feed = zaps on the main event + root comments.
+// A comment is a root if it has no parentId, OR if its parentId is not another comment's ID
+// (e.g. for forum posts, root comments have parentId = post.id which is not in commentIds).
 const isRoot = (c) => !c.parentId || !commentIds.has(c.parentId);
 const rootComments = $derived(comments
     .filter(isRoot)
@@ -252,7 +272,7 @@ const combinedFeed = $derived.by(() => {
 
 <div class="social-tabs {className}">
   <div class="tab-row" use:wheelScroll>
-    {#each staticTabs as tab}
+    {#each tabs as tab}
       <button
         type="button"
         class={activeTab === tab.id ? "btn-primary-small tab-selected" : "btn-secondary-small"}
@@ -396,11 +416,13 @@ const combinedFeed = $derived.by(() => {
       <EmptyState message="Labels coming soon" minHeight={600} />
     {:else if activeTab === "details"}
       <DetailsTab
-        shareableId={detailsShareableIdResolved}
-        publicationLabel={detailsPublicationLabelResolved}
-        npub={detailsNpubResolved}
-        pubkey={detailsPubkeyResolved}
-        rawData={detailsRawData}
+        shareableId={detailsShareableId || (stack
+          ? (stack.pubkey && stack.dTag ? getStackSlug(stack.pubkey, stack.dTag) : "")
+          : (app?.pubkey && app?.dTag ? getAppSlug(app.pubkey, app.dTag) : ""))}
+        publicationLabel={detailsPublicationLabel || (stack ? "Stack" : "App")}
+        npub={detailsNpub || safeNpubFromPubkey(stack?.pubkey ?? app?.pubkey)}
+        pubkey={detailsPubkey || stack?.pubkey || app?.pubkey || ""}
+        rawData={resolvedDetailsRawData}
       />
     {/if}
   </div>
@@ -418,6 +440,8 @@ const combinedFeed = $derived.by(() => {
     overflow-x: auto;
     scrollbar-width: none;
     -ms-overflow-style: none;
+    padding: 4px 2px;
+    margin: -4px -2px;
   }
 
   .tab-row::-webkit-scrollbar {

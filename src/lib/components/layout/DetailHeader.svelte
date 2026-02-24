@@ -9,7 +9,8 @@
  */
 import { onMount } from 'svelte';
 import { browser } from '$app/environment';
-import { Menu, Cross, ChevronLeft } from '$lib/components/icons';
+import { Menu, Cross } from '$lib/components/icons';
+import BackButton from '$lib/components/common/BackButton.svelte';
 import { Search } from 'lucide-svelte';
 import { cn } from '$lib/utils';
 import { nip19 } from 'nostr-tools';
@@ -24,7 +25,7 @@ import SearchModal from '$lib/components/common/SearchModal.svelte';
 import GetStartedModal from '$lib/components/modals/GetStartedModal.svelte';
 import OnboardingBuildingModal from '$lib/components/modals/OnboardingBuildingModal.svelte';
 import SpinKeyModal from '$lib/components/modals/SpinKeyModal.svelte';
-let { publisherPic = null, publisherName = null, publisherNameForPic = undefined, publisherPubkey = null, publisherUrl = '#', timestamp = null, catalogs = [], catalogText = 'In Zapstore', showPublisher = true, showMenu = true, showBackButton = false, onBack = () => {}, scrollThreshold, getStartedModalOpen = $bindable(false) } = $props();
+let { publisherPic = null, publisherName = null, publisherNameForPic = undefined, publisherPubkey = null, publisherUrl = '#', timestamp = null, catalogs = [], catalogText = 'In Zapstore', showPublisher = true, showMenu = true, showBackButton = false, onBack = () => {}, scrollThreshold, getStartedModalOpen = $bindable(false), compactPadding = false } = $props();
 const nameForPic = $derived(publisherNameForPic !== undefined ? publisherNameForPic : publisherName);
 function formatNpubDisplay(npubStr) {
     if (!npubStr || typeof npubStr !== 'string') return '';
@@ -54,6 +55,14 @@ const isZapstoreCatalog = $derived(catalogs.length > 0 &&
 const effectiveCatalogs = $derived(isZapstoreCatalog && zapstoreProfile
     ? [{ ...catalogs[0], pictureUrl: zapstoreProfile.picture, name: zapstoreProfile.name }]
     : catalogs);
+/** For Community context: "Community Name" (1) or "XX Communities" (multiple). */
+const catalogDisplayText = $derived(
+    catalogText === 'Community' && effectiveCatalogs.length > 0
+        ? effectiveCatalogs.length === 1
+            ? (effectiveCatalogs[0].name || 'Community')
+            : `${effectiveCatalogs.length} Communities`
+        : catalogText
+);
 let scrolled = $state(false);
 let scrollY = $state(0);
 let menuOpen = $state(false);
@@ -205,14 +214,14 @@ async function handleSignIn() {
 			: 'bg-transparent border-b border-transparent'
 	)}
 >
-	<nav class="container mx-auto pl-1 pr-4 sm:pl-3 sm:pr-6 md:pl-5 md:pr-8 h-full">
+	<nav
+		class={compactPadding ? 'nav-compact h-full w-full' : 'container mx-auto h-full'}
+	>
 		<div class="flex items-center justify-between gap-3 h-full">
 			<!-- Left: Back button (optional), Menu button (optional), Publisher info -->
 			<div class="flex items-center gap-2 min-w-0 flex-1">
 				{#if showBackButton}
-					<button type="button" class="back-button" aria-label="Back" onclick={() => onBack()}>
-						<ChevronLeft variant="outline" size={14} strokeWidth={1.4} color="hsl(var(--white33))" />
-					</button>
+					<BackButton onBack={onBack} />
 				{/if}
 				{#if showMenu}
 				<!-- Menu button with dropdown -->
@@ -419,7 +428,7 @@ async function handleSignIn() {
 				<div class="catalog-dropdown-wrap" bind:this={catalogDropdownContainer}>
 					<ProfilePicStack
 						profiles={effectiveCatalogs}
-						text={catalogText}
+						text={catalogDisplayText}
 						size="sm"
 						onclick={() => (catalogDropdownOpen = !catalogDropdownOpen)}
 					/>
@@ -588,6 +597,36 @@ async function handleSignIn() {
 <OnboardingBuildingModal bind:open={onboardingBuildingModalOpen} zIndex={56} />
 
 <style>
+	nav {
+		padding-left: 0.25rem;
+		padding-right: 1rem;
+	}
+	@media (min-width: 640px) {
+		nav {
+			padding-left: 0.75rem;
+			padding-right: 1.5rem;
+		}
+	}
+	@media (min-width: 768px) {
+		nav {
+			padding-left: 1.25rem;
+			padding-right: 1.5rem;
+		}
+	}
+	@media (min-width: 1024px) {
+		nav {
+			padding-left: 1.25rem;
+			padding-right: 2rem;
+		}
+	}
+	/* Exactly 16px horizontal so container/other rules don’t add more */
+	/* Compact (e.g. forum post): no container class, exactly 16px horizontal */
+	nav.nav-compact {
+		width: 100%;
+		box-sizing: border-box;
+		padding-left: 16px;
+		padding-right: 16px;
+	}
 	/* Fixed header height - exactly 64px to match main header */
 	:global(.detail-header) {
 		height: 64px;
@@ -714,27 +753,6 @@ async function handleSignIn() {
 	}
 
 	.menu-button:active {
-		transform: scale(0.96);
-	}
-
-	.back-button {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 28px;
-		height: 28px;
-		min-width: 28px;
-		min-height: 28px;
-		background: transparent;
-		border: none;
-		border-radius: 50%;
-		cursor: pointer;
-		transition: background-color 0.15s ease;
-	}
-	.back-button:hover {
-		background-color: hsl(var(--gray66));
-	}
-	.back-button:active {
 		transform: scale(0.96);
 	}
 

@@ -3,7 +3,6 @@
 	import {
 		queryEvent,
 		queryEvents,
-		putEvents,
 		liveQuery,
 		fetchForumPostComments,
 		fetchZapsByEventIds,
@@ -11,7 +10,7 @@
 		parseProfile,
 		parseComment,
 		parseZapReceipt,
-		publishToRelays,
+		publishComment,
 		fetchProfilesBatch
 	} from '$lib/nostr';
 	import { EVENT_KINDS } from '$lib/config';
@@ -22,7 +21,8 @@
 	import SocialTabs from '$lib/components/social/SocialTabs.svelte';
 	import BottomBar from '$lib/components/social/BottomBar.svelte';
 	import { getCurrentPubkey, getIsSignedIn, signEvent } from '$lib/stores/auth.svelte.js';
-	import { DEFAULT_COMMUNITY_RELAYS } from '$lib/config';
+	import { createSearchProfilesFunction } from '$lib/services/profile-search.js';
+	import { createSearchEmojisFunction } from '$lib/services/emoji-search.js';
 	import { goto } from '$app/navigation';
 
 	let { eventId = '', communityNpub = '', onBack = () => {} } = $props();
@@ -34,7 +34,6 @@
 	let communityPicture = $state('');
 	let descriptionExpanded = $state(false);
 	let isTruncated = $state(false);
-	let contentContainer = $state(null);
 	let comments = $state([]);
 	let commentsLoading = $state(false);
 	let commentsError = $state('');
@@ -95,7 +94,7 @@
 		})();
 	});
 
-	// Comments from Dexie (same source as forum card commenters) so user's own comment and all subscribed comments show
+	// Comments from Dexie (NIP-22 kind 1111 only) — live-reactive, backfilled from relays
 	$effect(() => {
 		const pid = post?.id;
 		if (!pid) {
@@ -105,7 +104,7 @@
 		commentsLoading = true;
 		const sub = liveQuery(async () => {
 			const events = await queryEvents({
-				kinds: [1],
+				kinds: [1111],
 				'#e': [pid],
 				limit: 500
 			});
@@ -128,7 +127,11 @@
 							if (ev?.content) {
 								try {
 									const c = JSON.parse(ev.content);
-									next[pk] = { displayName: c.display_name ?? c.name, name: c.name, picture: c.picture };
+									next[pk] = {
+										displayName: c.display_name ?? c.name,
+										name: c.name,
+										picture: c.picture
+									};
 								} catch {}
 							}
 						}
@@ -141,8 +144,10 @@
 				commentsError = 'Failed to load comments';
 			}
 		});
-		// Backfill from relays so we have latest from network (writes to Dexie → liveQuery will update)
-		fetchForumPostComments(pid).then(() => {}).catch(() => {});
+		// Backfill from relays (kind 1111) so we have latest from network (writes to Dexie → liveQuery will update)
+		fetchForumPostComments(pid)
+			.then(() => {})
+			.catch(() => {});
 		return () => sub.unsubscribe();
 	});
 
@@ -164,7 +169,11 @@
 					if (ev?.content) {
 						try {
 							const c = JSON.parse(ev.content);
-							next.set(pk, { displayName: c.display_name ?? c.name, name: c.name, picture: c.picture });
+							next.set(pk, {
+								displayName: c.display_name ?? c.name,
+								name: c.name,
+								picture: c.picture
+							});
 						} catch {}
 					}
 				}
@@ -177,17 +186,41 @@
 		})();
 	});
 
-	$effect(() => {
-		if (!contentContainer || !post?.content) return;
-		isTruncated = contentContainer.scrollHeight > 150;
-	});
+	/** @param {HTMLElement} node */
+	function checkTruncation(node) {
+		const check = () => {
+			isTruncated = node.scrollHeight > node.clientHeight;
+		};
+		setTimeout(check, 0);
+		const ro = new ResizeObserver(() => {
+			if (!descriptionExpanded) check();
+		});
+		ro.observe(node);
+		return { destroy() { ro.disconnect(); } };
+	}
 
 	const descriptionHtml = $derived(post?.content ? renderMarkdown(post.content) : '');
 	const npub = $derived(
-		post?.pubkey ? (() => { try { return nip19.npubEncode(post.pubkey); } catch { return ''; } })() : ''
+		post?.pubkey
+			? (() => {
+					try {
+						return nip19.npubEncode(post.pubkey);
+					} catch {
+						return '';
+					}
+				})()
+			: ''
 	);
 	const postNevent = $derived(
-		post?.id ? (() => { try { return nip19.neventEncode({ id: post.id }); } catch { return ''; } })() : ''
+		post?.id
+			? (() => {
+					try {
+						return nip19.neventEncode({ id: post.id });
+					} catch {
+						return '';
+					}
+				})()
+			: ''
 	);
 
 	const zapTarget = $derived(
@@ -202,16 +235,28 @@
 	);
 
 	const publisherName = $derived(authorProfile?.displayName ?? authorProfile?.name ?? 'Author');
-	const communityPubkeyFromPost = $derived((() => {
-		if (!communityNpub || !eventId) return '';
-		try {
-			const d = nip19.decode(communityNpub);
-			return d?.type === 'npub' ? d.data : '';
-		} catch { return ''; }
-	})());
+	const searchProfiles = $derived(createSearchProfilesFunction(() => getCurrentPubkey()));
+	const searchEmojis = $derived(createSearchEmojisFunction(() => getCurrentPubkey()));
+	const communityPubkeyFromPost = $derived(
+		(() => {
+			if (!communityNpub || !eventId) return '';
+			try {
+				const d = nip19.decode(communityNpub);
+				return d?.type === 'npub' ? d.data : '';
+			} catch {
+				return '';
+			}
+		})()
+	);
 	const catalogs = $derived(
 		communityPubkeyFromPost
-			? [{ name: communityName || 'Community', pictureUrl: communityPicture || undefined, pubkey: communityPubkeyFromPost }]
+			? [
+					{
+						name: communityName || 'Community',
+						pictureUrl: communityPicture || undefined,
+						pubkey: communityPubkeyFromPost
+					}
+				]
 			: []
 	);
 
@@ -219,20 +264,28 @@
 		if (!post || !e?.text?.trim()) return;
 		const pubkey = getCurrentPubkey();
 		if (!pubkey) return;
+		const parentId = e.parentId ?? null;
+		const replyToPubkey = e.replyToPubkey ?? post.pubkey;
+		const target = {
+			contentType: 'forum',
+			pubkey: post.pubkey,
+			id: post.id,
+			kind: EVENT_KINDS.FORUM_POST
+		};
 		try {
-			const ev = await signEvent({
-				kind: 1,
-				content: e.text.trim(),
-				tags: [
-					['e', post.id],
-					['p', post.pubkey]
-				],
-				created_at: Math.floor(Date.now() / 1000)
-			});
-			await putEvents([ev]);
-			await publishToRelays(DEFAULT_COMMUNITY_RELAYS, ev);
-			const parsed = parseComment(ev);
-			parsed.npub = nip19.npubEncode(ev.pubkey);
+			const signed = await publishComment(
+				e.text,
+				target,
+				signEvent,
+				e.emojiTags ?? [],
+				parentId,
+				replyToPubkey,
+				parentId ? 1111 : EVENT_KINDS.FORUM_POST,
+				e.mentions ?? []
+			);
+			const parsed = parseComment(signed);
+			parsed.npub = nip19.npubEncode(signed.pubkey);
+			if (parentId) parsed.parentId = parentId;
 			comments = [...comments, parsed];
 		} catch (err) {
 			console.error('Comment submit failed', err);
@@ -249,13 +302,6 @@
 			});
 		});
 	}
-
-	async function searchProfiles() {
-		return [];
-	}
-	async function searchEmojis() {
-		return [];
-	}
 </script>
 
 <div class="forum-post-detail">
@@ -267,56 +313,60 @@
 		<div class="detail-header-wrap">
 			<DetailHeader
 				publisherPic={authorProfile?.picture}
-				publisherName={publisherName}
+				{publisherName}
 				publisherPubkey={post.pubkey}
 				publisherUrl={npub ? `/profile/${npub}` : '#'}
 				timestamp={post.createdAt}
-				catalogs={catalogs}
+				{catalogs}
 				catalogText="Community"
 				showPublisher={true}
 				showMenu={false}
 				showBackButton={true}
-				onBack={onBack}
+				{onBack}
 				scrollThreshold={undefined}
+				compactPadding={true}
 				bind:getStartedModalOpen
 			/>
 		</div>
 
 		<div class="content-scroll">
 			<div class="content-inner">
-				<h1 class="post-title">{post.title}</h1>
-				<div
-					class="description-container"
-					class:expanded={descriptionExpanded}
-					bind:this={contentContainer}
-				>
-					<div class="post-description prose prose-invert max-w-none">
-						{@html descriptionHtml}
-					</div>
-					{#if isTruncated && !descriptionExpanded}
-						<div class="description-fade" aria-hidden="true"></div>
-					{/if}
-					{#if isTruncated}
-						<button
-							type="button"
-							class="read-more-btn"
-							onclick={() => (descriptionExpanded = !descriptionExpanded)}
-						>
-							{descriptionExpanded ? 'Show less' : 'Read more'}
-						</button>
-					{/if}
+			<h1 class="post-title">{post.title}</h1>
+			{#if (post.labels ?? []).length > 0}
+				<div class="post-detail-labels">
+					{#each post.labels ?? [] as label}
+						<div class="post-detail-label-slot">
+							<LabelChip text={label} isSelected={false} isEmphasized={false} size="small" />
+						</div>
+					{/each}
 				</div>
-				{#if (post.labels ?? []).length > 0}
-					<div class="post-detail-labels">
-						{#each (post.labels ?? []) as label}
-							<div class="post-detail-label-slot">
-								<LabelChip text={label} isSelected={false} isEmphasized={false} size="small" />
-							</div>
-						{/each}
-					</div>
+			{/if}
+		<div class="description-container" class:expanded={descriptionExpanded}>
+				<div class="post-description prose prose-invert max-w-none" use:checkTruncation>
+					{@html descriptionHtml}
+				</div>
+				{#if isTruncated && !descriptionExpanded}
+					<div class="description-fade" aria-hidden="true"></div>
+					<button
+						type="button"
+						class="read-more-btn"
+						onclick={() => (descriptionExpanded = true)}
+					>
+						Read more
+					</button>
 				{/if}
+				{#if descriptionExpanded}
+					<button
+						type="button"
+						class="show-less-btn"
+						onclick={() => (descriptionExpanded = false)}
+					>
+						Show less
+					</button>
+				{/if}
+		</div>
 
-				<div class="social-tabs-wrap">
+			<div class="social-tabs-wrap">
 					<SocialTabs
 						app={{}}
 						mainEventIds={[post.id]}
@@ -325,10 +375,16 @@
 						detailsPublicationLabel="Post"
 						detailsNpub={npub}
 						detailsPubkey={post.pubkey ?? ''}
-						detailsRawData={rawPostEvent ? (() => { const c = { ...rawPostEvent }; delete c._tags; return c; })() : null}
-						comments={comments}
-						commentsLoading={commentsLoading}
-						commentsError={commentsError}
+						detailsRawData={rawPostEvent
+							? (() => {
+									const c = { ...rawPostEvent };
+									delete c._tags;
+									return c;
+								})()
+							: null}
+						{comments}
+						{commentsLoading}
+						{commentsError}
 						zaps={zaps.map((z) => ({
 							id: z.id,
 							senderPubkey: z.senderPubkey || undefined,
@@ -338,13 +394,13 @@
 							emojiTags: z.emojiTags ?? [],
 							zappedEventId: z.zappedEventId ?? undefined
 						}))}
-						zapsLoading={zapsLoading}
-						zapperProfiles={zapperProfiles}
-						profiles={profiles}
-						profilesLoading={profilesLoading}
+						{zapsLoading}
+						{zapperProfiles}
+						{profiles}
+						{profilesLoading}
 						pubkeyToNpub={(pk) => (pk ? nip19.npubEncode(pk) : '')}
-						searchProfiles={searchProfiles}
-						searchEmojis={searchEmojis}
+						{searchProfiles}
+						{searchEmojis}
 						onCommentSubmit={handleCommentSubmit}
 						onZapReceived={refetchZaps}
 						onGetStarted={() => (getStartedModalOpen = true)}
@@ -357,12 +413,12 @@
 			<BottomBar
 				publisherName={authorProfile?.displayName ?? authorProfile?.name ?? ''}
 				contentType="forum"
-				zapTarget={zapTarget}
+				{zapTarget}
 				otherZaps={[]}
 				isSignedIn={getIsSignedIn()}
 				onGetStarted={() => goto('/')}
-				searchProfiles={searchProfiles}
-				searchEmojis={searchEmojis}
+				{searchProfiles}
+				{searchEmojis}
 				oncommentSubmit={handleCommentSubmit}
 				onzapReceived={() => {}}
 				onoptions={() => {}}
@@ -381,29 +437,32 @@
 	.detail-header-wrap {
 		flex-shrink: 0;
 	}
-	/* Header spacer (64px) is in DetailHeader; only 16px gap below it to title */
+	/* Header spacer 64px; exactly 16px from header bottom to title (no double padding with panel) */
 	.content-scroll {
 		flex: 1;
 		min-height: 0;
 		padding-top: 16px;
+		padding-left: 0;
+		padding-right: 0;
 	}
 	.content-inner {
-		padding: 16px;
-		padding-top: 0;
+		padding-bottom: 16px;
+		max-width: 100%;
 	}
 	.post-title {
 		font-size: 1.5rem;
 		font-weight: 700;
-		margin: 0 0 1rem;
 		padding-top: 0;
+		margin: 0 0 6px;
 		line-height: 1.3;
 		color: hsl(var(--foreground));
 	}
 	.description-container {
 		position: relative;
+		margin-bottom: 0.5rem;
 	}
 	.description-container:not(.expanded) .post-description {
-		max-height: 150px;
+		max-height: 280px;
 		overflow: hidden;
 	}
 	.description-container.expanded .post-description {
@@ -417,39 +476,79 @@
 		margin-top: 0.5em;
 		margin-bottom: 0.5em;
 	}
+	.post-description :global(p:first-child) {
+		margin-top: 0;
+	}
+	.post-description :global(p:last-child) {
+		margin-bottom: 0;
+	}
 	.description-fade {
 		position: absolute;
 		bottom: 0;
 		left: 0;
 		right: 0;
-		height: 80px;
-		background: linear-gradient(to bottom, transparent, hsl(var(--gray66)));
+		height: 100px;
+		background: linear-gradient(to bottom, transparent, hsl(var(--background)));
 		pointer-events: none;
 	}
 	.read-more-btn {
-		margin-top: 0.5rem;
-		padding: 0.35rem 0.75rem;
-		font-size: 0.875rem;
-		background: hsl(var(--white8));
-		border: 1px solid hsl(var(--white16));
+		position: absolute;
+		bottom: 8px;
+		left: 0;
+		height: 32px;
+		padding: 0 14px;
+		background-color: hsl(var(--white8));
+		backdrop-filter: blur(12px);
+		-webkit-backdrop-filter: blur(12px);
+		border: none;
 		border-radius: 9999px;
-		color: hsl(var(--foreground));
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: hsl(var(--white66));
 		cursor: pointer;
+		transition: transform 0.15s ease;
 	}
 	.read-more-btn:hover {
-		background: hsl(var(--white11));
+		transform: scale(1.025);
+	}
+	.read-more-btn:active {
+		transform: scale(0.98);
+	}
+	.show-less-btn {
+		display: inline-flex;
+		align-items: center;
+		margin-top: 0.5rem;
+		height: 32px;
+		padding: 0 14px;
+		background-color: hsl(var(--white8));
+		backdrop-filter: blur(12px);
+		-webkit-backdrop-filter: blur(12px);
+		border: none;
+		border-radius: 9999px;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: hsl(var(--white66));
+		cursor: pointer;
+		transition: transform 0.15s ease;
+	}
+	.show-less-btn:hover {
+		transform: scale(1.025);
+	}
+	.show-less-btn:active {
+		transform: scale(0.98);
 	}
 	.post-detail-labels {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 8px;
-		margin-top: 1rem;
+		gap: 6px;
+		margin-top: 6px;
+		margin-bottom: 8px;
 	}
 	.post-detail-label-slot {
 		display: inline-flex;
 		flex-shrink: 0;
 	}
 	.social-tabs-wrap {
-		margin-top: 1.5rem;
+		margin-top: 16px;
 	}
 </style>

@@ -21,6 +21,8 @@ let {
 	onAdminSave = () => {},
 	adminSaveSubmitting = false,
 	communityName = '',
+	/** When true, slide the bar out (e.g. while a bottom sheet modal is open) */
+	modalOpen = false,
 	onJoin = () => {},
 	onComment = () => {},
 	onZap = () => {},
@@ -31,7 +33,7 @@ let {
 } = $props();
 </script>
 
-<div class="bottom-bar-wrapper {className}">
+<div class="bottom-bar-wrapper {className}" class:modal-open={modalOpen}>
 	<div class="bottom-bar" class:guest={!isMember && !hasForm}>
 		<div class="bottom-bar-content">
 			{#if showAdminSave}
@@ -106,6 +108,15 @@ let {
 		-webkit-backdrop-filter: blur(24px);
 		max-height: 88px;
 		overflow: hidden;
+		transition:
+			transform 0.25s cubic-bezier(0.33, 1, 0.68, 1),
+			opacity 0.2s ease;
+	}
+
+	.modal-open .bottom-bar {
+		transform: translateY(100%);
+		opacity: 0;
+		pointer-events: none;
 	}
 	.bottom-bar.guest {
 		padding: 12px;
@@ -122,35 +133,44 @@ let {
 		gap: 8px;
 		height: 32px;
 		min-height: 32px;
-		padding: 0 20px 0 12px;
+		padding: 0 20px 0 18px;
 		flex-shrink: 0;
 		background: var(--gradient-blurple);
 		border: none;
 		border-radius: var(--radius-16);
 		cursor: pointer;
 		color: hsl(var(--whiteEnforced));
-		font-size: 14px;
+		font-size: 16px;
 		font-weight: 500;
+		transition: transform 0.2s ease, box-shadow 0.2s ease;
+		transform: scale(1);
 	}
 	.post-btn:hover {
-		opacity: 0.92;
+		transform: scale(1.015);
+		box-shadow:
+			0 0 20px hsl(var(--primary) / 0.4),
+			0 10px 40px -20px hsl(var(--primary) / 0.6);
+	}
+	.post-btn:active {
+		transform: scale(0.98);
 	}
 	.search-forum-btn {
 		flex: 1;
 		min-width: 0;
-		height: 32px;
-		min-height: 32px;
+		height: 38px;
+		min-height: 38px;
 		display: flex;
 		align-items: center;
 		justify-content: flex-start;
-		gap: 10px;
-		padding: 0 14px;
+		gap: 8px;
+		padding: 0 16px;
 		background: hsl(var(--black33));
-		border: 0.33px solid hsl(var(--white16));
+		border: 0.33px solid hsl(var(--white33));
 		border-radius: var(--radius-16);
 		cursor: pointer;
 		color: hsl(var(--white33));
-		font-size: 14px;
+		font-size: 16px;
+		font-weight: 500;
 		text-align: left;
 	}
 	.search-forum-btn span {
@@ -160,7 +180,7 @@ let {
 	}
 	.zap-button {
 		gap: 8px;
-		padding: 0 20px 0 14px;
+		padding: 0 20px 0 18px;
 		flex-shrink: 0;
 	}
 	.join-button {
@@ -187,7 +207,10 @@ let {
 			border-bottom: 0.33px solid hsl(var(--white8));
 			box-shadow: 0 40px 64px 12px hsl(var(--black));
 		}
-		.post-btn,
+		.post-btn {
+			height: 42px;
+			min-height: 42px;
+		}
 		.search-forum-btn {
 			height: 42px;
 			min-height: 42px;

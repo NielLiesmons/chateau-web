@@ -33,7 +33,7 @@
 	/** @type {string|null|undefined} - Hex pubkey or npub for color generation (npub is decoded to hex for consistent color) */
 	export let pubkey = null;
 
-	/** @type {'xs'|'sm'|'bubble'|'smMd'|'md'|'lg'|'xl'|'2xl'|'3xl'|'4xl'} - Size preset */
+	/** @type {'xs'|'sm'|'bubble'|'smMd'|'md'|'lg'|'lgXl'|'xl'|'2xl'|'3xl'|'4xl'} - Size preset */
 	export let size = 'md';
 
 	/** @type {() => void} - Click handler */
@@ -65,6 +65,7 @@
 		smMd: 35, // between bubble and md
 		md: 38,
 		lg: 48,
+		lgXl: 56,
 		xl: 64,
 		'2xl': 96,
 		'3xl': 128,
