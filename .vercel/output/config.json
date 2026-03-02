@@ -2,50 +2,6 @@
 	"version": 3,
 	"routes": [
 		{
-			"src": "/blog",
-			"dest": "/blog/"
-		},
-		{
-			"src": "/blog/",
-			"status": 308,
-			"headers": {
-				"Location": "/blog"
-			}
-		},
-		{
-			"src": "/docs",
-			"dest": "/docs/"
-		},
-		{
-			"src": "/docs/",
-			"status": 308,
-			"headers": {
-				"Location": "/docs"
-			}
-		},
-		{
-			"src": "/studio",
-			"dest": "/studio/"
-		},
-		{
-			"src": "/studio/",
-			"status": 308,
-			"headers": {
-				"Location": "/studio"
-			}
-		},
-		{
-			"src": "/studio/reachkit",
-			"dest": "/studio/reachkit/"
-		},
-		{
-			"src": "/studio/reachkit/",
-			"status": 308,
-			"headers": {
-				"Location": "/studio/reachkit"
-			}
-		},
-		{
 			"src": "/_app/immutable/.+",
 			"headers": {
 				"cache-control": "public, immutable, max-age=31536000"
@@ -57,18 +13,6 @@
 		{
 			"src": "^/?(?:/__data.json)?$",
 			"dest": "/"
-		},
-		{
-			"src": "^/api/apps/?(?:/__data.json)?$",
-			"dest": "/api/apps"
-		},
-		{
-			"src": "^/apps/?(?:/__data.json)?$",
-			"dest": "/apps"
-		},
-		{
-			"src": "^/apps/([^/]+?)/?(?:/__data.json)?$",
-			"dest": "/apps/[naddr]"
 		},
 		{
 			"src": "^/communities/?(?:/__data.json)?$",
@@ -91,38 +35,13 @@
 			"dest": "/communities/[communityNpub]/post/[eventId]"
 		},
 		{
-			"src": "^/discover/?(?:/__data.json)?$",
-			"dest": "/discover"
-		},
-		{
 			"src": "^/profile/([^/]+?)/?(?:/__data.json)?$",
 			"dest": "/profile/[npub]"
-		},
-		{
-			"src": "^/stacks/?(?:/__data.json)?$",
-			"dest": "/stacks"
-		},
-		{
-			"src": "^/stacks/([^/]+?)/?(?:/__data.json)?$",
-			"dest": "/stacks/[naddr]"
 		},
 		{
 			"src": "/.*",
 			"dest": "/![-]/catchall"
 		}
 	],
-	"overrides": {
-		"blog.html": {
-			"path": "blog"
-		},
-		"docs.html": {
-			"path": "docs"
-		},
-		"studio.html": {
-			"path": "studio"
-		},
-		"studio/reachkit.html": {
-			"path": "studio/reachkit"
-		}
-	}
+	"overrides": {}
 }

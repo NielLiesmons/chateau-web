@@ -1,1 +1,0 @@
-import{h as e,i as t,g as o}from"./C5MCqPtz.js";let n=t(!0),i=!1;function s(){i||typeof window>"u"||(e(n,navigator.onLine,!0),window.addEventListener("online",()=>{e(n,!0),console.log("[Online] Connection restored")}),window.addEventListener("offline",()=>{e(n,!1),console.log("[Online] Connection lost")}),i=!0)}function r(){return o(n)}export{s as a,r as i};

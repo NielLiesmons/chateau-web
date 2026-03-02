@@ -1,0 +1,1 @@
+import{s as e,a as i,g as o}from"./CaDNKXc1.js";let n=i(!0),t=!1;function l(){t||typeof window>"u"||(e(n,navigator.onLine,!0),window.addEventListener("online",()=>{e(n,!0),console.log("[Online] Connection restored")}),window.addEventListener("offline",()=>{e(n,!1),console.log("[Online] Connection lost")}),t=!0)}function a(){return o(n)}export{l as a,a as i};
