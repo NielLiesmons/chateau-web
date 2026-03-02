@@ -1,21 +1,19 @@
 ---
-description: Product vision — what Zapstore Webapp is and who it serves
+description: Product vision — what Chateau is and who it serves
 alwaysApply: true
 ---
 
-# Zapstore Webapp — Vision
+# Chateau — Vision
 
-## What Zapstore Webapp Is
+## What Chateau Is
 
-Zapstore Webapp is a fast, SEO-friendly, local-first web interface for the
-Zapstore app distribution network built on Nostr.
+Chateau is a fast, local-first web interface for Nostr-native communities.
 
-It enables discovering apps, viewing detailed metadata, and connecting users
-to the Zapstore mobile app for installation.
+It implements the Nostr community spec (`kind:10222`): communities declare their own relays, blossom servers, and named content sections — each section backed by a profile list that controls who may publish. Chateau gives communities a full-featured UI for forum posts, tasks, wikis, and governance, without requiring any special relay infrastructure beyond what each community already declares in its `kind:10222` event.
 
 ## Who It Is For
 
-- Users discovering apps via search engines or shared links
-- Developers checking how their apps appear in the catalog
-- Communities sharing and discussing Nostr-native software
-- Anyone browsing the Zapstore catalog without installing the mobile app
+- **Community members** — reading, writing, and reacting to content within their communities
+- **Community admins** — managing content sections, profile lists, form templates, and general settings via the Crown admin modal
+- **New visitors** — discovering communities and requesting membership via join forms
+- **Developers** — building on or contributing to an open, Nostr-native community platform

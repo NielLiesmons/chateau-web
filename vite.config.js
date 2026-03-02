@@ -18,6 +18,7 @@ export default defineConfig({
 
 	// Dev server options
 	server: {
+		port: 5174,
 		watch: {
 			ignored: ['**/build/**']
 		}

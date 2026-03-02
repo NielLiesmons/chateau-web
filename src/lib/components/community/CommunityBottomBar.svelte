@@ -8,12 +8,32 @@ import { Zap, Plus, Search } from '$lib/components/icons';
 import InputButton from '$lib/components/common/InputButton.svelte';
 import { Reply } from '$lib/components/icons';
 
+/** @type {Record<string, string>} */
+const SECTION_CTA = {
+	forum: 'Post',
+	tasks: 'Task',
+	chat: 'Message',
+	apps: 'App',
+	docs: 'Doc',
+	wikis: 'Wiki',
+	badges: 'Badge'
+};
+/** @type {Record<string, string>} */
+const SECTION_SEARCH_LABEL = {
+	forum: 'Search Forum',
+	tasks: 'Search Tasks',
+	chat: 'Search Chat',
+	apps: 'Search Apps',
+	docs: 'Search Docs',
+	wikis: 'Search Wikis'
+};
+
 let {
 	isMember = false,
 	hasForm = false,
-	/** When true, show Post + Search Forum for section feed; when false and isMember show Zap + Comment */
+	/** When true, show Post + Search <section> for section feed; when false and isMember show Zap + Comment */
 	showFeedBar = false,
-	/** When true, show Add List + Search Member (Members tab) */
+	/** When true, show Add List + Search Member (Badges tab, admin only) */
 	showMembersBar = false,
 	onAddList = () => {},
 	/** When true, show a single Save button (Admin tab) */
@@ -21,6 +41,8 @@ let {
 	onAdminSave = () => {},
 	adminSaveSubmitting = false,
 	communityName = '',
+	/** Active section id — drives the CTA label */
+	selectedSection = 'forum',
 	/** When true, slide the bar out (e.g. while a bottom sheet modal is open) */
 	modalOpen = false,
 	onJoin = () => {},
@@ -28,9 +50,12 @@ let {
 	onZap = () => {},
 	onAdd = () => {},
 	onSearch = () => {},
-	onGetStarted = () => {},
+	onGetStarted: _onGetStarted = () => {},
 	className = ''
 } = $props();
+
+const ctaLabel = $derived(SECTION_CTA[selectedSection] ?? 'Post');
+const searchLabel = $derived(SECTION_SEARCH_LABEL[selectedSection] ?? 'Search');
 </script>
 
 <div class="bottom-bar-wrapper {className}" class:modal-open={modalOpen}>
@@ -49,15 +74,15 @@ let {
 					<Search variant="outline" size={18} strokeWidth={1.4} color="hsl(var(--white33))" />
 					<span>Search Member</span>
 				</button>
-			{:else if showFeedBar && isMember}
-				<button type="button" class="post-btn" onclick={onAdd} aria-label="New post">
-					<Plus variant="outline" size={16} strokeWidth={2.8} color="hsl(var(--whiteEnforced))" />
-					<span>Post</span>
-				</button>
-				<button type="button" class="search-forum-btn" onclick={onSearch} aria-label="Search forum">
-					<Search variant="outline" size={18} strokeWidth={1.4} color="hsl(var(--white33))" />
-					<span>Search Forum</span>
-				</button>
+		{:else if showFeedBar && isMember}
+			<button type="button" class="post-btn post-btn-feed" onclick={onAdd} aria-label="New {ctaLabel}">
+				<Plus variant="outline" size={16} strokeWidth={2.8} color="hsl(var(--whiteEnforced))" />
+				<span>{ctaLabel}</span>
+			</button>
+			<button type="button" class="search-forum-btn" onclick={onSearch} aria-label={searchLabel}>
+				<Search variant="outline" size={18} strokeWidth={1.4} color="hsl(var(--white33))" />
+				<span>{searchLabel}</span>
+			</button>
 			{:else if isMember && !showFeedBar}
 				<button type="button" class="btn-primary-large zap-button" onclick={onZap}>
 					<Zap variant="fill" size={18} color="hsl(var(--whiteEnforced))" />
@@ -153,6 +178,10 @@ let {
 	}
 	.post-btn:active {
 		transform: scale(0.98);
+	}
+	/* Feed version has tighter left padding since + is already in the label */
+	.post-btn.post-btn-feed {
+		padding: 0 20px 0 14px;
 	}
 	.search-forum-btn {
 		flex: 1;

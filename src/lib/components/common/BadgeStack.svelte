@@ -31,29 +31,29 @@ const stackWidth = $derived(displayed.length ? w + (displayed.length - 1) * (w -
 			class="badge-stack-item"
 			style="left: {i * (w - overlapPx)}px; z-index: {displayed.length - i}; width: {w}px; height: {h}px;"
 		>
-			<!-- Circular image area (top) -->
-			<div class="badge-stack-pic-wrap" style="width: {w}px; height: {w}px;">
-				<div class="badge-stack-pic">
-					<ProfilePic
-						pictureUrl={item.image ?? item.pictureUrl}
-						name={item.name}
-						size="xs"
-					/>
-				</div>
-			</div>
-			<!-- Dovetail decorations (bottom) - zaplab_design style -->
-			<div class="badge-dovetails" style="width: {w}px;">
-				{#if i === 0}
-					<!-- Left dovetail: rotated 30deg -->
-					<svg class="dovetail dovetail-left" viewBox="0 0 11 19" style="width: 11px; height: 19px;">
-						<path d="M0 0 L11 0 L11 19 L5.5 14.25 L0 19 Z" fill="hsl(var(--white16))" />
-					</svg>
-				{/if}
-				<!-- Right dovetail: rotated -30deg -->
-				<svg class="dovetail dovetail-right" viewBox="0 0 11 19" style="width: 11px; height: 19px;">
-					<path d="M0 0 L11 0 L11 19 L5.5 14.25 L0 19 Z" fill="hsl(var(--white16))" />
+		<!-- Dovetail decorations (bottom) - behind image -->
+		<div class="badge-dovetails" style="width: {w}px;">
+			{#if i === 0}
+				<!-- Left dovetail: rotated 30deg -->
+				<svg class="dovetail dovetail-left" viewBox="0 0 11 19" style="width: 11px; height: 19px;">
+					<path d="M0 2.5 Q0 0 2.5 0 L8.5 0 Q11 0 11 2.5 L11 19 L5.5 14.25 L0 19 Z" fill="hsl(var(--white16))" />
 				</svg>
+			{/if}
+			<!-- Right dovetail: rotated -30deg -->
+			<svg class="dovetail dovetail-right" viewBox="0 0 11 19" style="width: 11px; height: 19px;">
+				<path d="M0 2.5 Q0 0 2.5 0 L8.5 0 Q11 0 11 2.5 L11 19 L5.5 14.25 L0 19 Z" fill="hsl(var(--white16))" />
+			</svg>
+		</div>
+		<!-- Circular image area (top) - above dovetails -->
+		<div class="badge-stack-pic-wrap" style="width: {w}px; height: {w}px;">
+			<div class="badge-stack-pic">
+				<ProfilePic
+					pictureUrl={item.image ?? item.pictureUrl}
+					name={item.name}
+					size="xs"
+				/>
 			</div>
+		</div>
 		</div>
 	{/each}
 </div>
@@ -80,6 +80,8 @@ const stackWidth = $derived(displayed.length ? w + (displayed.length - 1) * (w -
 		align-items: center;
 		justify-content: center;
 		box-shadow: 2px 0 6px -2px hsl(var(--black66));
+		position: relative;
+		z-index: 2;
 	}
 	.badge-stack-item:first-child .badge-stack-pic-wrap {
 		box-shadow: none;
@@ -106,6 +108,7 @@ const stackWidth = $derived(displayed.length ? w + (displayed.length - 1) * (w -
 		align-items: flex-end;
 		justify-content: center;
 		pointer-events: none;
+		z-index: 1;
 	}
 	.dovetail {
 		position: absolute;

@@ -3,7 +3,7 @@ description: Quality expectations — layer standards, anti-patterns, testing, w
 alwaysApply: true
 ---
 
-# Zapstore Webapp — Quality Bar
+# Chateau — Quality Bar
 
 These are best practices and expectations. Unlike invariants (which are binary pass/fail),
 quality bar items involve judgment and tradeoffs.

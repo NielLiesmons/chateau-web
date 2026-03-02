@@ -10,7 +10,6 @@ import { createZap, subscribeToZapReceipt } from "$lib/nostr";
 import { getIsSignedIn, signEvent } from "$lib/stores/auth.svelte.js";
 import Modal from "$lib/components/common/Modal.svelte";
 import ZapSlider from "./ZapSlider.svelte";
-import Zap from "$lib/components/icons/Zap.svelte";
 /** Sign zap request with a fresh random keypair (for guest zaps). */
 async function signWithAnonymousKey(template) {
     const sk = generateSecretKey();
@@ -28,7 +27,7 @@ let zapRequest = $state(null);
 let copied = $state(false);
 let step = $state("slider");
 let unsubscribe = null;
-let waitingForReceipt = $state(false);
+let _waitingForReceipt = $state(false);
 let showManualClose = $state(false);
 let receiptTimeout = null;
 let lastEmojiTags = $state([]);
@@ -59,7 +58,7 @@ function close(zapSuccessful = false) {
     invoice = null;
     zapRequest = null;
     step = "slider";
-    waitingForReceipt = false;
+    _waitingForReceipt = false;
     showManualClose = false;
     isOpen = false;
     onclose?.({ success: zapSuccessful });
@@ -80,7 +79,7 @@ async function handleZap() {
     step = "invoice";
     invoice = null;
     invoiceLoading = true;
-    waitingForReceipt = true;
+    _waitingForReceipt = true;
     loading = true;
     error = "";
     try {
@@ -103,7 +102,7 @@ async function handleZap() {
         console.error("Zap failed:", err);
         error = err instanceof Error ? err.message : "Failed to create zap";
         step = "slider";
-        waitingForReceipt = false;
+        _waitingForReceipt = false;
     }
     finally {
         loading = false;
@@ -119,7 +118,7 @@ function startListeningForReceipt() {
             clearTimeout(receiptTimeout);
             receiptTimeout = null;
         }
-        waitingForReceipt = false;
+        _waitingForReceipt = false;
         step = "success";
         onzapReceived?.({ zapReceipt });
         setTimeout(() => close(true), 2000);
@@ -181,7 +180,7 @@ function goBack() {
     invoiceLoading = false;
     zapRequest = null;
     error = "";
-    waitingForReceipt = false;
+    _waitingForReceipt = false;
     showManualClose = false;
 }
 function formatAmount(val) {

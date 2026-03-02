@@ -32,7 +32,7 @@ let error = $state(null);
 // Local state - start with prerendered data
 let app = $state(null);
 let latestRelease = $state(null);
-let refreshing = $state(false);
+let _refreshing = $state(false);
 // Publisher profile
 let publisherProfile = $state(null);
 // Description expand state
@@ -609,7 +609,7 @@ onMount(async () => {
 function retryLoad() {
     window.location.reload();
 }
-function formatReleaseDate(ts) {
+function _formatReleaseDate(ts) {
     return new Date(ts * 1000).toLocaleDateString(undefined, {
         year: "numeric",
         month: "short",

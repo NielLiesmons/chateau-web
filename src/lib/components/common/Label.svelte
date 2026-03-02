@@ -12,6 +12,7 @@ const textColor = $derived(isSelected || isEmphasized ? "hsl(var(--white))" : "h
   type="button"
   class="label-container group"
   class:size-small={size === "small"}
+  class:size-xs={size === "xs"}
   onclick={onTap}
   style="--bg-color: {bgColor}; --text-color: {textColor};"
 >
@@ -90,6 +91,33 @@ const textColor = $derived(isSelected || isEmphasized ? "hsl(var(--white))" : "h
   .label-container.size-small .check-icon {
     width: 14px;
     height: 14px;
+  }
+
+  .label-container.size-xs {
+    height: 20px;
+  }
+
+  .label-container.size-xs .label-content {
+    height: 20px;
+    padding-left: 6px;
+    padding-right: 1px;
+    gap: 3px;
+    border-radius: 5px 0 0 5px;
+    max-width: 120px;
+  }
+
+  .label-container.size-xs .label-text {
+    font-size: 11px;
+  }
+
+  .label-container.size-xs .label-triangle {
+    width: 14px;
+    height: 20px;
+  }
+
+  .label-container.size-xs .check-icon {
+    width: 12px;
+    height: 12px;
   }
 
   .label-container:hover {

@@ -211,7 +211,6 @@ async function decodeNpubAsync(npub) {
 function decodeNpub(npub) {
   // Try synchronous decode if nip19 is already loaded
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const nip19 = require("nostr-tools/nip19");
     const decoded = nip19.decode(npub);
     if (decoded.type === "npub") {

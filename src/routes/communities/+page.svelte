@@ -1,6 +1,5 @@
 <script lang="js">
 	import { browser } from '$app/environment';
-	import { onMount } from 'svelte';
 	import InputTextField from '$lib/components/common/InputTextField.svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
@@ -14,28 +13,37 @@
 		fetchCommunityForumPosts,
 		subscribeCommunityForumPosts,
 		subscribeForumPostComments,
+		fetchFromRelays,
+		fetchProfilesBatch,
 		publishToRelays
 	} from '$lib/nostr';
+	import GetStartedModal from '$lib/components/modals/GetStartedModal.svelte';
+	import SpinKeyModal from '$lib/components/modals/SpinKeyModal.svelte';
+	import OnboardingBuildingModal from '$lib/components/modals/OnboardingBuildingModal.svelte';
 	import { DEFAULT_COMMUNITY_RELAYS, EVENT_KINDS } from '$lib/config';
-	import { getCurrentPubkey, signEvent, encrypt44, decrypt44 } from '$lib/stores/auth.svelte.js';
-	import { renderMarkdown } from '$lib/utils/markdown';
+	import { getCurrentPubkey, signEvent, encrypt44, decrypt44, signOut, connect } from '$lib/stores/auth.svelte.js';
 	import ProfilePic from '$lib/components/common/ProfilePic.svelte';
 	import ForumPost from '$lib/components/ForumPost.svelte';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
 	import CommunityBottomBar from '$lib/components/community/CommunityBottomBar.svelte';
 	import ForumPostDetail from '$lib/components/community/ForumPostDetail.svelte';
+	import TaskDetail from '$lib/components/community/TaskDetail.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import ForumPostModal from '$lib/components/modals/ForumPostModal.svelte';
+	import TaskModal from '$lib/components/modals/TaskModal.svelte';
+	import WikiModal from '$lib/components/modals/WikiModal.svelte';
 	import Checkbox from '$lib/components/common/Checkbox.svelte';
-	import { Pen, Cross, Bell, ChevronRight } from '$lib/components/icons';
+	import { Pen, Cross, Bell, ChevronRight, Crown } from '$lib/components/icons';
 	import BadgeStack from '$lib/components/common/BadgeStack.svelte';
+	import SingleBadge from '$lib/components/common/SingleBadge.svelte';
+	import Selector from '$lib/components/common/Selector.svelte';
+	import TaskCard from '$lib/components/TaskCard.svelte';
 
 	const SECTION_PILLS = [
 		{ id: 'forum', label: 'Forum', kinds: [11] },
 		{ id: 'tasks', label: 'Tasks', kinds: [] },
 		{ id: 'chat', label: 'Chat', kinds: [] },
-		{ id: 'apps', label: 'Apps', kinds: [] },
-		{ id: 'members', label: 'Members', kinds: [] }
+		{ id: 'apps', label: 'Apps', kinds: [] }
 	];
 
 	/** Preset content sections for Admin tab: toggle on + set profile list address. Order: General first, then Forum, Chat, etc. */
@@ -51,8 +59,20 @@
 
 	const communityNpub = $derived($page.url.searchParams.get('c') || '');
 	const openPostId = $derived($page.url.searchParams.get('post') || '');
+	const openTaskId = $derived($page.url.searchParams.get('task') || '');
 	const currentPubkey = $derived(getCurrentPubkey());
 
+	let profileDropdownOpen = $state(false);
+
+	function handleSignOut() {
+		signOut();
+		profileDropdownOpen = false;
+	}
+
+	async function handleAddProfile() {
+		profileDropdownOpen = false;
+		await connect();
+	}
 
 	let communities = $state([]);
 	let profilesByPubkey = $state(new Map());
@@ -60,6 +80,10 @@
 	let selectedSection = $state('forum');
 	let forumPosts = $state([]);
 	let forumMembers = $state([]);
+	/** @type {import('nostr-tools').NostrEvent[]} */
+	let taskEvents = $state([]);
+	/** @type {Map<string, import('nostr-tools').NostrEvent>} */
+	let taskStatusMap = $state(new Map());
 	let profileListEvent = $state(null);
 	let forumUnsub = $state(null);
 	let joinModalOpen = $state(false);
@@ -77,6 +101,7 @@
 	/** @type {Map<string, { pubkey: string; displayName?: string; avatarUrl?: string }[]>} */
 	let commentersByPostId = $state(new Map());
 	let communityInfoModalOpen = $state(false);
+	let communityInfoShowDetails = $state(false);
 	/** When community info modal is open, sections with list name for display */
 	let communityModalSections = $state([]); // { sectionName, listName, listAddress }[]
 	let communityEditModalOpen = $state(false);
@@ -91,12 +116,19 @@
 	let communityEditSubmitting = $state(false);
 	let communityEditError = $state('');
 	let addPostModalOpen = $state(false);
+	let addTaskModalOpen = $state(false);
+	let addWikiModalOpen = $state(false);
+	// Onboarding modals (for logged-out Get Started flow)
+	let getStartedModalOpen = $state(false);
+	let spinKeyModalOpen = $state(false);
+	let onboardingBuildingModalOpen = $state(false);
+	let onboardingProfileName = $state('');
 	let newPostTitle = $state('');
 	let newPostContent = $state('');
 	let newPostLabels = $state([]);
 	let newPostLabelInput = $state('');
 	let newPostSubmitting = $state(false);
-	let newPostError = $state('');
+	let _newPostError = $state('');
 	let membersListData = $state([]); // { listAddress, listEvent, parsed, sectionName }[] — loaded in background when Members tab selected
 	let joinRequestsCount = $state(0);
 	let joinRequestsModalOpen = $state(false);
@@ -104,7 +136,7 @@
 	let listViewMoreAddInput = $state('');
 	let listViewMoreAddError = $state('');
 	let listViewMoreAddSubmitting = $state(false);
-	let listViewMoreEditFormOpen = $state(false);
+	let _listViewMoreEditFormOpen = $state(false);
 	let joinRequestsList = $state([]);
 	let joinRequestsDecrypted = $state(new Map());
 	let joinRequestsApprovingId = $state(null);
@@ -138,6 +170,19 @@
 	let adminSectionModalPresetId = $state(null);
 	/** When true, show "Add content section" modal (enable a preset or custom) */
 	let adminAddSectionOpen = $state(false);
+
+	// Crown admin modal
+	let adminCrownModalOpen = $state(false);
+	let adminCrownSection = $state('General');
+
+	// Form Template management (kind 30168)
+	let adminFormTemplates = $state(/** @type {Array<{event: any, parsed: any, formAddr: string, linkedLists: string[]}>} */([]));
+	let formTemplateModal = $state(/** @type {null | {mode: string, event?: any, parsed?: any}} */(null));
+	let formTemplateName = $state('');
+	let formTemplateDescription = $state('');
+	let formTemplateDTag = $state('');
+	let formTemplateSubmitting = $state(false);
+	let formTemplateError = $state('');
 
 	// Resolve selected community (event + profile) from npub
 	$effect(() => {
@@ -189,13 +234,84 @@
 		return () => sub.unsubscribe();
 	});
 
-	// liveQuery: profiles for community pubkeys + current user (kind 0)
+	const CHATEAU_DEFAULT_NPUB = 'npub1vcxcc7r9racyslkfhrwu9qlznne9v95nmk3m5frd8lfuprdmwzpsxqzqcr';
+
+	// Auto-select Chateau community when no community is specified in the URL
+	$effect(() => {
+		if (!browser || communityNpub || typeof window === 'undefined') return;
+		if (window.innerWidth >= 768) {
+			goto(`/communities?c=${encodeURIComponent(CHATEAU_DEFAULT_NPUB)}`, { replaceState: true });
+		}
+	});
+
+	// Tracks all author/assignee pubkeys from forum posts + tasks, for profile fetching
+	let contentPubkeys = $state(/** @type {Set<string>} */ (new Set()));
+	// Tracks pubkeys already submitted to relay fetch (plain var — not reactive, survives re-renders)
+	const _profileFetchQueue = new Set();
+
+	// When forumPosts or taskEvents change, collect new pubkeys and fetch from relays if missing
 	$effect(() => {
 		if (!browser) return;
-		const pubkeys = [...new Set([...communities.map((c) => c.pubkey), ...(currentPubkey ? [currentPubkey] : [])])];
+		const newPks = new Set();
+		for (const p of forumPosts) if (p?.pubkey) newPks.add(p.pubkey);
+		for (const t of taskEvents) {
+			if (t?.pubkey) newPks.add(t.pubkey);
+			for (const tag of (t.tags ?? [])) {
+				if (tag[0] === 'p' && tag[1]) newPks.add(tag[1]);
+			}
+		}
+		if (newPks.size === 0) return;
+		let hasNew = false;
+		for (const pk of newPks) { if (!contentPubkeys.has(pk)) { hasNew = true; break; } }
+		if (!hasNew) return;
+		contentPubkeys = new Set([...contentPubkeys, ...newPks]);
+		const toFetch = [...newPks].filter(pk => !_profileFetchQueue.has(pk));
+		if (toFetch.length === 0) return;
+		toFetch.forEach(pk => _profileFetchQueue.add(pk));
+		fetchProfilesBatch(toFetch)
+			.then(results => {
+				const evs = [...results.values()].filter(Boolean);
+				if (evs.length > 0) putEvents(evs);
+			})
+			.catch(() => {});
+	});
+
+	// When membersListData loads (community info modal open), fetch profiles for list members
+	$effect(() => {
+		if (!browser || membersListData.length === 0) return;
+		const newPks = new Set();
+		for (const item of membersListData) {
+			for (const pk of (item.parsed?.members ?? [])) {
+				if (pk) newPks.add(pk);
+			}
+		}
+		if (newPks.size === 0) return;
+		let hasNew = false;
+		for (const pk of newPks) { if (!contentPubkeys.has(pk)) { hasNew = true; break; } }
+		if (!hasNew) return;
+		contentPubkeys = new Set([...contentPubkeys, ...newPks]);
+		const toFetch = /** @type {string[]} */ ([...newPks].filter(pk => !_profileFetchQueue.has(pk)));
+		if (toFetch.length === 0) return;
+		toFetch.forEach(pk => _profileFetchQueue.add(pk));
+		fetchProfilesBatch(toFetch)
+			.then(results => {
+				const evs = [...results.values()].filter(Boolean);
+				if (evs.length > 0) putEvents(evs);
+			})
+			.catch(() => {});
+	});
+
+	// liveQuery: profiles for community pubkeys + current user + content authors (kind 0)
+	$effect(() => {
+		if (!browser) return;
+		const pubkeys = [...new Set([
+			...communities.map((c) => c.pubkey),
+			...(currentPubkey ? [currentPubkey] : []),
+			...contentPubkeys
+		])];
 		if (pubkeys.length === 0) return;
 		const sub = liveQuery(async () => {
-			const events = await queryEvents({ kinds: [EVENT_KINDS.PROFILE], authors: pubkeys, limit: 200 });
+			const events = await queryEvents({ kinds: [EVENT_KINDS.PROFILE], authors: pubkeys, limit: 400 });
 			const map = new Map();
 			for (const e of events) {
 				try {
@@ -418,6 +534,80 @@
 		return () => sub.unsubscribe();
 	});
 
+	// liveQuery: task events (kind 37060) for the selected community
+	$effect(() => {
+		if (!browser || !selectedCommunity?.pubkey) {
+			taskEvents = [];
+			return;
+		}
+		const communityPubkey = selectedCommunity.pubkey;
+		const sub = liveQuery(async () => {
+			return await queryEvents({
+				kinds: [EVENT_KINDS.TASK],
+				'#h': [communityPubkey],
+				limit: 200
+			});
+		}).subscribe({
+			next: (val) => { taskEvents = val || []; },
+			error: (e) => console.error('[Tasks] liveQuery error', e)
+		});
+		// Also fetch from relays so we get tasks from other clients
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+		fetchFromRelays(relays, { kinds: [EVENT_KINDS.TASK], '#h': [communityPubkey], limit: 200 })
+			.then((events) => { if (events.length) putEvents(events); })
+			.catch(() => {});
+		return () => sub.unsubscribe();
+	});
+
+	// liveQuery: latest status event (kind 1983) per task address
+	$effect(() => {
+		if (!browser || taskEvents.length === 0) {
+			taskStatusMap = new Map();
+			return;
+		}
+		const addresses = taskEvents.map((e) => {
+			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+			return `${EVENT_KINDS.TASK}:${e.pubkey}:${d}`;
+		}).filter(Boolean);
+		if (addresses.length === 0) return;
+		const sub = liveQuery(async () => {
+			const events = await queryEvents({ kinds: [EVENT_KINDS.STATUS], '#a': addresses, limit: 1000 });
+			/** @type {Map<string, import('nostr-tools').NostrEvent>} */
+			const map = new Map();
+			for (const e of events) {
+				const aTag = e.tags?.find((t) => t[0] === 'a')?.[1];
+				if (!aTag) continue;
+				const prev = map.get(aTag);
+				if (!prev || e.created_at > prev.created_at) map.set(aTag, e);
+			}
+			return map;
+		}).subscribe({
+			next: (val) => { taskStatusMap = val ?? new Map(); },
+			error: (e) => console.error('[Tasks] status liveQuery error', e)
+		});
+		return () => sub.unsubscribe();
+	});
+
+	/** @type {Record<string,string>} */
+	const SPEC_STATUS_TO_CAMEL = {
+		'open': 'open', 'backlog': 'backlog',
+		'in-progress': 'inProgress', 'in-review': 'inReview', 'closed': 'closed'
+	};
+
+	/**
+	 * @param {import('nostr-tools').NostrEvent} taskEvent
+	 * @returns {{ status: string, priority: string }}
+	 */
+	function getTaskStatusAndPriority(taskEvent) {
+		const d = taskEvent.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+		const addr = `${EVENT_KINDS.TASK}:${taskEvent.pubkey}:${d}`;
+		const ev = taskStatusMap.get(addr);
+		if (!ev) return { status: 'open', priority: 'none' };
+		const specStatus = ev.tags?.find((t) => t[0] === 'status')?.[1] ?? 'open';
+		const priority = ev.tags?.find((t) => t[0] === 'priority')?.[1] ?? 'none';
+		return { status: SPEC_STATUS_TO_CAMEL[specStatus] ?? 'open', priority };
+	}
+
 	const isMember = $derived(
 		selectedCommunity && currentPubkey && forumMembers.includes(currentPubkey)
 	);
@@ -433,11 +623,7 @@
 				kinds: s.kinds ?? []
 			}));
 		if (fromSections.length === 0 && sections.length === 0) return SECTION_PILLS.filter((p) => p.id !== 'general');
-		return [
-			...fromSections,
-			{ id: 'members', label: 'Members', kinds: [] },
-			...(isCommunityAdmin ? [{ id: 'admin', label: 'Admin', kinds: [] }] : [])
-		];
+		return [...fromSections];
 	});
 	const selectedSectionKinds = $derived(sectionPills.find((p) => p.id === selectedSection)?.kinds ?? []);
 	const isForumSection = $derived(selectedSection === 'forum' || selectedSectionKinds.includes(11));
@@ -478,33 +664,29 @@
 	});
 
 
-	// When Admin tab is selected, populate admin form from current community only when first entering Admin or when community (pubkey) changes — do not overwrite user edits when selectedCommunity updates from liveQuery.
+	// When Crown admin modal opens, populate admin form from current community (only when first entering or community changes).
 	$effect(() => {
-		if (!browser || !selectedCommunity) return;
+		if (!browser || !selectedCommunity || !adminCrownModalOpen) return;
 		const pubkey = selectedCommunity.pubkey;
-		if (selectedSection === 'admin') {
-			if (lastAdminSyncedPubkey !== pubkey) {
-				lastAdminSyncedPubkey = pubkey;
-				adminPicture = selectedCommunity.picture ?? '';
-				adminName = selectedCommunity.displayName ?? selectedCommunity.name ?? '';
-				adminDescription = selectedCommunity.about ?? selectedCommunity.description ?? '';
-				adminRelays = (selectedCommunity.relays ?? []).join('\n');
-				adminBlossom = ((selectedCommunity.raw?.tags ?? []).filter((t) => t[0] === 'blossom').map((t) => t[1])).join('\n');
-				const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
-				const sections = comm?.sections ?? [];
-				const enabled = {};
-				const listAddress = {};
-				for (const preset of ADMIN_SECTION_PRESETS) {
-					const sec = sections.find((s) => (s.name || '').toLowerCase() === preset.name.toLowerCase());
-					enabled[preset.id] = !!sec;
-					const addrs = sec?.profileListAddresses ?? (sec?.profileListAddress ? [sec.profileListAddress] : []);
-					listAddress[preset.id] = addrs;
-				}
-				adminSectionEnabled = enabled;
-				adminSectionListAddress = listAddress;
+		if (lastAdminSyncedPubkey !== pubkey) {
+			lastAdminSyncedPubkey = pubkey;
+			adminPicture = selectedCommunity.picture ?? '';
+			adminName = selectedCommunity.displayName ?? selectedCommunity.name ?? '';
+			adminDescription = selectedCommunity.about ?? selectedCommunity.description ?? '';
+			adminRelays = (selectedCommunity.relays ?? []).join('\n');
+			adminBlossom = ((selectedCommunity.raw?.tags ?? []).filter((t) => t[0] === 'blossom').map((t) => t[1])).join('\n');
+			const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
+			const sections = comm?.sections ?? [];
+			const enabled = {};
+			const listAddress = {};
+			for (const preset of ADMIN_SECTION_PRESETS) {
+				const sec = sections.find((s) => (s.name || '').toLowerCase() === preset.name.toLowerCase());
+				enabled[preset.id] = !!sec;
+				const addrs = sec?.profileListAddresses ?? (sec?.profileListAddress ? [sec.profileListAddress] : []);
+				listAddress[preset.id] = addrs;
 			}
-		} else {
-			lastAdminSyncedPubkey = null;
+			adminSectionEnabled = enabled;
+			adminSectionListAddress = listAddress;
 		}
 	});
 
@@ -546,9 +728,9 @@
 		})();
 	});
 
-	// When Admin tab is selected, load all profile lists (kind 30000) by this community for list picker
+	// When Crown admin modal is active, load all profile lists for list picker
 	$effect(() => {
-		if (!browser || !selectedCommunity?.pubkey || selectedSection !== 'admin') return;
+		if (!browser || !selectedCommunity?.pubkey || !adminCrownModalOpen) return;
 		adminProfileLists = [];
 		(async () => {
 			const evs = await queryEvents({
@@ -566,10 +748,10 @@
 		})();
 	});
 
-	// When Members tab is selected, load profile lists from sections in background (do not block UI).
+	// When community info modal or Crown admin modal opens, load profile lists from sections in background.
 	// Deduplicate by listAddress so one list assigned to multiple sections shows as one panel with "Can write in: A, B, C".
 	$effect(() => {
-		if (!browser || !selectedCommunity || selectedSection !== 'members') return;
+		if (!browser || !selectedCommunity || (!communityInfoModalOpen && !adminCrownModalOpen)) return;
 		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
 		const sections = comm?.sections ?? [];
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
@@ -608,6 +790,50 @@
 				});
 			}
 			membersListData = list;
+		})();
+	});
+
+	// When Crown admin modal opens, load form templates (kind 30168) by this community.
+	// Checks local DB first (instant display), then fetches from relays to catch any
+	// templates published from other clients that haven't been synced yet.
+	$effect(() => {
+		if (!browser || !selectedCommunity?.pubkey || !adminCrownModalOpen) return;
+		const pubkey = selectedCommunity.pubkey;
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+
+		function buildTemplates(evs) {
+			const allLists = membersListData.length > 0 ? membersListData : adminProfileLists;
+			return evs.map((e) => {
+				const parsed = parseFormTemplate(e);
+				const dTag = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+				const formAddr = `${EVENT_KINDS.FORM_TEMPLATE}:${e.pubkey}:${dTag}`;
+				const linkedLists = allLists
+					.filter((l) => l.parsed?.form?.trim() === formAddr)
+					.map((l) => l.parsed?.name ?? l.sectionName ?? 'List');
+				return { event: e, parsed, formAddr, linkedLists: [...new Set(linkedLists)] };
+			});
+		}
+
+		(async () => {
+			// 1. Render immediately from local DB
+			const local = await queryEvents({ kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [pubkey], limit: 100 });
+			if (local.length > 0) adminFormTemplates = buildTemplates(local);
+
+			// 2. Fetch from relays — catches templates not yet in local DB
+			try {
+				const fromRelay = await fetchFromRelays(relays, { kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [pubkey], limit: 100 });
+				if (fromRelay?.length > 0) {
+					await putEvents(fromRelay);
+					// Merge: relay events take precedence (newer created_at wins)
+					const byDTag = new Map();
+					for (const e of [...local, ...fromRelay]) {
+						const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? e.id;
+						const existing = byDTag.get(d);
+						if (!existing || e.created_at > existing.created_at) byDTag.set(d, e);
+					}
+					adminFormTemplates = buildTemplates([...byDTag.values()]);
+				}
+			} catch { /* relay fetch failed; local results already shown */ }
 		})();
 	});
 
@@ -852,8 +1078,7 @@
 				await putEvents([listEv]);
 				const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
 				await publishToRelays(relays, listEv);
-				listFormModal = null;
-				selectedSection = 'admin';
+			listFormModal = null;
 			} else {
 				await saveListEdits(listFormModal.listEvent, {
 					name: listFormName,
@@ -868,7 +1093,7 @@
 			listFormSubmitting = false;
 		}
 	}
-	function openListPickerForPreset(presetId) {
+	function _openListPickerForPreset(presetId) {
 		adminListPickerPresetId = presetId;
 	}
 
@@ -1217,6 +1442,94 @@
 		}
 	}
 
+	function openAdminCrownModal(section = 'General') {
+		if (!selectedCommunity) return;
+		adminPicture = selectedCommunity.picture ?? '';
+		adminName = selectedCommunity.displayName ?? selectedCommunity.name ?? '';
+		adminDescription = selectedCommunity.about ?? selectedCommunity.description ?? '';
+		adminRelays = (selectedCommunity.relays ?? []).join('\n');
+		adminBlossom = ((selectedCommunity.raw?.tags ?? []).filter((t) => t[0] === 'blossom').map((t) => t[1])).join('\n');
+		// Parse content sections synchronously so Content tab is populated immediately
+		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
+		const sections = comm?.sections ?? [];
+		const enabled = {};
+		const listAddress = {};
+		for (const preset of ADMIN_SECTION_PRESETS) {
+			const sec = sections.find((s) => (s.name || '').toLowerCase() === preset.name.toLowerCase());
+			enabled[preset.id] = !!sec;
+			const addrs = sec?.profileListAddresses ?? (sec?.profileListAddress ? [sec.profileListAddress] : []);
+			listAddress[preset.id] = addrs;
+		}
+		adminSectionEnabled = enabled;
+		adminSectionListAddress = listAddress;
+		adminCrownSection = section;
+		adminSaveError = '';
+		adminCrownModalOpen = true;
+	}
+
+	function openFormTemplateModal(mode, item = null) {
+		if (mode === 'edit' && item) {
+			const descTag = item.event?.tags?.find((t) => t[0] === 'description')?.[1] ?? '';
+			formTemplateName = item.parsed?.name ?? '';
+			formTemplateDescription = descTag;
+			formTemplateDTag = item.parsed?.dTag ?? '';
+			formTemplateModal = { mode: 'edit', event: item.event, parsed: item.parsed };
+		} else {
+			formTemplateName = '';
+			formTemplateDescription = '';
+			formTemplateDTag = '';
+			formTemplateModal = { mode: 'add' };
+		}
+		formTemplateError = '';
+	}
+
+	async function saveFormTemplate() {
+		if (!formTemplateName.trim() || !formTemplateDTag.trim()) {
+			formTemplateError = 'Name and form ID are required.';
+			return;
+		}
+		formTemplateSubmitting = true;
+		formTemplateError = '';
+		try {
+			const relays = selectedCommunity?.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+			// Preserve existing tags (fields, encrypted, auto_response, etc.) except name/description/d
+			const existingTags = formTemplateModal?.mode === 'edit'
+				? (formTemplateModal.event?.tags ?? []).filter((t) => !['name', 'description', 'd'].includes(t[0]))
+				: [];
+			const tags = [
+				['d', formTemplateDTag.trim()],
+				['name', formTemplateName.trim()],
+				...(formTemplateDescription.trim() ? [['description', formTemplateDescription.trim()]] : []),
+				...existingTags
+			];
+			const ev = await signEvent({
+				kind: EVENT_KINDS.FORM_TEMPLATE,
+				tags,
+				content: formTemplateModal?.mode === 'edit' ? (formTemplateModal.event?.content ?? '') : '',
+				created_at: Math.floor(Date.now() / 1000)
+			});
+			await putEvents([ev]);
+			await publishToRelays(relays, ev);
+			formTemplateModal = null;
+			// Refresh list — newly saved event is already in local DB via putEvents
+			const fresh = await queryEvents({ kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [selectedCommunity.pubkey], limit: 100 });
+			const allLists = membersListData.length > 0 ? membersListData : adminProfileLists;
+			adminFormTemplates = fresh.map((e) => {
+				const parsed = parseFormTemplate(e);
+				const dTag = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+				const formAddr = `${EVENT_KINDS.FORM_TEMPLATE}:${e.pubkey}:${dTag}`;
+				const linkedLists = allLists
+					.filter((l) => l.parsed?.form?.trim() === formAddr)
+					.map((l) => l.parsed?.name ?? l.sectionName ?? 'List');
+				return { event: e, parsed, formAddr, linkedLists: [...new Set(linkedLists)] };
+			});
+		} catch (e) {
+			formTemplateError = e?.message ?? 'Failed to save form template.';
+		} finally {
+			formTemplateSubmitting = false;
+		}
+	}
+
 	function openCommunityEdit(target) {
 		communityEditTarget = target;
 		communityEditError = '';
@@ -1251,6 +1564,10 @@
 		if (!selectedCommunity?.npub) return;
 		goto(`/communities?c=${encodeURIComponent(selectedCommunity.npub)}&post=${encodeURIComponent(eventId)}`);
 	}
+	function openTask(eventId) {
+		if (!selectedCommunity?.npub) return;
+		goto(`/communities?c=${encodeURIComponent(selectedCommunity.npub)}&task=${encodeURIComponent(eventId)}`);
+	}
 	function backToForum() {
 		if (!selectedCommunity?.npub) return;
 		goto(`/communities?c=${encodeURIComponent(selectedCommunity.npub)}`);
@@ -1261,7 +1578,7 @@
 		newPostContent = '';
 		newPostLabels = [];
 		newPostLabelInput = '';
-		newPostError = '';
+		_newPostError = '';
 	}
 	function closeCreatePost() {
 		addPostModalOpen = false;
@@ -1269,26 +1586,45 @@
 		newPostContent = '';
 		newPostLabels = [];
 		newPostLabelInput = '';
-		newPostError = '';
+		_newPostError = '';
 		newPostSubmitting = false;
 	}
-	function addPostLabel() {
+	function closeCreateTask() {
+		addTaskModalOpen = false;
+	}
+	function closeCreateWiki() {
+		addWikiModalOpen = false;
+	}
+	function handleGetStartedStart(/** @type {{ profileName: string }} */ event) {
+		onboardingProfileName = event.profileName;
+		spinKeyModalOpen = true;
+		setTimeout(() => { getStartedModalOpen = false; }, 80);
+	}
+	function handleSpinComplete() {
+		spinKeyModalOpen = false;
+		setTimeout(() => { onboardingBuildingModalOpen = true; }, 150);
+	}
+	function handleUseExistingKey() {
+		spinKeyModalOpen = false;
+		getStartedModalOpen = true;
+	}
+	function _addPostLabel() {
 		const v = newPostLabelInput.trim();
 		if (!v || newPostLabels.includes(v)) return;
 		newPostLabels = [...newPostLabels, v];
 		newPostLabelInput = '';
 	}
-	function removePostLabel(label) {
+	function _removePostLabel(label) {
 		newPostLabels = newPostLabels.filter((l) => l !== label);
 	}
-	async function submitNewPost() {
+	async function _submitNewPost() {
 		if (!selectedCommunity?.pubkey || !currentPubkey || newPostSubmitting) return;
 		if (!newPostTitle.trim()) {
-			newPostError = 'Title is required';
+			_newPostError = 'Title is required';
 			return;
 		}
 		const title = newPostTitle.trim();
-		newPostError = '';
+		_newPostError = '';
 		newPostSubmitting = true;
 		try {
 			const tagTags = (newPostLabels || []).map((l) => ['t', String(l).trim()]).filter((t) => t[1]);
@@ -1306,7 +1642,7 @@
 			await publishToRelays(selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS, ev);
 			closeCreatePost();
 		} catch (e) {
-			newPostError = e?.message || 'Failed to publish';
+			_newPostError = e?.message || 'Failed to publish';
 		} finally {
 			newPostSubmitting = false;
 		}
@@ -1328,6 +1664,99 @@
 			selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS,
 			ev
 		);
+	}
+
+	/** @type {Record<string, string>} */
+	const TASK_STATUS_MAP = {
+		open: 'open',
+		backlog: 'backlog',
+		inProgress: 'in-progress',
+		inReview: 'in-review',
+		closed: 'closed'
+	};
+
+	/**
+	 * @param {{ title?: string, status?: string, priority?: string, text?: string, emojiTags?: string[][], mentions?: string[], labels?: string[], assignees?: string[] }} params
+	 */
+	async function handleTaskSubmit({ title = '', status = 'open', priority = 'none', text = '', emojiTags = [], mentions = [], labels = [], assignees = [] }) {
+		if (!selectedCommunity?.pubkey || !currentPubkey) throw new Error('Not signed in');
+
+		const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'task';
+		const dTag = `${slug}-${Date.now()}`;
+		const relays = /** @type {string[]} */ (
+			selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS
+		);
+
+		/** @type {string[][]} */
+		const taskTags = [
+			['d', dTag],
+			['title', title.trim()],
+			['h', selectedCommunity.pubkey]
+		];
+		assignees.forEach((pk) => taskTags.push(['p', pk, 'assignee']));
+		mentions.forEach((pk) => { if (!assignees.includes(pk)) taskTags.push(['p', pk]); });
+		labels.forEach((l) => taskTags.push(['t', l]));
+		// emojiTags from ShortTextInput.getSerializedContent() are { shortcode, url } objects; convert to Nostr tag arrays
+		emojiTags.forEach((e) => taskTags.push(Array.isArray(e) ? e : ['emoji', e.shortcode, e.url]));
+
+		console.log('[TaskPublish] relays:', relays);
+
+		const taskEvent = await signEvent({
+			kind: EVENT_KINDS.TASK,
+			content: text,
+			tags: taskTags,
+			created_at: Math.floor(Date.now() / 1000)
+		});
+		await publishToRelays(relays, taskEvent);
+		console.log('[TaskPublish] task published', taskEvent.id);
+
+		const statusValue = TASK_STATUS_MAP[status] ?? 'open';
+		/** @type {string[][]} */
+		const statusTags = [
+			['a', `37060:${currentPubkey}:${dTag}`],
+			['status', statusValue]
+		];
+		if (priority && priority !== 'none') statusTags.push(['priority', priority]);
+
+		const statusEvent = await signEvent({
+			kind: EVENT_KINDS.STATUS,
+			content: '',
+			tags: statusTags,
+			created_at: Math.floor(Date.now() / 1000)
+		});
+		await publishToRelays(relays, statusEvent);
+		console.log('[TaskPublish] status published', statusEvent.id);
+	}
+
+	/**
+	 * @param {{ title: string, slug: string, summary: string, text: string, emojiTags: string[][], mentions: string[], labels: string[] }} params
+	 */
+	async function handleWikiSubmit({ title, slug, summary, text, emojiTags = [], mentions = [], labels = [] }) {
+		if (!selectedCommunity?.pubkey || !currentPubkey) throw new Error('Not signed in');
+
+		const relays = /** @type {string[]} */ (
+			selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS
+		);
+
+		/** @type {string[][]} */
+		const tags = [
+			['d', slug],
+			['title', title.trim()],
+			['h', selectedCommunity.pubkey]
+		];
+		if (summary.trim()) tags.push(['summary', summary.trim()]);
+		labels.forEach((l) => tags.push(['t', l]));
+		mentions.forEach((pk) => tags.push(['p', pk]));
+		emojiTags.forEach((e) => tags.push(Array.isArray(e) ? e : ['emoji', e.shortcode, e.url]));
+
+		const ev = await signEvent({
+			kind: EVENT_KINDS.WIKI,
+			content: text,
+			tags,
+			created_at: Math.floor(Date.now() / 1000)
+		});
+		await publishToRelays(relays, ev);
+		console.log('[WikiPublish] published', ev.id);
 	}
 
 	function formatDate(ts) {
@@ -1362,21 +1791,74 @@
 	<aside class="left-column">
 		<header class="left-header">
 			{#if currentPubkey}
-				<ProfilePic
-					pictureUrl={currentUserProfileContent?.picture}
-					name={currentUserProfileContent?.display_name ?? currentUserProfileContent?.name}
-					pubkey={currentUserNpub}
-					size="bubble"
-				/>
-			{:else}
-				<a href="/" class="chateau-icon-link" aria-label="Chateau">
-					<svg width="28" height="36" viewBox="0 0 38 48" fill="none" xmlns="http://www.w3.org/2000/svg" class="chateau-icon">
-						<defs><linearGradient id="chateau-sidebar-logo" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#5C5FFF"/><stop offset="100%" stop-color="#4542FF"/></linearGradient></defs>
-						<path d="M12.9331 46.8902L0.0607555 2.20135C-0.173983 1.38641 0.292202 0.534787 1.10201 0.299195L15.8657 46.037C16.1005 46.852 15.6343 47.7036 14.8245 47.9392L14.0147 48.1748 13.1679 47.7051 12.9331 46.8902Z" fill="url(#chateau-sidebar-logo)"/>
-						<path d="M21.7663 1.39501C13.241 -0.316389 8.55784 -0.0736039 6.67019 0.176475C6.13863 0.246896 5.8744 0.800356 6.10004 1.28991C6.53476 2.2331 7.24506 3.78105 7.97765 5.40646C8.51885 6.60726 8.95486 7.6941 9.26865 8.51995C9.60411 9.40282 10.5604 9.92704 11.482 9.74561C12.4674 9.55164 13.9551 9.28876 16.0978 8.97692C19.3497 8.50368 22.9139 8.48585 24.8112 8.52028C25.1227 8.52593 25.1957 8.9502 24.9068 9.06739C23.2045 9.758 20.082 11.0742 17.3395 12.4995C14.9353 13.749 13.4495 14.8922 12.6445 15.6081C12.1233 16.0716 11.9119 16.7656 11.9858 17.4619C12.0876 18.4219 12.2487 19.9079 12.4308 21.4668C12.5805 22.7483 12.9067 24.4589 13.2039 25.8843C13.3792 26.7247 14.6933 26.8959 15.1691 26.1835C16.8451 23.6744 20.3135 19.5512 26.8793 15.4386C35.3623 10.1253 37.464 4.95103 37.9815 2.56559C38.118 1.93645 37.474 1.49021 36.8581 1.6653C34.7513 2.26428 29.9639 3.04065 21.7663 1.39501Z" fill="url(#chateau-sidebar-logo)"/>
-					</svg>
-				</a>
-			{/if}
+				<div class="profile-menu-wrap">
+					<button
+						type="button"
+						class="profile-menu-btn"
+						onclick={() => (profileDropdownOpen = !profileDropdownOpen)}
+						aria-label="Profile menu"
+						aria-haspopup="menu"
+						aria-expanded={profileDropdownOpen}
+					>
+						<ProfilePic
+							pictureUrl={currentUserProfileContent?.picture}
+							name={currentUserProfileContent?.display_name ?? currentUserProfileContent?.name}
+							pubkey={currentUserNpub}
+							size="bubble"
+						/>
+					</button>
+
+					{#if profileDropdownOpen}
+						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+						<div class="profile-menu-backdrop" onclick={() => (profileDropdownOpen = false)} role="presentation"></div>
+						<div class="profile-menu" role="menu">
+							<div class="profile-menu-info">
+								<span class="profile-menu-name">
+									{currentUserProfileContent?.display_name ?? currentUserProfileContent?.name ?? 'Anonymous'}
+								</span>
+								<span class="profile-menu-npub">{currentUserNpub.slice(0, 12)}…</span>
+							</div>
+							<div class="profile-menu-divider"></div>
+							<button
+								type="button"
+								class="profile-menu-item"
+								role="menuitem"
+								onclick={handleAddProfile}
+							>
+								<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+									<circle cx="7" cy="7" r="6.5" stroke="currentColor" stroke-width="1.2"/>
+									<line x1="7" y1="4" x2="7" y2="10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+									<line x1="4" y1="7" x2="10" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+								</svg>
+								Add profile
+							</button>
+							<div class="profile-menu-divider"></div>
+							<button
+								type="button"
+								class="profile-menu-item profile-menu-item--danger"
+								role="menuitem"
+								onclick={handleSignOut}
+							>
+								<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+									<path d="M5 2H2.5A1.5 1.5 0 0 0 1 3.5v7A1.5 1.5 0 0 0 2.5 12H5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+									<path d="M9 4l3 3-3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+									<line x1="12" y1="7" x2="5" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+								</svg>
+								Disconnect
+							</button>
+						</div>
+					{/if}
+				</div>
+		{:else}
+			<button
+				type="button"
+				class="profile-menu-btn"
+				onclick={() => { getStartedModalOpen = true; }}
+				aria-label="Get started"
+			>
+				<ProfilePic size="bubble" />
+			</button>
+		{/if}
 			<button type="button" class="left-search-wrap" aria-label="Search / Command">
 				<Search variant="outline" size={16} strokeWidth={1.4} color="hsl(var(--white33))" />
 				<span class="left-search-text">Search / Command</span>
@@ -1422,7 +1904,8 @@
 				{/each}
 			{/if}
 		</div>
-	</aside>
+
+</aside>
 
 	<!-- Right column: viewport creates containing block so modals/bars are scoped here -->
 	<div class="right-column">
@@ -1431,15 +1914,23 @@
 			<div class="panel-placeholder">
 				<EmptyState message="Select a community" minHeight={280} />
 			</div>
-		{:else if openPostId}
-			<div class="panel-content panel-content-detail">
-				<ForumPostDetail
-					eventId={openPostId}
-					communityNpub={selectedCommunity.npub}
-					onBack={backToForum}
-				/>
-			</div>
-		{:else}
+	{:else if openPostId}
+		<div class="panel-content panel-content-detail">
+			<ForumPostDetail
+				eventId={openPostId}
+				communityNpub={selectedCommunity.npub}
+				onBack={backToForum}
+			/>
+		</div>
+	{:else if openTaskId}
+		<div class="panel-content panel-content-detail">
+			<TaskDetail
+				eventId={openTaskId}
+				communityNpub={selectedCommunity.npub}
+				onBack={backToForum}
+			/>
+		</div>
+	{:else}
 			<div class="right-header-block">
 				<div class="right-header-row1">
 					<button type="button" class="community-info-row-tap" onclick={() => (communityInfoModalOpen = true)} aria-label="Community info">
@@ -1451,9 +1942,19 @@
 						/>
 						<h1 class="community-display-name">{selectedCommunity.displayName || selectedCommunity.name || 'Unnamed'}</h1>
 					</button>
-					<button type="button" class="notifications-btn" aria-label="Notifications">
+				<div class="header-icon-group">
+					{#if isCommunityAdmin}
+						<button type="button" class="notifications-btn" aria-label="Admin settings" onclick={() => openAdminCrownModal()}>
+							<Crown variant="fill" size={15} color="hsl(var(--white33))" />
+						</button>
+					{/if}
+					<button type="button" class="notifications-btn bell-btn" aria-label="Notifications" onclick={() => (joinRequestsModalOpen = true)}>
 						<Bell variant="fill" size={16} color="hsl(var(--white33))" />
+						{#if isCommunityAdmin && joinRequestsCount > 0}
+							<span class="bell-badge">{joinRequestsCount}</span>
+						{/if}
 					</button>
+				</div>
 				</div>
 				<div class="tab-row pills-row-under">
 					{#each sectionPills as pill}
@@ -1492,187 +1993,153 @@
 							{/each}
 						{/if}
 					</div>
-				{:else if selectedSection === 'members'}
-					<div class="members-tab">
-						{#if isCommunityAdmin && joinRequestsCount > 0}
-							<button type="button" class="members-join-requests-panel" onclick={() => (joinRequestsModalOpen = true)}>
-								<span class="members-panel-label">Join Requests</span>
-								<span class="members-panel-count">{joinRequestsCount}</span>
-							</button>
-						{/if}
-						{#each membersListData as item}
-							{@const members = item.parsed?.members ?? []}
-							<div class="members-list-panel">
-								<div class="members-list-panel-top">
-									<span class="members-list-name">{item.parsed?.name ?? item.sectionName}</span>
-									<span class="members-list-count">{members.length}</span>
-								</div>
-								{#if item.parsed?.content}
-									<p class="members-list-desc">{item.parsed.content}</p>
-								{/if}
-								<p class="members-list-sections">Can write in: {item.sectionName}</p>
-								<ul class="members-list-profiles-vertical">
-									{#each members as pubkey}
-										{@const profile = profilesByPubkey.get(pubkey)}
-										{@const displayName = profile?.display_name ?? profile?.name ?? (profile?.content ? (() => { try { const c = JSON.parse(profile.content || '{}'); return c.display_name ?? c.name ?? null; } catch { return null; } })() : null) ?? (pubkey.slice(0, 12) + '…')}
-										<li class="members-list-profile-row">
-											<ProfilePic pubkey={pubkey} size="sm" />
-											<span class="members-list-profile-name">{displayName}</span>
-										</li>
-									{/each}
-								</ul>
-								<div class="members-list-actions">
-									<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
-									{#if isCommunityAdmin}
-										<button type="button" class="list-panel-edit-btn" aria-label="Edit list" onclick={() => openEditListModal(item)}>
-											<Pen variant="outline" size={14} strokeWidth={1.4} color="hsl(var(--foreground))" />
-											<span>Edit</span>
-										</button>
-									{/if}
-									{#if item.parsed?.form && !members.includes(currentPubkey)}
-										<button type="button" class="btn-join-list" onclick={() => { selectedJoinList = { formAddress: item.parsed.form, listName: item.parsed?.name, listAddress: item.listAddress }; joinModalOpen = true; }}>Join</button>
-									{/if}
-								</div>
-							</div>
+			{:else if selectedSection === 'tasks'}
+				<div class="tasks-list">
+					{#if taskEvents.length === 0}
+						<EmptyState message="No tasks yet" minHeight={600} />
+					{:else}
+						{#each taskEvents.slice().sort((a, b) => b.created_at - a.created_at) as task}
+						{@const { status, priority } = getTaskStatusAndPriority(task)}
+						{@const title = task.tags?.find((t) => t[0] === 'title')?.[1] ?? ''}
+						{@const taskLabels = task.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
+						{@const assigneePubkeys = task.tags?.filter((t) => t[0] === 'p' && t[2] === 'assignee').map((t) => t[1]) ?? []}
+						{@const authorProfile = profilesByPubkey.get(task.pubkey)}
+						{@const authorContent = authorProfile?.content ? (() => { try { return JSON.parse(authorProfile.content); } catch { return {}; } })() : {}}
+					<TaskCard
+						{title}
+						{status}
+						{priority}
+						labels={taskLabels}
+						createdAt={task.created_at}
+						author={{ pubkey: task.pubkey, name: authorContent.display_name ?? authorContent.name, pictureUrl: authorContent.picture }}
+						assignees={assigneePubkeys.map((pk) => {
+							const p = profilesByPubkey.get(pk);
+							const c = p?.content ? (() => { try { return JSON.parse(p.content); } catch { return {}; } })() : {};
+							return { pubkey: pk, name: c.display_name ?? c.name, pictureUrl: c.picture };
+						})}
+						onClick={() => openTask(task.id)}
+					/>
 						{/each}
-						{#if membersListData.length === 0 && selectedSection === 'members'}
-							<EmptyState message="No member lists" minHeight={600} />
-						{/if}
-					</div>
-				{:else if selectedSection === 'admin'}
-					<div class="admin-tab">
-						<div class="admin-form-section">
-							<label class="labels-label" for="admin-picture">Picture URL</label>
-							<InputTextField bind:value={adminPicture} placeholder="https://…" singleLine={true} id="admin-picture" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
-						</div>
-						<div class="admin-form-section">
-							<label class="labels-label" for="admin-name">Community name</label>
-							<InputTextField bind:value={adminName} placeholder="Name" singleLine={true} id="admin-name" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
-						</div>
-						<div class="admin-form-section">
-							<label class="labels-label" for="admin-desc">Description</label>
-							<InputTextField bind:value={adminDescription} placeholder="Description" singleLine={false} size="medium" id="admin-desc" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
-						</div>
-						<div class="admin-form-section">
-							<label class="labels-label" for="admin-relays">Relays (one per line or comma-separated)</label>
-							<InputTextField bind:value={adminRelays} placeholder="wss://…" singleLine={false} size="medium" id="admin-relays" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
-						</div>
-						<div class="admin-form-section">
-							<label class="labels-label" for="admin-blossom">Blossom servers</label>
-							<InputTextField bind:value={adminBlossom} placeholder="https://…" singleLine={false} size="medium" id="admin-blossom" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
-						</div>
-						<h3 class="admin-sections-title">Content sections</h3>
-						{#each ADMIN_SECTION_PRESETS.filter((p) => adminSectionEnabled[p.id]) as preset}
-							{@const addrs = Array.isArray(adminSectionListAddress[preset.id]) ? adminSectionListAddress[preset.id] : (adminSectionListAddress[preset.id] ? [adminSectionListAddress[preset.id]] : [])}
-							{@const listItems = adminProfileLists.filter((l) => addrs.includes(l.listAddress)).map((l) => ({ image: l.image, name: l.name }))}
-							<button
-								type="button"
-								class="admin-section-row admin-section-row-clickable"
-								onclick={() => (adminSectionModalPresetId = preset.id)}
-							>
-								<span class="admin-section-emoji-slot"></span>
-								<span class="admin-section-name">{preset.name}</span>
-								<span class="admin-section-badges-wrap">
-									<BadgeStack items={listItems} maxDisplay={3} overlapPx={16} badgeSizePx={32} />
-									<ChevronRight variant="outline" size={16} color="hsl(var(--white33))" className="admin-section-chevron" />
-								</span>
-							</button>
-						{/each}
-						<div class="admin-section-add-row">
-							<button type="button" class="admin-section-add-btn" onclick={() => (adminAddSectionOpen = true)} aria-label="Add content section">
-								<Plus variant="outline" size={18} color="hsl(var(--white66))" />
-								<span>Add content section</span>
-							</button>
-						</div>
-						{#if adminSaveError}
-							<p class="text-sm text-red-500">{adminSaveError}</p>
-						{/if}
-					</div>
+					{/if}
+				</div>
 				{:else}
 					<EmptyState message="{sectionPills.find((p) => p.id === selectedSection)?.label ?? selectedSection} coming soon" minHeight={200} />
 				{/if}
 			</div>
-			{#if selectedCommunity && !openPostId}
-				<CommunityBottomBar
-					isMember={isMember}
-					hasForm={hasForm}
-					showFeedBar={selectedSection !== 'admin' && selectedSection !== 'members'}
-					showMembersBar={selectedSection === 'members'}
-					onAddList={() => openListFormModal('add')}
-					showAdminSave={selectedSection === 'admin' && isCommunityAdmin}
-					onAdminSave={saveCommunityAdminAll}
-					adminSaveSubmitting={adminSaveSubmitting}
-					communityName={selectedCommunity.displayName || selectedCommunity.name || ''}
-					modalOpen={addPostModalOpen}
-					onJoin={() => (joinModalOpen = true)}
-					onComment={() => {}}
-					onZap={() => {}}
-					onAdd={openCreatePost}
-					onSearch={() => { /* TODO: section search */ }}
-				/>
-			{/if}
+	{#if selectedCommunity && !openPostId && !openTaskId}
+		<CommunityBottomBar
+			isMember={isMember}
+			hasForm={hasForm}
+		showFeedBar={true}
+		showMembersBar={false}
+		onAddList={() => openListFormModal('add')}
+		showAdminSave={false}
+			communityName={selectedCommunity.displayName || selectedCommunity.name || ''}
+			selectedSection={selectedSection}
+			modalOpen={addPostModalOpen || addTaskModalOpen || addWikiModalOpen}
+			onJoin={() => (joinModalOpen = true)}
+			onComment={() => {}}
+			onZap={() => {}}
+			onAdd={() => { if (selectedSection === 'tasks') addTaskModalOpen = true; else if (selectedSection === 'wikis') addWikiModalOpen = true; else openCreatePost(); }}
+			onSearch={() => { /* TODO: section search */ }}
+			/>
+		{/if}
 		{/if}
 		<!-- Modals and overlays scoped to right page (inside viewport containing block) -->
-		<Modal open={communityInfoModalOpen} onClose={() => { communityInfoModalOpen = false; communityEditModalOpen = false; }} ariaLabel="Community info">
-	{#if communityInfoModalOpen && selectedCommunity}
-		{@const commTags = selectedCommunity.raw?.tags ?? []}
-		{@const blossomUrls = commTags.filter((t) => t[0] === 'blossom').map((t) => t[1]).filter(Boolean)}
-		{@const relayUrls = selectedCommunity.relays ?? []}
-		<div class="community-info-modal">
-			{#if isCommunityAdmin}
-				<button type="button" class="community-info-edit-btn" aria-label="Edit community" onclick={() => openCommunityEdit('full')}>
-					<Pen variant="fill" size={14} color="hsl(var(--white33))" />
-					<span>Edit</span>
+	<Modal open={communityInfoModalOpen} onClose={() => { communityInfoModalOpen = false; communityEditModalOpen = false; communityInfoShowDetails = false; }} ariaLabel="Community info">
+{#if communityInfoModalOpen && selectedCommunity}
+	{@const commTags = selectedCommunity.raw?.tags ?? []}
+	{@const blossomUrls = commTags.filter((t) => t[0] === 'blossom').map((t) => t[1]).filter(Boolean)}
+	{@const relayUrls = selectedCommunity.relays ?? []}
+	<div class="community-info-modal">
+		<div class="community-info-pic-wrap">
+			<ProfilePic
+				pictureUrl={selectedCommunity.picture}
+				name={selectedCommunity.displayName || selectedCommunity.name}
+				pubkey={selectedCommunity.pubkey}
+				size="2xl"
+			/>
+		</div>
+		<h2 class="community-info-name">{selectedCommunity.displayName || selectedCommunity.name || 'Unnamed'}</h2>
+		{#if selectedCommunity.about ?? selectedCommunity.description}
+			<p class="community-info-about">{selectedCommunity.about ?? selectedCommunity.description}</p>
+		{/if}
+		<button
+			type="button"
+			class="btn-more-details"
+			onclick={() => (communityInfoShowDetails = !communityInfoShowDetails)}
+		>
+			{communityInfoShowDetails ? 'Less details' : 'More details'}
+		</button>
+		{#if communityInfoShowDetails}
+			<div class="community-info-details-wrap">
+				{#if relayUrls.length > 0 || blossomUrls.length > 0}
+					<h3 class="community-info-section-label">Servers</h3>
+					<div class="community-info-servers-list">
+						{#each relayUrls as url}
+							<span class="community-info-server">{url}</span>
+						{/each}
+						{#each blossomUrls as url}
+							<span class="community-info-server community-info-blossom">{url}</span>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
+		<div class="community-info-profiles-section">
+			<h3 class="community-info-profiles-label">PROFILES</h3>
+			{#if isCommunityAdmin && joinRequestsCount > 0}
+				<button type="button" class="members-join-requests-panel" onclick={() => (joinRequestsModalOpen = true)}>
+					<span class="members-panel-label">Join Requests</span>
+					<span class="members-panel-count">{joinRequestsCount}</span>
 				</button>
 			{/if}
-			<div class="community-info-pic-wrap">
-				<ProfilePic
-					pictureUrl={selectedCommunity.picture}
-					name={selectedCommunity.displayName || selectedCommunity.name}
-					pubkey={selectedCommunity.pubkey}
-					size="2xl"
-				/>
-			</div>
-			<div class="community-info-title-row">
-				<h2 class="community-info-title join-modal-title">{selectedCommunity.displayName || selectedCommunity.name || 'Unnamed'}</h2>
-			</div>
-			<div class="community-info-desc-wrap">
-				<p class="community-info-description">{selectedCommunity.about ?? selectedCommunity.description ?? 'No description.'}</p>
-			</div>
-			<div class="community-info-servers-wrap">
-				<h3 class="community-info-section-label">Servers</h3>
-				<div class="community-info-servers-list">
-					{#each relayUrls as url}
-						<span class="community-info-server">{url}</span>
-					{/each}
-					{#each blossomUrls as url}
-						<span class="community-info-server community-info-blossom">{url}</span>
-					{/each}
+			{#if membersListData.length === 0}
+				<p class="community-info-profiles-empty">No profile lists found.</p>
+			{/if}
+			{#each membersListData as item}
+				{@const listMembers = item.parsed?.members ?? []}
+				<div class="info-list-panel">
+					<div class="info-list-panel-header">
+						<SingleBadge image={item.parsed?.image ?? null} name={item.parsed?.name ?? item.sectionName} sizePx={52} />
+						<div class="info-list-panel-meta">
+							<span class="info-list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
+							{#if item.parsed?.content}
+								<span class="info-list-panel-desc">{item.parsed.content}</span>
+							{/if}
+						</div>
+					</div>
+					<p class="info-list-panel-sections">Can write in: {item.sectionName}</p>
+					{#if listMembers.length > 0}
+						<ul class="info-list-members">
+							{#each listMembers.slice(0, 5) as pubkey}
+								{@const profile = profilesByPubkey.get(pubkey)}
+								{@const displayName = profile?.display_name ?? profile?.name ?? (profile?.content ? (() => { try { const c = JSON.parse(profile.content || '{}'); return c.display_name ?? c.name ?? null; } catch { return null; } })() : null) ?? (pubkey.slice(0, 12) + '…')}
+								<li class="info-list-member-row">
+									<ProfilePic pubkey={pubkey} size="sm" />
+									<span class="info-list-member-name">{displayName}</span>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+					<div class="info-list-actions">
+						<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
+						<div class="info-list-actions-right">
+							{#if isCommunityAdmin}
+								<button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => openEditListModal(item)}>
+									<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+									<span>Edit</span>
+								</button>
+							{/if}
+							{#if item.parsed?.form && !listMembers.includes(currentPubkey)}
+								<button type="button" class="btn-primary-small info-list-action-btn" onclick={() => { selectedJoinList = { formAddress: item.parsed.form, listName: item.parsed?.name, listAddress: item.listAddress }; joinModalOpen = true; }}>Join</button>
+							{/if}
+						</div>
+					</div>
 				</div>
-			</div>
-			<div class="community-info-sections-wrap">
-				<h3 class="community-info-section-label">Content sections</h3>
-				<p class="community-info-section-desc">Each section defines who can write (profile list).</p>
-				<ul class="community-info-sections-list">
-					{#each communityModalSections as sec}
-						<li class="community-info-section-item">
-							<div class="community-info-section-icon">
-								<ProfilePic
-									pictureUrl={selectedCommunity.picture}
-									name={sec.sectionName}
-									pubkey={selectedCommunity.pubkey}
-									size="sm"
-								/>
-							</div>
-							<div class="community-info-section-text">
-								<span class="community-info-section-name">{sec.sectionName}</span>
-								<span class="community-info-section-write">Write access: {sec.listName}</span>
-							</div>
-						</li>
-					{/each}
-				</ul>
-			</div>
+			{/each}
 		</div>
+	</div>
 		{#if communityEditModalOpen}
 			<Modal open={true} onClose={() => { communityEditModalOpen = false; communityEditTarget = null; communityEditError = ''; }} ariaLabel="Edit community" zIndex={51}>
 				{#if communityEditTarget === 'picture'}
@@ -1810,6 +2277,175 @@
 				{/if}
 			</Modal>
 		{/if}
+	{/if}
+</Modal>
+
+<Modal open={adminCrownModalOpen} onClose={() => { adminCrownModalOpen = false; adminSaveError = ''; }} ariaLabel="Admin settings" fillHeight={true}>
+	{#if adminCrownModalOpen}
+		<div class="crown-modal-layout">
+		<div class="crown-modal-head">
+			<h2 class="join-modal-title crown-modal-title">Admin</h2>
+			<Selector
+				options={['General', 'Content', 'Profiles', 'Forms']}
+				selectedOption={adminCrownSection}
+				onSelect={(opt) => (adminCrownSection = opt)}
+			/>
+			<div class="crown-modal-divider"></div>
+		</div>
+		<div class="crown-modal-body">
+			{#if adminCrownSection === 'General'}
+				<div class="admin-tab crown-admin-general">
+					<div class="admin-form-section">
+						<label class="labels-label" for="crown-admin-picture">Picture URL</label>
+						<InputTextField bind:value={adminPicture} placeholder="https://…" singleLine={true} id="crown-admin-picture" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+					</div>
+					<div class="admin-form-section">
+						<label class="labels-label" for="crown-admin-name">Community name</label>
+						<InputTextField bind:value={adminName} placeholder="Name" singleLine={true} id="crown-admin-name" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+					</div>
+					<div class="admin-form-section">
+						<label class="labels-label" for="crown-admin-desc">Description</label>
+						<InputTextField bind:value={adminDescription} placeholder="Description" singleLine={false} size="medium" id="crown-admin-desc" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+					</div>
+					<div class="admin-form-section">
+						<label class="labels-label" for="crown-admin-relays">Relays (one per line or comma-separated)</label>
+						<InputTextField bind:value={adminRelays} placeholder="wss://…" singleLine={false} size="medium" id="crown-admin-relays" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+					</div>
+					<div class="admin-form-section">
+						<label class="labels-label" for="crown-admin-blossom">Blossom servers</label>
+						<InputTextField bind:value={adminBlossom} placeholder="https://…" singleLine={false} size="medium" id="crown-admin-blossom" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+					</div>
+					{#if adminSaveError}<p class="text-sm text-red-500">{adminSaveError}</p>{/if}
+					<div class="join-modal-actions crown-save-row">
+						<button type="button" class="btn-primary-small" disabled={adminSaveSubmitting} onclick={() => saveCommunityAdminAll()}>
+							{adminSaveSubmitting ? 'Saving…' : 'Save'}
+						</button>
+					</div>
+				</div>
+
+			{:else if adminCrownSection === 'Content'}
+				<div class="crown-content-tab">
+					{#each ADMIN_SECTION_PRESETS.filter((p) => adminSectionEnabled[p.id]) as preset}
+						{@const addrs = Array.isArray(adminSectionListAddress[preset.id]) ? adminSectionListAddress[preset.id] : (adminSectionListAddress[preset.id] ? [adminSectionListAddress[preset.id]] : [])}
+						{@const listItems = adminProfileLists.filter((l) => addrs.includes(l.listAddress)).map((l) => ({ image: l.image, name: l.name }))}
+						<button
+							type="button"
+							class="admin-section-row admin-section-row-clickable"
+							onclick={() => (adminSectionModalPresetId = preset.id)}
+						>
+							<span class="admin-section-emoji-slot"></span>
+							<span class="admin-section-name">{preset.name}</span>
+							<span class="admin-section-badges-wrap">
+								<BadgeStack items={listItems} maxDisplay={3} overlapPx={16} badgeSizePx={32} />
+								<ChevronRight variant="outline" size={16} color="hsl(var(--white33))" className="admin-section-chevron" />
+							</span>
+						</button>
+					{/each}
+					<div class="admin-section-add-row">
+						<button type="button" class="admin-section-add-btn" onclick={() => (adminAddSectionOpen = true)} aria-label="Add content section">
+							<Plus variant="outline" size={18} color="hsl(var(--white66))" />
+							<span>Add content section</span>
+						</button>
+					</div>
+				</div>
+
+			{:else if adminCrownSection === 'Profiles'}
+				<div class="crown-profiles-tab">
+					{#if membersListData.length === 0}
+						<p class="community-info-profiles-empty">No profile lists yet.</p>
+					{/if}
+					{#each membersListData as item}
+						<div class="info-list-panel">
+							<div class="info-list-panel-header">
+								<SingleBadge image={item.parsed?.image ?? null} name={item.parsed?.name ?? item.sectionName} sizePx={52} />
+								<div class="info-list-panel-meta">
+									<span class="info-list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
+									{#if item.parsed?.content}
+										<span class="info-list-panel-desc">{item.parsed.content}</span>
+									{/if}
+								</div>
+							</div>
+							<p class="info-list-panel-sections">Can write in: {item.sectionName}</p>
+							<div class="info-list-actions">
+								<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
+								<button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => openEditListModal(item)}>
+									<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+									<span>Edit</span>
+								</button>
+							</div>
+						</div>
+					{/each}
+					<div class="admin-section-add-row">
+						<button type="button" class="admin-section-add-btn" onclick={() => openListFormModal('add')} aria-label="Add profile list">
+							<Plus variant="outline" size={18} color="hsl(var(--white66))" />
+							<span>Add profile list</span>
+						</button>
+					</div>
+				</div>
+
+			{:else if adminCrownSection === 'Forms'}
+				<div class="crown-forms-tab">
+					{#if adminFormTemplates.length === 0}
+						<p class="community-info-profiles-empty">No form templates yet.</p>
+					{:else}
+						{#each adminFormTemplates as item}
+							<div class="info-list-panel crown-form-panel">
+								<div class="info-list-panel-meta" style="padding: 0;">
+									<span class="info-list-panel-name">{item.parsed?.name || item.parsed?.dTag || 'Untitled form'}</span>
+									{#if item.linkedLists.length > 0}
+										<span class="info-list-panel-desc">Used by: {item.linkedLists.join(', ')}</span>
+									{:else}
+										<span class="info-list-panel-desc crown-form-address">{item.formAddr}</span>
+									{/if}
+								</div>
+								<div class="info-list-actions" style="margin-top: 0.5rem;">
+									<button type="button" class="btn-primary-small info-list-action-btn" onclick={() => openFormTemplateModal('edit', item)}>
+										<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+										<span>Edit</span>
+									</button>
+								</div>
+							</div>
+						{/each}
+					{/if}
+					<div class="admin-section-add-row">
+						<button type="button" class="admin-section-add-btn" onclick={() => openFormTemplateModal('add')}>
+							<Plus variant="outline" size={18} color="hsl(var(--white66))" />
+							<span>New form template</span>
+						</button>
+					</div>
+				</div>
+			{/if}
+		</div>
+
+		{#if formTemplateModal}
+			<Modal open={true} onClose={() => { formTemplateModal = null; formTemplateError = ''; }} ariaLabel="Form template" zIndex={51} maxWidth="max-w-md">
+				<h2 class="join-modal-title">{formTemplateModal.mode === 'edit' ? 'Edit form template' : 'New form template'}</h2>
+				<form class="join-form" onsubmit={(e) => { e.preventDefault(); saveFormTemplate(); }}>
+					<div class="join-form-field">
+						<label class="labels-label" for="ft-name">Form name</label>
+						<InputTextField bind:value={formTemplateName} placeholder="e.g. Membership Application" singleLine={true} id="ft-name" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+					</div>
+					{#if formTemplateModal.mode === 'add'}
+						<div class="join-form-field">
+							<label class="labels-label" for="ft-dtag">Form ID</label>
+							<InputTextField bind:value={formTemplateDTag} placeholder="e.g. membership-application" singleLine={true} id="ft-dtag" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+						</div>
+					{:else}
+						<p class="ft-id-display">ID: <code>{formTemplateDTag}</code></p>
+					{/if}
+					<div class="join-form-field">
+						<label class="labels-label" for="ft-description">Description</label>
+						<InputTextField bind:value={formTemplateDescription} placeholder="What is this form for?" singleLine={false} size="medium" id="ft-description" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+					</div>
+					{#if formTemplateError}<p class="text-sm text-red-500">{formTemplateError}</p>{/if}
+					<div class="join-modal-actions">
+						<button type="button" class="btn-secondary-small" onclick={() => { formTemplateModal = null; formTemplateError = ''; }}>Cancel</button>
+						<button type="submit" class="btn-primary-small" disabled={formTemplateSubmitting}>{formTemplateSubmitting ? 'Saving…' : 'Save'}</button>
+					</div>
+				</form>
+			</Modal>
+		{/if}
+		</div>
 	{/if}
 </Modal>
 
@@ -2075,6 +2711,36 @@
 	onclose={closeCreatePost}
 />
 
+<TaskModal
+	bind:isOpen={addTaskModalOpen}
+	communityName={selectedCommunity?.name ?? ''}
+	getCurrentPubkey={getCurrentPubkey}
+	onsubmit={handleTaskSubmit}
+	onclose={closeCreateTask}
+/>
+
+<WikiModal
+	bind:isOpen={addWikiModalOpen}
+	communityName={selectedCommunity?.name ?? ''}
+	getCurrentPubkey={getCurrentPubkey}
+	onsubmit={handleWikiSubmit}
+	onclose={closeCreateWiki}
+/>
+
+<GetStartedModal
+	bind:open={getStartedModalOpen}
+	onstart={handleGetStartedStart}
+	onconnected={() => { getStartedModalOpen = false; }}
+/>
+<SpinKeyModal
+	bind:open={spinKeyModalOpen}
+	profileName={onboardingProfileName}
+	zIndex={55}
+	onspinComplete={handleSpinComplete}
+	onuseExistingKey={handleUseExistingKey}
+/>
+<OnboardingBuildingModal bind:open={onboardingBuildingModalOpen} zIndex={56} />
+
 {#key joinModalOpen ? 'open' : 'closed'}
 <Modal open={joinModalOpen} onClose={closeJoinModal} ariaLabel="Join community">
 	{#if joinModalOpen}
@@ -2173,18 +2839,106 @@
 		padding: 16px 16px 16px 16px;
 		flex-shrink: 0;
 	}
-	.chateau-icon-link {
+	/* Profile dropdown */
+	.profile-menu-wrap {
+		position: relative;
+		flex-shrink: 0;
+	}
+
+	.profile-menu-btn {
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
 		display: flex;
 		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		width: 32px;
-		height: 32px;
+		border-radius: 50%;
+		transition: opacity 0.15s ease;
 	}
-	.chateau-icon {
-		width: 28px;
-		height: 36px;
+
+	.profile-menu-btn:hover { opacity: 0.85; }
+	.profile-menu-btn:active { opacity: 0.7; }
+
+	.profile-menu-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 99;
 	}
+
+	.profile-menu {
+		position: absolute;
+		top: calc(100% + 8px);
+		left: 0;
+		z-index: 100;
+		min-width: 200px;
+		background: hsl(var(--gray33));
+		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px);
+		border: 0.33px solid hsl(var(--white33));
+		border-radius: 14px;
+		overflow: hidden;
+		box-shadow: 0 8px 32px hsl(var(--black33));
+	}
+
+	.profile-menu-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		padding: 12px 14px 10px;
+	}
+
+	.profile-menu-name {
+		font-size: 0.875rem;
+		font-weight: 600;
+		color: hsl(var(--white));
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.profile-menu-npub {
+		font-size: 0.75rem;
+		font-weight: 400;
+		color: hsl(var(--white33));
+		font-family: monospace;
+	}
+
+	.profile-menu-divider {
+		height: 0.33px;
+		background: hsl(var(--white16));
+		margin: 0;
+	}
+
+	.profile-menu-item {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		width: 100%;
+		padding: 10px 14px;
+		background: none;
+		border: none;
+		cursor: pointer;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: hsl(var(--white66));
+		text-align: left;
+		transition: background 0.1s ease, color 0.1s ease;
+	}
+
+	.profile-menu-item:hover {
+		background: hsl(var(--white4));
+		color: hsl(var(--white));
+	}
+
+	.profile-menu-item--danger {
+		color: hsl(var(--destructive));
+	}
+
+	.profile-menu-item--danger:hover {
+		background: hsl(var(--destructive) / 0.1);
+		color: hsl(var(--destructive));
+	}
+
 	.left-search-wrap {
 		flex: 1;
 		min-width: 0;
@@ -2485,6 +3239,101 @@
 	.notifications-btn:hover {
 		background: hsl(var(--card));
 	}
+	.header-icon-group {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-shrink: 0;
+	}
+	/* Bell badge — absolutely positioned, never pushes layout */
+	.bell-btn {
+		position: relative;
+		overflow: visible;
+	}
+	.bell-badge {
+		position: absolute;
+		top: -5px;
+		right: -5px;
+		min-width: 15px;
+		height: 15px;
+		padding: 0 3px;
+		border-radius: 999px;
+		background: hsl(var(--blurpleColor));
+		color: white;
+		font-size: 9px;
+		font-weight: 700;
+		line-height: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		pointer-events: none;
+		z-index: 10;
+	}
+	/* Crown admin modal — fillHeight flex layout: fixed head, scrollable body */
+	.crown-modal-layout {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+		min-height: 0;
+	}
+	.crown-modal-head {
+		flex-shrink: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		padding: 1.25rem 1.25rem 0;
+	}
+	.crown-modal-title {
+		margin: 0;
+	}
+	.crown-modal-divider {
+		height: 1px;
+		background: hsl(var(--white8));
+		margin: 0.75rem -1.25rem 0;
+	}
+	.crown-modal-body {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		padding: 1.25rem;
+		scrollbar-width: thin;
+		scrollbar-color: hsl(var(--white16)) transparent;
+	}
+	.crown-admin-general,
+	.crown-content-tab,
+	.crown-profiles-tab,
+	.crown-forms-tab {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+	.crown-save-row {
+		margin-top: 0.5rem;
+		justify-content: flex-end;
+	}
+	.crown-form-panel {
+		gap: 0.375rem;
+	}
+	.crown-form-address {
+		font-family: monospace;
+		font-size: 0.75rem;
+		word-break: break-all;
+		opacity: 0.6;
+	}
+	.ft-id-display {
+		font-size: 0.8125rem;
+		color: hsl(var(--muted-foreground));
+		margin: 0;
+	}
+	.ft-id-display code {
+		font-family: monospace;
+		background: hsl(var(--white8));
+		padding: 1px 5px;
+		border-radius: 4px;
+	}
 	.tab-row.pills-row-under {
 		display: flex;
 		gap: 8px;
@@ -2510,29 +3359,9 @@
 		position: relative;
 		display: flex;
 		flex-direction: column;
-		align-items: stretch;
-		gap: 1.25rem;
-		text-align: left;
-	}
-	.community-info-edit-btn {
-		position: absolute;
-		top: 0;
-		right: 0;
-		display: inline-flex;
 		align-items: center;
-		gap: 6px;
-		padding: 6px 12px;
-		font-size: 0.875rem;
-		font-weight: 500;
-		color: hsl(var(--white66));
-		background: hsl(var(--white8));
-		border: 1px solid hsl(var(--white11));
-		border-radius: 8px;
-		cursor: pointer;
-	}
-	.community-info-edit-btn:hover {
-		background: hsl(var(--white11));
-		color: hsl(var(--foreground));
+		gap: 0.75rem;
+		text-align: center;
 	}
 	.community-info-row-tap {
 		display: flex;
@@ -2564,50 +3393,34 @@
 		gap: 8px;
 		position: relative;
 	}
-	.community-info-pen {
-		flex-shrink: 0;
-		width: 28px;
-		height: 28px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border: none;
-		border-radius: 8px;
-		background: hsl(var(--white16));
-		cursor: pointer;
-		color: hsl(var(--white33));
-	}
-	.community-info-pic-wrap .community-info-pen {
-		align-self: flex-start;
-		margin-top: 0.25rem;
-	}
-	.community-info-title-row {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-	.community-info-title-row .community-info-title {
-		margin: 0;
-		flex: 1;
-	}
-	.community-info-title {
-		font-size: 1.25rem;
+	.community-info-name {
+		font-family: var(--font-display);
+		font-size: 2.25rem;
 		font-weight: 600;
+		letter-spacing: -0.02em;
 		margin: 0;
 		color: hsl(var(--foreground));
+		text-align: center;
 	}
-	.community-info-desc-wrap {
-		position: relative;
-	}
-	.community-info-description {
+	.community-info-about {
 		font-size: 0.9375rem;
 		line-height: 1.5;
 		color: hsl(var(--muted-foreground));
 		margin: 0;
-		padding-right: 32px;
 	}
-	.community-info-servers-wrap {
-		position: relative;
+	.btn-more-details {
+		padding: 0.3rem 0.75rem;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		background: hsl(var(--white8));
+		border: none;
+		border-radius: 999px;
+		color: hsl(var(--white66));
+		cursor: pointer;
+	}
+	.community-info-details-wrap {
+		width: 100%;
+		text-align: left;
 	}
 	.community-info-section-label {
 		font-size: 0.875rem;
@@ -2623,55 +3436,106 @@
 		color: hsl(var(--muted-foreground));
 		font-family: var(--font-mono);
 		word-break: break-all;
-		padding-right: 32px;
 	}
 	.community-info-blossom {
 		opacity: 0.85;
 	}
-	.community-info-sections-wrap {
-		margin-top: 0.25rem;
-	}
-	.community-info-section-desc {
-		font-size: 0.8125rem;
-		color: hsl(var(--muted-foreground));
-		margin: 0 0 0.5rem;
-	}
-	.community-info-section-text {
-		flex: 1;
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.125rem;
-	}
-	.community-info-section-write {
-		font-size: 0.8125rem;
-		color: hsl(var(--muted-foreground));
-	}
-	.community-info-sections-list {
-		list-style: none;
-		padding: 0;
-		margin: 0;
+	.community-info-profiles-section {
+		width: 100%;
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
+		text-align: left;
+		margin-top: 0.5rem;
 	}
-	.community-info-section-item {
+	.community-info-profiles-label {
+		margin: 0;
+		padding-left: 12px;
+		font-size: 12px;
+		font-weight: 600;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		color: hsl(var(--white33));
+	}
+	.community-info-profiles-empty {
+		font-size: 0.875rem;
+		color: hsl(var(--muted-foreground));
+		margin: 0;
+	}
+	.info-list-panel {
+		padding: 1rem 1.125rem;
+		background: hsl(var(--white8));
+		border: none;
+		border-radius: var(--radius-16);
 		display: flex;
-		align-items: center;
-		gap: 10px;
-		min-width: 0;
+		flex-direction: column;
+		gap: 0.625rem;
 	}
-	.community-info-section-icon {
-		flex-shrink: 0;
+	.info-list-panel-header {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.875rem;
 	}
-	.community-info-section-name {
-		font-size: 0.9375rem;
-		font-weight: 500;
-		color: hsl(var(--foreground));
+	.info-list-panel-meta {
 		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		justify-content: center;
+		padding-top: 2px;
+	}
+	.info-list-panel-name {
+		font-weight: 600;
+		font-size: 0.9375rem;
+		color: hsl(var(--foreground));
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	.info-list-panel-desc {
+		font-size: 0.8125rem;
+		color: hsl(var(--muted-foreground));
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.info-list-panel-sections {
+		font-size: 0.8125rem;
+		color: hsl(var(--muted-foreground));
+		margin: 0;
+	}
+	.info-list-members {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+	.info-list-member-row {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.info-list-member-name {
+		font-size: 0.875rem;
+		color: hsl(var(--foreground));
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.info-list-actions {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		margin-top: 0.125rem;
+	}
+	.info-list-actions-right {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
 	}
 	.community-edit-full {
 		display: flex;
@@ -2908,11 +3772,6 @@
 		cursor: pointer;
 		appearance: auto;
 	}
-	.members-tab {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
 	.members-join-requests-panel {
 		display: flex;
 		align-items: center;
@@ -2920,15 +3779,12 @@
 		width: 100%;
 		padding: 1rem 1.25rem;
 		background: hsl(var(--white11));
-		border: 0.33px solid hsl(var(--white16));
+		border: none;
 		border-radius: var(--radius-16);
 		cursor: pointer;
 		color: hsl(var(--foreground));
 		font-size: 0.9375rem;
 		text-align: left;
-	}
-	.members-join-requests-panel:hover {
-		background: hsl(var(--white16));
 	}
 	.members-panel-label {
 		font-weight: 600;
@@ -2940,105 +3796,19 @@
 		padding: 0.2rem 0.5rem;
 		border-radius: 999px;
 	}
-	.members-list-panel {
-		padding: 1rem 1.25rem;
-		background: hsl(var(--gray33));
-		border: none;
-		border-radius: var(--radius-16);
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-	.members-list-panel-top {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-	}
-	.members-list-name {
-		font-weight: 600;
-		font-size: 0.9375rem;
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.members-list-count {
-		font-size: 0.8125rem;
-		color: hsl(var(--muted-foreground));
-		flex-shrink: 0;
-	}
-	.members-list-desc,
-	.members-list-sections {
-		font-size: 0.8125rem;
-		color: hsl(var(--muted-foreground));
-		margin: 0;
-	}
-	.members-list-profiles-vertical {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.25rem;
-	}
-	.members-list-profile-row {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-	}
-	.members-list-profile-name {
-		font-size: 0.875rem;
-		color: hsl(var(--foreground));
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.list-panel-edit-btn {
+	.info-list-action-btn {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.35rem;
-		padding: 0.35rem 0.6rem;
-		background: hsl(var(--white16));
-		border: none;
-		border-radius: var(--radius-12);
-		color: hsl(var(--foreground));
-		font-size: 0.8125rem;
-		cursor: pointer;
-	}
-	.list-panel-edit-btn:hover {
-		background: hsl(var(--white24));
-	}
-	.members-list-actions {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.5rem;
-		margin-top: 0.25rem;
 	}
 	.btn-view-more {
-		padding: 0.35rem 0.6rem;
+		padding: 0.35rem 1rem;
 		font-size: 0.8125rem;
-		background: hsl(var(--white4));
+		background: hsl(var(--white8));
 		border: none;
 		border-radius: var(--radius-16);
 		color: hsl(var(--foreground));
 		cursor: pointer;
-	}
-	.btn-view-more:hover {
-		background: hsl(var(--white8));
-	}
-	.btn-join-list {
-		padding: 0.35rem 0.75rem;
-		font-size: 0.8125rem;
-		background: linear-gradient(135deg, hsl(var(--blurple66-start)), hsl(var(--blurple66-end)));
-		border: none;
-		border-radius: var(--radius-16);
-		color: white;
-		cursor: pointer;
-		font-weight: 500;
-	}
-	.btn-join-list:hover {
-		opacity: 0.95;
 	}
 	.requests-list {
 		list-style: none;
@@ -3210,7 +3980,8 @@
 		/* Space for fixed bottom bar */
 		padding-bottom: 100px;
 	}
-	.panel-content:has(.forum-list) {
+	.panel-content:has(.forum-list),
+	.panel-content:has(.tasks-list) {
 		padding: 0;
 	}
 	/* No top padding: title sits 16px below fixed header via ForumPostDetail .content-scroll padding-top */

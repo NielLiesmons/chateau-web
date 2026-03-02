@@ -41,9 +41,6 @@
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const npubRegex = /^npub1[ac-hj-np-z0-9]{58}$/i;
 
-  // Image overlap configuration
-  const IMAGE_TOP_HEIGHT = 360;
-
   // Zapstore-specific constants
   const ZAPSTORE_APK_FILENAME = "zapstore-1.0.0.apk";
   const ZAPSTORE_APK_URL =

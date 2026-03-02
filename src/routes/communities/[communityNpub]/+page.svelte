@@ -19,17 +19,19 @@
 	import { parseFormTemplate } from '$lib/nostr';
 	import { DEFAULT_COMMUNITY_RELAYS, EVENT_KINDS } from '$lib/config';
 	import { getCurrentPubkey, signEvent, encrypt44 } from '$lib/stores/auth.svelte.js';
-	import ProfilePic from '$lib/components/common/ProfilePic.svelte';
 	import ForumPost from '$lib/components/ForumPost.svelte';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
 	import CommunityBottomBar from '$lib/components/community/CommunityBottomBar.svelte';
 	import ForumPostModal from '$lib/components/modals/ForumPostModal.svelte';
+	import TaskModal from '$lib/components/modals/TaskModal.svelte';
+	import WikiModal from '$lib/components/modals/WikiModal.svelte';
 
 	const SECTION_PILLS = [
 		{ id: 'forum', label: 'Forum' },
 		{ id: 'tasks', label: 'Tasks' },
 		{ id: 'chat', label: 'Chat' },
-		{ id: 'apps', label: 'Apps' }
+		{ id: 'apps', label: 'Apps' },
+		{ id: 'badges', label: 'Badges' }
 	];
 
 	const communityNpubParam = $derived($page.params.communityNpub || '');
@@ -51,6 +53,8 @@
 	let joinError = $state('');
 	let joinFetched = $state(false);
 	let addPostModalOpen = $state(false);
+	let addTaskModalOpen = $state(false);
+	let addWikiModalOpen = $state(false);
 
 	function openCreatePost() {
 		addPostModalOpen = true;
@@ -58,6 +62,130 @@
 
 	function closeCreatePost() {
 		addPostModalOpen = false;
+	}
+
+	function openCreateTask() {
+		addTaskModalOpen = true;
+	}
+
+	function closeCreateTask() {
+		addTaskModalOpen = false;
+	}
+
+	function closeCreateWiki() {
+		addWikiModalOpen = false;
+	}
+
+	/** Maps camelCase status from the modal to the hyphenated values in the spec. */
+	const TASK_STATUS_MAP = /** @type {Record<string,string>} */ ({
+		backlog: 'backlog',
+		open: 'open',
+		inProgress: 'in-progress',
+		inReview: 'in-review',
+		closed: 'closed',
+	});
+
+	/**
+	 * @param {{ title?: string, status?: string, priority?: string, text?: string, emojiTags?: string[][], mentions?: string[], labels?: string[], assignees?: string[] }} params
+	 */
+	async function handleTaskSubmit({
+		title = '',
+		status = 'open',
+		priority = 'none',
+		text = '',
+		emojiTags = [],
+		mentions = [],
+		labels = [],
+		assignees = [],
+	} = {}) {
+		if (!communityPubkey || !currentPubkey) throw new Error('Not signed in');
+
+		// Deterministic d-tag: title slug + timestamp to avoid collisions
+		const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+		const dTag = `${slug}-${Date.now()}`;
+
+		// Build tags in spec-prescribed order: d, title, h, p (assignees), p (mentions), t (labels), emoji
+		/** @type {string[][]} */
+		const tags = [
+			['d', dTag],
+			['title', title],
+			['h', communityPubkey],
+		];
+		for (const pubkey of assignees) {
+			tags.push(['p', pubkey, 'assignee']);
+		}
+		for (const pubkey of mentions) {
+			tags.push(['p', pubkey]);
+		}
+		for (const label of labels) {
+			tags.push(['t', label]);
+		}
+		for (const [name, url] of emojiTags) {
+			tags.push(['emoji', name, url]);
+		}
+
+		// Use community relays if available, fall back to defaults
+		const relays = /** @type {string[]} */ (
+			community?.relays?.length ? community.relays : DEFAULT_COMMUNITY_RELAYS
+		);
+		console.log('[TaskPublish] relays:', relays);
+
+		const taskEvent = await signEvent({
+			kind: EVENT_KINDS.TASK,
+			content: text,
+			tags,
+			created_at: Math.floor(Date.now() / 1000),
+		});
+		// publishToRelays writes to Dexie AND broadcasts to relays
+		await publishToRelays(relays, taskEvent);
+		console.log('[TaskPublish] task published', taskEvent.id);
+
+		// Status event (kind 1983) — always publish to set initial status + optional priority
+		/** @type {string[][]} */
+		const statusTags = [
+			['a', `${EVENT_KINDS.TASK}:${currentPubkey}:${dTag}`],
+			['status', TASK_STATUS_MAP[status] ?? 'open'],
+		];
+		if (priority && priority !== 'none') {
+			statusTags.push(['priority', priority]);
+		}
+		const statusEvent = await signEvent({
+			kind: EVENT_KINDS.STATUS,
+			content: '',
+			tags: statusTags,
+			created_at: Math.floor(Date.now() / 1000),
+		});
+		// publishToRelays writes to Dexie AND broadcasts to relays
+		await publishToRelays(relays, statusEvent);
+		console.log('[TaskPublish] status published', statusEvent.id);
+	}
+
+	/**
+	 * @param {{ title: string, slug: string, summary: string, text: string, emojiTags: string[][], mentions: string[], labels: string[] }} params
+	 */
+	async function handleWikiSubmit({ title, slug, summary, text, emojiTags = [], mentions = [], labels = [] }) {
+		if (!communityPubkey || !currentPubkey) throw new Error('Not signed in');
+		const relays = community?.relays?.length ? community.relays : DEFAULT_COMMUNITY_RELAYS;
+
+		/** @type {string[][]} */
+		const tags = [
+			['d', slug],
+			['title', title.trim()],
+			['h', communityPubkey]
+		];
+		if (summary.trim()) tags.push(['summary', summary.trim()]);
+		labels.forEach((l) => tags.push(['t', l]));
+		mentions.forEach((pk) => tags.push(['p', pk]));
+		emojiTags.forEach((e) => tags.push(e));
+
+		const ev = await signEvent({
+			kind: EVENT_KINDS.WIKI,
+			content: text,
+			tags,
+			created_at: Math.floor(Date.now() / 1000)
+		});
+		await publishToRelays(relays, ev);
+		console.log('[WikiPublish] published', ev.id);
 	}
 
 	async function handleForumPostSubmit({ title, text, labels = /** @type {string[]} */ ([]) }) {
@@ -347,16 +475,21 @@
 				<EmptyState message="{SECTION_PILLS.find((p) => p.id === selectedSection)?.label ?? selectedSection} coming soon" minHeight={200} />
 			{/if}
 		</div>
+	{#if !(selectedSection === 'badges' && !isAdmin)}
 		<CommunityBottomBar
 			isMember={isMember}
 			hasForm={hasForm}
 			communityName={displayName}
-			modalOpen={addPostModalOpen}
-			onJoin={() => (joinModalOpen = true)}
-			onComment={() => {}}
-			onZap={() => {}}
-			onAdd={openCreatePost}
+			showFeedBar={selectedSection !== 'badges'}
+			showMembersBar={selectedSection === 'badges' && isAdmin}
+			selectedSection={selectedSection}
+	modalOpen={addPostModalOpen || addTaskModalOpen || addWikiModalOpen}
+	onJoin={() => (joinModalOpen = true)}
+	onComment={() => {}}
+	onZap={() => {}}
+	onAdd={() => { if (selectedSection === 'tasks') openCreateTask(); else if (selectedSection === 'wikis') addWikiModalOpen = true; else openCreatePost(); }}
 		/>
+	{/if}
 	</main>
 {/if}
 
@@ -366,6 +499,22 @@
 	getCurrentPubkey={getCurrentPubkey}
 	onsubmit={handleForumPostSubmit}
 	onclose={closeCreatePost}
+/>
+
+<TaskModal
+	bind:isOpen={addTaskModalOpen}
+	communityName={community?.displayName ?? community?.name ?? ''}
+	getCurrentPubkey={getCurrentPubkey}
+	onsubmit={handleTaskSubmit}
+	onclose={closeCreateTask}
+/>
+
+<WikiModal
+	bind:isOpen={addWikiModalOpen}
+	communityName={community?.displayName ?? community?.name ?? ''}
+	getCurrentPubkey={getCurrentPubkey}
+	onsubmit={handleWikiSubmit}
+	onclose={closeCreateWiki}
 />
 
 {#if joinModalOpen}

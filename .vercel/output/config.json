@@ -75,6 +75,22 @@
 			"dest": "/communities"
 		},
 		{
+			"src": "^/communities/create/?(?:/__data.json)?$",
+			"dest": "/communities/create"
+		},
+		{
+			"src": "^/communities/([^/]+?)/?(?:/__data.json)?$",
+			"dest": "/communities/[communityNpub]"
+		},
+		{
+			"src": "^/communities/([^/]+?)/forum/([^/]+?)/?(?:/__data.json)?$",
+			"dest": "/communities/[communityNpub]/forum/[eventId]"
+		},
+		{
+			"src": "^/communities/([^/]+?)/post/([^/]+?)/?(?:/__data.json)?$",
+			"dest": "/communities/[communityNpub]/post/[eventId]"
+		},
+		{
 			"src": "^/discover/?(?:/__data.json)?$",
 			"dest": "/discover"
 		},

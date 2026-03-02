@@ -15,10 +15,12 @@ onMount(() => {
     latestRelease = initialRelease ?? null;
     const aTagValue = `${EVENT_KINDS.APP}:${app.pubkey}:${app.dTag}`;
     // Async: query Dexie for cached release
-    const cachedRelease = await queryEvent({ kinds: [EVENT_KINDS.RELEASE], '#a': [aTagValue], ...PLATFORM_FILTER });
-    if (cachedRelease) {
-        latestRelease = parseRelease(cachedRelease);
-    }
+    (async () => {
+        const cachedRelease = await queryEvent({ kinds: [EVENT_KINDS.RELEASE], '#a': [aTagValue], ...PLATFORM_FILTER });
+        if (cachedRelease) {
+            latestRelease = parseRelease(cachedRelease);
+        }
+    })();
 });
 </script>
 

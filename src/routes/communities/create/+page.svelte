@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { nip19 } from 'nostr-tools';
 	import { publishToRelays } from '$lib/nostr';
-	import { DEFAULT_SOCIAL_RELAYS, DEFAULT_COMMUNITY_RELAYS, EVENT_KINDS } from '$lib/config';
+	import { DEFAULT_SOCIAL_RELAYS, EVENT_KINDS } from '$lib/config';
 	import { getCurrentPubkey, signEvent } from '$lib/stores/auth.svelte.js';
 
 	let communityName = $state('');

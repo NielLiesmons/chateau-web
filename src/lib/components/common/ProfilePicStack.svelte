@@ -12,7 +12,7 @@ import ProfilePic from "./ProfilePic.svelte";
 let { profiles = [], text = "", suffix = "", size = "sm", className = "", maxDisplay = 3, onclick, } = $props();
 // Size mappings for overlap and pill height
 const sizeMap = {
-    xs: { overlap: 6, height: 20 },
+    xs: { overlap: 7, height: 24 },
     sm: { overlap: 8, height: 28 },
     md: { overlap: 10, height: 38 },
     lg: { overlap: 12, height: 48 },

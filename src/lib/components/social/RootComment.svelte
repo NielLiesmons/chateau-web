@@ -62,8 +62,8 @@ const uniqueRepliers = $derived.by(() => {
     return list;
 });
 const hasReplies = $derived(uniqueRepliers.length > 0);
-const featuredReplier = $derived(uniqueRepliers[0]);
-const otherRepliersCount = $derived(uniqueRepliers.length - 1);
+const _featuredReplier = $derived(uniqueRepliers[0]);
+const _otherRepliersCount = $derived(uniqueRepliers.length - 1);
 const displayedRepliers = $derived(uniqueRepliers.slice(0, 3));
 const REPLY_NAME_MAX = 18;
 function trimName(name) {
@@ -347,8 +347,7 @@ function handleOptions() {
   wide={true}
   class="thread-modal {childModalOpen ? 'thread-modal-child-open' : ''}"
 >
-  {#snippet children()}
-    <div class="thread-content-wrap" class:child-modal-open={childModalOpen}>
+  <div class="thread-content-wrap" class:child-modal-open={childModalOpen}>
       <div class="thread-modal-child-overlay" aria-hidden="true"></div>
       <div class="thread-content">
       <div class="thread-root">
@@ -470,7 +469,6 @@ function handleOptions() {
       </div>
     </div>
     </div>
-  {/snippet}
 
   {#snippet footer()}
     {#if showThreadActions && getIsSignedIn()}

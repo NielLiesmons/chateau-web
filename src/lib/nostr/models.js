@@ -214,7 +214,12 @@ export function decodeNaddr(naddr) {
  */
 export function parseCommunity(event) {
     if (!event?.tags) return null;
-    const relays = event.tags.filter((t) => t[0] === 'r').map((t) => t[1]).filter(Boolean);
+    const rTags = event.tags.filter((t) => t[0] === 'r' && t[1]);
+    const mainRelay = rTags[0]?.[1] ?? null;
+    const relays = rTags.map((t) => t[1]);
+    const enforcedRelays = rTags.filter((t) => t[2] === 'enforced').map((t) => t[1]);
+    // Main relay is enforced when its r tag has "enforced" as the third element
+    const mainRelayEnforced = rTags.length > 0 && rTags[0]?.[2] === 'enforced';
     const sections = [];
     for (let i = 0; i < event.tags.length; i++) {
         if (event.tags[i][0] === 'content') {
@@ -234,7 +239,10 @@ export function parseCommunity(event) {
     return {
         id: event.id,
         pubkey: event.pubkey,
+        mainRelay,
         relays,
+        enforcedRelays,
+        mainRelayEnforced,
         sections,
         createdAt: event.created_at
     };

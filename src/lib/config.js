@@ -12,7 +12,9 @@ export const DEFAULT_SOCIAL_RELAYS = [
     'wss://relay.primal.net',
     'wss://nos.lol',
 ];
-// Community relays (Chateau) — same as social by default; community 10222 can override via 'r' tags
+// Community relay fallback — used ONLY when a community's kind:10222 declares no 'r' tags.
+// Per the Nostr community spec, ALL community content must be fetched from the community's own
+// declared relays. Only fall back here when none are declared.
 export const DEFAULT_COMMUNITY_RELAYS = [...DEFAULT_SOCIAL_RELAYS];
 
 // Profile relays (social + catalog for broad coverage)
@@ -44,7 +46,10 @@ export const EVENT_KINDS = {
     FORM_TEMPLATE: 30168,
     FORM_RESPONSE: 1069,
     REACTION: 7,
-    LABEL: 1985
+    LABEL: 1985,
+    TASK: 37060,
+    STATUS: 1983,
+    WIKI: 30818
 };
 // Platform filter — only Android arm64 is supported for now.
 // Spread into every APP / RELEASE relay filter so the relay only returns matching events.

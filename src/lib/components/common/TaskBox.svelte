@@ -12,6 +12,7 @@
 
 <div
   class="task-box"
+  class:state-backlog={state === "backlog"}
   class:state-open={state === "open"}
   class:state-closed={state === "closed"}
   class:state-in-progress={state === "inProgress"}
@@ -57,6 +58,11 @@
     transition: all 0.2s ease;
   }
 
+  .state-backlog {
+    background-color: transparent;
+    border: 1.4px dashed hsl(var(--white33));
+  }
+
   .state-open {
     background-color: hsl(var(--black33));
     border: 1.4px solid hsl(var(--white33));
@@ -82,7 +88,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding-left: 4px;
+    padding-left: 6px;
   }
 
   .review-stack {

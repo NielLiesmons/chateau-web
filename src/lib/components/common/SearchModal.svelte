@@ -7,7 +7,7 @@ import { ChevronRight } from '$lib/components/icons';
 import { wheelScroll } from '$lib/actions/wheelScroll.js';
 import { goto } from '$app/navigation';
 import { zapstoreProfileStore, ZAPSTORE_PUBKEY } from '$lib/services/profile-search';
-let { open = $bindable(false), searchQuery = $bindable(''), categories = [], platforms = [] } = $props();
+let { open = $bindable(false), searchQuery = $bindable('') } = $props();
 let searchInput = $state(undefined);
 // Zapstore profile from EventStore/cache (same as DetailHeader — one of first cached profiles)
 let zapstoreProfile = $state(null);

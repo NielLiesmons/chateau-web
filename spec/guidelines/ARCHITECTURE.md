@@ -3,7 +3,7 @@ description: Core architecture — local-first data flow, Dexie/liveQuery, relay
 alwaysApply: true
 ---
 
-# Zapstore Webapp — Architecture
+# Chateau — Architecture
 
 ## Goals (non-negotiable)
 
@@ -394,8 +394,60 @@ Catalogs are Nostr relays that hold app events.
 | 30063 | Release | Version release info |
 | 1063 | File Metadata | File hashes and URLs |
 | 0 | Profile | Developer profile |
-| 1111 | Comment | App comments |
+| 1111 | Comment | App comments (NIP-22) |
 | 9735 | Zap Receipt | Lightning zaps |
+| 10222 | Community | Community definition (relays, sections, profile lists) |
+| 30000 | Profile List | Membership list per community section |
+| 11 | Forum Post | Community forum post |
+| 1985 | Label | Community label event (NIP-32) |
+| 7 | Reaction | Community reaction |
+| 30168 | Form Template | Membership application form |
+| 1069 | Form Response | Membership application response |
+
+## Community Relay Enforcement
+
+Per the [Nostr community spec](../nostr/community.md), **all community content must be fetched from the relays declared in the community's own `kind:10222` event** (`r` tags). Never use generic social relays (`DEFAULT_SOCIAL_RELAYS`) for community-scoped content. `DEFAULT_COMMUNITY_RELAYS` is a last-resort fallback only for communities that declare no relays at all.
+
+An `r` tag with `"enforced"` as its third element means that relay only stores events from profile list members with the community's `h` tag — the relay enforces access control server-side.
+
+**Client-side filtering rule (non-negotiable):**
+
+1. Parse the community's `kind:10222` with `parseCommunity()` to get `mainRelay`, `relays`, `enforcedRelays`, and `mainRelayEnforced`.
+2. Resolve the target section's profile list (`kind:30000`) to get the allowed member pubkeys.
+3. When querying from an **enforced** relay: no `authors` filter needed — the relay already restricts to members. Passing `authors` is redundant but harmless.
+4. When querying from a **non-enforced** relay: always include `authors: allowedPubkeys` in the NIP-01 filter to restrict results to known members. Without this, any pubkey's events appear in results.
+5. **Always use the community's own relays**, falling back to `DEFAULT_COMMUNITY_RELAYS` only when the community declares none.
+
+**Section-to-profile-list mapping:**
+
+- **General section** (comments, reactions, labels — kinds `1111`, `7`, `1985`): Use the `General` profile list. This is the catch-all for community participation.
+- **Forum section** (forum posts — kind `11`): Use the `Forum` profile list.
+- **Tasks** (kind `37060`), **Wikis** (kind `30818`), etc.: Use the relevant section's profile list.
+
+```javascript
+// Correct pattern: always pull from community's own relays
+const def = parseCommunity(communityEvent);
+const relays = def.relays.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
+const enforced = def.mainRelayEnforced;
+
+let allowedPubkeys = [];
+if (!enforced) {
+  const section = def.sections.find(s => s.name === 'General');
+  const listEvent = await fetchProfileListFromRelays(relays, section.profileListAddress);
+  const list = parseProfileList(listEvent);
+  allowedPubkeys = list?.members ?? [];
+}
+
+const labelEvents = await fetchLabelEvents(relays, eventId, communityPubkey, {
+  enforced,
+  allowedPubkeys
+});
+```
+
+**Current state of fetching across the app:**
+- `fetchCommunityForumPosts` and `subscribeCommunityForumPosts` accept `authorPubkeys` and use community relays correctly.
+- `fetchLabelEvents` respects enforcement: skips `authors` filter on enforced relays, applies it on non-enforced relays.
+- **Known gap:** Comment and zap fetching for community content still falls back to `DEFAULT_SOCIAL_RELAYS` in some paths. This must be corrected to use community-declared relays — per the spec, all community content queries go to the community's own relays.
 
 ## Storage
 

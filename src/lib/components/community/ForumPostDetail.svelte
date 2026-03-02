@@ -11,12 +11,15 @@
 		parseComment,
 		parseZapReceipt,
 		publishComment,
-		fetchProfilesBatch
+		fetchProfilesBatch,
+		parseCommunity,
+		parseProfileList,
+		fetchProfileListFromRelays,
+		fetchLabelEvents
 	} from '$lib/nostr';
-	import { EVENT_KINDS } from '$lib/config';
+	import { EVENT_KINDS, DEFAULT_COMMUNITY_RELAYS } from '$lib/config';
 	import { renderMarkdown } from '$lib/utils/markdown';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
-	import LabelChip from '$lib/components/common/Label.svelte';
 	import DetailHeader from '$lib/components/layout/DetailHeader.svelte';
 	import SocialTabs from '$lib/components/social/SocialTabs.svelte';
 	import BottomBar from '$lib/components/social/BottomBar.svelte';
@@ -43,6 +46,15 @@
 	let profilesLoading = $state(false);
 	let zapperProfiles = $state(new Map());
 	let getStartedModalOpen = $state(false);
+	/** @type {{ mainRelay: string|null, relays: string[], enforcedRelays: string[], mainRelayEnforced: boolean, sections: any[] } | null} */
+	let communityDef = $state(null);
+	// Reactive: uses community-specific relays once the 10222 event is parsed, falls back to defaults
+	const communityRelays = $derived(
+		communityDef?.relays?.length ? communityDef.relays : DEFAULT_COMMUNITY_RELAYS
+	);
+	/** @type {Array<{ label: string, pubkeys: string[] }>} */
+	let labelEntries = $state([]);
+	let labelsLoading = $state(false);
 
 	$effect(() => {
 		if (!communityNpub || !eventId) {
@@ -71,14 +83,16 @@
 					queryEvent({ kinds: [EVENT_KINDS.COMMUNITY], authors: [communityPubkey], limit: 1 }),
 					queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [communityPubkey], limit: 1 })
 				]);
-				authorProfile = profileEvent ? parseProfile(profileEvent) : null;
-				if (communityEv?.content) {
-					try {
-						const c = JSON.parse(communityEv.content);
-						communityName = c.name ?? c.display_name ?? '';
-						communityPicture = c.image ?? c.picture ?? c.icon ?? '';
-					} catch {}
-				}
+			authorProfile = profileEvent ? parseProfile(profileEvent) : null;
+			// Parse community definition for relay info (enforcement, profile lists)
+			if (communityEv) communityDef = parseCommunity(communityEv);
+			if (communityEv?.content) {
+				try {
+					const c = JSON.parse(communityEv.content);
+					communityName = c.name ?? c.display_name ?? '';
+					communityPicture = c.image ?? c.picture ?? c.icon ?? '';
+				} catch {}
+			}
 				if ((!communityName || !communityPicture) && communityProfileEv?.content) {
 					try {
 						const c = JSON.parse(communityProfileEv.content);
@@ -94,9 +108,10 @@
 		})();
 	});
 
-	// Comments from Dexie (NIP-22 kind 1111 only) — live-reactive, backfilled from relays
+	// Comments from Dexie (NIP-22 kind 1111 only) — live-reactive, backfilled from community relays
 	$effect(() => {
 		const pid = post?.id;
+		const relays = communityRelays; // reactive: re-runs when communityDef loads
 		if (!pid) {
 			comments = [];
 			return;
@@ -144,19 +159,20 @@
 				commentsError = 'Failed to load comments';
 			}
 		});
-		// Backfill from relays (kind 1111) so we have latest from network (writes to Dexie → liveQuery will update)
-		fetchForumPostComments(pid)
+		// Backfill from community relays so we have latest from network (writes to Dexie → liveQuery will update)
+		fetchForumPostComments(pid, { relays })
 			.then(() => {})
 			.catch(() => {});
 		return () => sub.unsubscribe();
 	});
 
 	$effect(() => {
+		const relays = communityRelays; // reactive: uses community relays once communityDef loads
 		if (!post?.id) return;
 		(async () => {
 			zapsLoading = true;
 			try {
-				const events = await fetchZapsByEventIds([post.id]);
+				const events = await fetchZapsByEventIds([post.id], { relays });
 				zaps = events.map((e) => {
 					const z = parseZapReceipt(e);
 					z.id = e.id;
@@ -186,6 +202,98 @@
 		})();
 	});
 
+	// Labels: merge self-labels (t tags) with kind 1985 events from the community relay
+	$effect(() => {
+		const pid = post?.id;
+		const postPubkey = post?.pubkey;
+		const selfLabels = post?.labels ?? [];
+		const cpk = post?.communityPubkey;
+		if (!pid || !cpk) {
+			labelEntries = [];
+			return;
+		}
+		labelsLoading = true;
+		(async () => {
+			try {
+				/** @type {Map<string, Set<string>>} label → set of labeler pubkeys */
+				const labelMap = new Map();
+
+				// Self-labels from the post's own t tags (author only)
+				for (const label of selfLabels) {
+					if (!labelMap.has(label)) labelMap.set(label, new Set());
+					if (postPubkey) labelMap.get(label)?.add(postPubkey);
+				}
+
+				// Determine community relays and whether the main one is enforced
+				const def = communityDef;
+				const relayUrls = def?.relays?.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
+				const enforced = def?.mainRelayEnforced ?? false;
+
+				/** @type {string[]} */
+				let allowedPubkeys = [];
+				if (!enforced) {
+					// Non-enforced relay: restrict to General profile list members + post author
+					const generalSection = def?.sections?.find((s) => s.name === 'General');
+					if (generalSection?.profileListAddress) {
+						const listEvent = await fetchProfileListFromRelays(relayUrls, generalSection.profileListAddress);
+						if (listEvent) {
+							const list = parseProfileList(listEvent);
+							allowedPubkeys = list?.members ?? [];
+						}
+					}
+					// Always include post author and community pubkey as allowed labelers
+					allowedPubkeys = [...new Set([...allowedPubkeys, ...(postPubkey ? [postPubkey] : []), cpk])];
+				}
+
+				// Fetch kind 1985 events referencing this post
+				const labelEvents = await fetchLabelEvents(relayUrls, pid, cpk, { enforced, allowedPubkeys });
+
+				// Parse l tags from each label event
+				for (const ev of labelEvents) {
+					const lTags = ev.tags.filter((t) => t[0] === 'l' && t[1]);
+					for (const lt of lTags) {
+						const lv = lt[1];
+						if (!labelMap.has(lv)) labelMap.set(lv, new Set());
+						labelMap.get(lv)?.add(ev.pubkey);
+					}
+				}
+
+				// Resolve profiles for all labeler pubkeys (merge into existing profiles state)
+				const allLabelerPubkeys = [...new Set([...labelMap.values()].flatMap((s) => [...s]))];
+				if (allLabelerPubkeys.length > 0) {
+					const batch = await fetchProfilesBatch(allLabelerPubkeys);
+					const next = { ...profiles };
+					for (const [pk, ev] of batch) {
+						if (!ev?.content) continue;
+						try {
+							const c = JSON.parse(ev.content);
+							next[pk] = { displayName: c.display_name ?? c.name, name: c.name, picture: c.picture };
+						} catch { /* skip malformed */ }
+					}
+					profiles = next;
+				}
+
+				// Build the sorted label entries (self-labels first, then others alphabetically)
+				const entries = [...labelMap.entries()].map(([label, pubkeys]) => ({
+					label,
+					pubkeys: [...pubkeys]
+				}));
+				// Sort: self-labeled (post author in pubkeys) first, then alphabetical
+				entries.sort((a, b) => {
+					const aHasSelf = postPubkey ? a.pubkeys.includes(postPubkey) : false;
+					const bHasSelf = postPubkey ? b.pubkeys.includes(postPubkey) : false;
+					if (aHasSelf !== bHasSelf) return aHasSelf ? -1 : 1;
+					return a.label.localeCompare(b.label);
+				});
+				labelEntries = entries;
+			} catch (err) {
+				console.error('[ForumPostDetail] Failed to load label events:', err);
+			} finally {
+				labelsLoading = false;
+			}
+		})();
+	});
+
 	/** @param {HTMLElement} node */
 	function checkTruncation(node) {
 		const check = () => {
@@ -196,7 +304,11 @@
 			if (!descriptionExpanded) check();
 		});
 		ro.observe(node);
-		return { destroy() { ro.disconnect(); } };
+		return {
+			destroy() {
+				ro.disconnect();
+			}
+		};
 	}
 
 	const descriptionHtml = $derived(post?.content ? renderMarkdown(post.content) : '');
@@ -294,7 +406,7 @@
 
 	function refetchZaps() {
 		if (!post?.id) return;
-		fetchZapsByEventIds([post.id]).then((events) => {
+		fetchZapsByEventIds([post.id], { relays: communityRelays }).then((events) => {
 			zaps = events.map((e) => {
 				const z = parseZapReceipt(e);
 				z.id = e.id;
@@ -332,41 +444,32 @@
 		<div class="content-scroll">
 			<div class="content-inner">
 			<h1 class="post-title">{post.title}</h1>
-			{#if (post.labels ?? []).length > 0}
-				<div class="post-detail-labels">
-					{#each post.labels ?? [] as label}
-						<div class="post-detail-label-slot">
-							<LabelChip text={label} isSelected={false} isEmphasized={false} size="small" />
-						</div>
-					{/each}
+			<div class="description-container" class:expanded={descriptionExpanded}>
+					<div class="post-description prose prose-invert max-w-none" use:checkTruncation>
+						{@html descriptionHtml}
+					</div>
+					{#if isTruncated && !descriptionExpanded}
+						<div class="description-fade" aria-hidden="true"></div>
+						<button
+							type="button"
+							class="read-more-btn"
+							onclick={() => (descriptionExpanded = true)}
+						>
+							Read more
+						</button>
+					{/if}
+					{#if descriptionExpanded}
+						<button
+							type="button"
+							class="show-less-btn"
+							onclick={() => (descriptionExpanded = false)}
+						>
+							Show less
+						</button>
+					{/if}
 				</div>
-			{/if}
-		<div class="description-container" class:expanded={descriptionExpanded}>
-				<div class="post-description prose prose-invert max-w-none" use:checkTruncation>
-					{@html descriptionHtml}
-				</div>
-				{#if isTruncated && !descriptionExpanded}
-					<div class="description-fade" aria-hidden="true"></div>
-					<button
-						type="button"
-						class="read-more-btn"
-						onclick={() => (descriptionExpanded = true)}
-					>
-						Read more
-					</button>
-				{/if}
-				{#if descriptionExpanded}
-					<button
-						type="button"
-						class="show-less-btn"
-						onclick={() => (descriptionExpanded = false)}
-					>
-						Show less
-					</button>
-				{/if}
-		</div>
 
-			<div class="social-tabs-wrap">
+				<div class="social-tabs-wrap">
 					<SocialTabs
 						app={{}}
 						mainEventIds={[post.id]}
@@ -401,9 +504,11 @@
 						pubkeyToNpub={(pk) => (pk ? nip19.npubEncode(pk) : '')}
 						{searchProfiles}
 						{searchEmojis}
-						onCommentSubmit={handleCommentSubmit}
-						onZapReceived={refetchZaps}
-						onGetStarted={() => (getStartedModalOpen = true)}
+					onCommentSubmit={handleCommentSubmit}
+					onZapReceived={refetchZaps}
+					onGetStarted={() => (getStartedModalOpen = true)}
+					{labelEntries}
+					{labelsLoading}
 					/>
 				</div>
 			</div>
@@ -536,17 +641,6 @@
 	}
 	.show-less-btn:active {
 		transform: scale(0.98);
-	}
-	.post-detail-labels {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		margin-top: 6px;
-		margin-bottom: 8px;
-	}
-	.post-detail-label-slot {
-		display: inline-flex;
-		flex-shrink: 0;
 	}
 	.social-tabs-wrap {
 		margin-top: 16px;

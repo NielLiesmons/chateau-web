@@ -12,7 +12,7 @@ import { page } from "$app/stores";
 import { onMount } from "svelte";
 import { browser } from "$app/environment";
 import { beforeNavigate } from "$app/navigation";
-import { fetchProfile, fetchProfilesBatch, queryEvent, queryEvents, queryCommentsFromStore, fetchComments, encodeAppNaddr, encodeStackNaddr, parseProfile, parseComment, publishComment, decodeNaddr, parseAppStack, parseApp, } from "$lib/nostr";
+import { fetchProfilesBatch, queryEvent, queryEvents, queryCommentsFromStore, fetchComments, encodeAppNaddr, encodeStackNaddr, parseProfile, parseComment, publishComment, decodeNaddr, parseAppStack, parseApp, } from "$lib/nostr";
 import { fetchFromRelays } from "$lib/nostr/service";
 import { DEFAULT_CATALOG_RELAYS } from "$lib/config";
 import { EVENT_KINDS, PLATFORM_FILTER } from "$lib/config";
@@ -384,9 +384,9 @@ const displayDescription = $derived(!stack?.title ||
       <div class="section-container">
         <div class="horizontal-scroll" use:wheelScroll>
           <div class="scroll-content">
-            {#each Array(3) as _, colIndex}
+            {#each Array(3) as _}
               <div class="app-column">
-                {#each Array(3) as _, cardIndex}
+                {#each Array(3) as _}
                   <div class="skeleton-card">
                     <div class="skeleton-icon"><SkeletonLoader /></div>
                     <div class="skeleton-info">

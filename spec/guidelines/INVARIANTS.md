@@ -3,7 +3,7 @@ description: Non-negotiable invariants — local-first, data flow, performance, 
 alwaysApply: true
 ---
 
-# Zapstore Webapp — Invariants
+# Chateau — Invariants
 
 These are non-negotiable rules. Violating any invariant is a bug—no tradeoffs or exceptions.
 See `QUALITY_BAR.md` for best practices that involve judgment.

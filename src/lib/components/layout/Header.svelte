@@ -1,12 +1,10 @@
 <script lang="js">
-import { page } from "$app/stores";
-import { assets } from "$app/paths";
 import { Search, User, Loader2, LogOut } from "lucide-svelte";
 import { Menu, Cross } from "$lib/components/icons";
 import { cn } from "$lib/utils";
 import { onMount } from "svelte";
 import { nip19 } from "nostr-tools";
-import { getCurrentPubkey, getIsConnecting, connect, signOut } from "$lib/stores/auth.svelte.js";
+import { getCurrentPubkey, getIsConnecting, signOut } from "$lib/stores/auth.svelte.js";
 import { queryEvent, fetchProfile } from "$lib/nostr";
 import { parseProfile } from "$lib/nostr/models";
 import ProfilePic from "$lib/components/common/ProfilePic.svelte";

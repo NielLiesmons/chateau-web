@@ -184,7 +184,7 @@ function handleGetStartedStart(event) {
 function handleGetStartedConnected() {
     getStartedModalOpen = false;
 }
-function handleSpinComplete(event) {
+function handleSpinComplete(_event) {
     spinKeyModalOpen = false;
     // Defer so SpinKeyModal can close and unmount before showing the next modal
     setTimeout(() => {
@@ -195,7 +195,7 @@ function handleUseExistingKey() {
     spinKeyModalOpen = false;
     getStartedModalOpen = true;
 }
-async function handleSignIn() {
+async function _handleSignIn() {
     try {
         await connect();
     }

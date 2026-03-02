@@ -46,7 +46,7 @@ function formatMarkerLabel(val) {
         return `${Math.round(val / 1000)}K`;
     return val.toString();
 }
-function valueToAngle(val) {
+function _valueToAngle(val) {
     if (val <= 0)
         return START_ANGLE;
     const percentage = Math.log(val + 1) / Math.log(MAX_VALUE + 1);

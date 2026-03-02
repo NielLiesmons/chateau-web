@@ -9,7 +9,7 @@ import { cubicOut } from 'svelte/easing';
 import ShortTextInput from '$lib/components/common/ShortTextInput.svelte';
 import EmojiPickerModal from '$lib/components/modals/EmojiPickerModal.svelte';
 import ForumPostLabelsModal from '$lib/components/modals/ForumPostLabelsModal.svelte';
-import { Camera, EmojiFill, Gif, Plus } from '$lib/components/icons';
+import { Camera, EmojiFill, Plus } from '$lib/components/icons';
 import { createSearchEmojisFunction } from '$lib/services/emoji-search';
 import { createSearchProfilesFunction } from '$lib/services/profile-search';
 
@@ -140,13 +140,10 @@ $effect(() => {
 					<button type="button" class="action-btn" aria-label="Add photo" onclick={() => {}}>
 						<Camera variant="fill" color="hsl(var(--white33))" size={20} />
 					</button>
-					<button type="button" class="action-btn" aria-label="Add emoji" onclick={handleEmojiTap}>
-						<EmojiFill variant="fill" color="hsl(var(--white33))" size={20} />
-					</button>
-					<button type="button" class="action-btn" aria-label="Add GIF" onclick={() => {}}>
-						<Gif variant="fill" color="hsl(var(--white33))" size={20} />
-					</button>
-					<button type="button" class="action-btn" aria-label="Add attachment" onclick={() => {}}>
+				<button type="button" class="action-btn" aria-label="Add emoji" onclick={handleEmojiTap}>
+					<EmojiFill variant="fill" color="hsl(var(--white33))" size={18} />
+				</button>
+				<button type="button" class="action-btn" aria-label="Add attachment" onclick={() => {}}>
 						<Plus variant="outline" color="hsl(var(--white33))" size={16} strokeWidth={2.8} />
 					</button>
 					<button

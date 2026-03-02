@@ -619,7 +619,6 @@
 			{@const parallaxOffset = -scrollY * iconData.parallaxSpeed}
 			{@const cappedWidth = Math.min(windowWidth, 1440)}
 			{@const baseSize = Math.max(30, (cappedWidth / 100) * 3.5)}
-			{@const scaledSize = baseSize * iconData.size}
 			{@const borderRadius = baseSize * 0.24}
 			<!-- Horizontal scaling: slight boost on mobile for centering -->
 			{@const baseXFactor = 0.6}

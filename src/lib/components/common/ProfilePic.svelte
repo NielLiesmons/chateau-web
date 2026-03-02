@@ -59,7 +59,7 @@
 
 	// Size mappings (in pixels)
 	const sizeMap = {
-		xs: 20,
+		xs: 24,
 		sm: 28,
 		bubble: 32,
 		smMd: 35, // between bubble and md

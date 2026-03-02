@@ -1,7 +1,6 @@
 <script lang="js">
 import { onMount } from "svelte";
-import { nip19 } from "nostr-tools";
-import { Options, Zap, Download, Home, Mail, List, ChevronDown } from "$lib/components/icons";
+import { Zap, Download, Home, Mail, List, ChevronDown } from "$lib/components/icons";
 import AppPic from "$lib/components/common/AppPic.svelte";
 import ProfilePic from "$lib/components/common/ProfilePic.svelte";
 import { getCurrentPubkey } from "$lib/stores/auth.svelte.js";

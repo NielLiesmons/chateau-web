@@ -34,6 +34,7 @@ export {
 	fetchCommunityForumPosts,
 	subscribeCommunityForumPosts,
 	subscribeForumPostComments,
+	fetchLabelEvents,
 	publishToRelays
 } from './service';
 

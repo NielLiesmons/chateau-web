@@ -307,6 +307,35 @@ export function subscribeForumPostComments(relayUrls, postIds, onEvent) {
 }
 
 /**
+ * Fetch kind 1985 label events referencing a specific non-replaceable event.
+ *
+ * On enforced community relays all stored events are already from allowed members
+ * so no author filter is needed. On non-enforced relays pass allowedPubkeys to
+ * restrict results to General-section profile list members + the post author.
+ *
+ * @param {string[]} relayUrls
+ * @param {string} eventId - id of the labeled event (e.g. forum post id)
+ * @param {string} communityPubkey - community h-tag value (hex pubkey)
+ * @param {{ timeout?: number, signal?: AbortSignal, allowedPubkeys?: string[], enforced?: boolean }} options
+ */
+export async function fetchLabelEvents(relayUrls, eventId, communityPubkey, options = {}) {
+	const { timeout = 5000, signal, allowedPubkeys = [], enforced = false } = options;
+	if (signal?.aborted || !eventId || !communityPubkey) return [];
+	/** @type {Record<string, any>} */
+	const filter = {
+		kinds: [EVENT_KINDS.LABEL],
+		'#e': [eventId],
+		'#h': [communityPubkey],
+		limit: 200
+	};
+	// On non-enforced relays, restrict to known members to avoid spam
+	if (!enforced && allowedPubkeys.length > 0) {
+		filter.authors = allowedPubkeys;
+	}
+	return fetchFromRelays(relayUrls, filter, { timeout, signal });
+}
+
+/**
  * Publish a signed event to relays and write to Dexie.
  */
 export async function publishToRelays(relayUrls, signedEvent) {
