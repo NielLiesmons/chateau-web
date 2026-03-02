@@ -9,6 +9,7 @@ yarn.lock
 # Build output
 build
 .svelte-kit
+.vercel/output
 
 # Environment
 .env
