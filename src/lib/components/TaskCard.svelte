@@ -164,11 +164,9 @@ const hasBottomRow = $derived(stackProfiles.length > 0 || targets.length > 0 || 
 		font-weight: 500;
 		color: hsl(var(--white));
 		line-height: 1.35;
-		display: -webkit-box;
-		-webkit-line-clamp: 2;
-		line-clamp: 2;
-		-webkit-box-orient: vertical;
+		white-space: nowrap;
 		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.priority-col {

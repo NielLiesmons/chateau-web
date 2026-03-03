@@ -277,28 +277,65 @@ export function subscribeCommunityForumPosts(relayUrls, communityPubkey, authorP
 }
 
 /**
- * Subscribe to kind 1 comments that reference any of the given post ids (#e tag). Events are buffered to Dexie.
+ * Subscribe to NIP-1111 kind:1111 comments referencing any of the given post/event ids.
+ * Uses both uppercase E (root marker) and lowercase e (parent/fallback) filters.
+ * Events are buffered to Dexie.
  */
 export function subscribeForumPostComments(relayUrls, postIds, onEvent) {
 	if (!Array.isArray(postIds) || postIds.length === 0) return () => {};
-	const filter = { kinds: [1], '#e': postIds, limit: 200 };
 	const p = getPool();
-	const sub = p.subscribeMany(relayUrls, filter, {
-		onevent(event) {
-			if (event?.id) {
-				bufferEvent(event);
-				onEvent?.(event);
-			}
-		},
-		oneose() {},
-		onclose() {}
-	});
-	return () => {
-		try {
-			sub.close();
-		} catch {
-			/* noop */
+	const sub = p.subscribeMany(
+		relayUrls,
+		[
+			{ kinds: [1111], '#E': postIds, limit: 200 },
+			{ kinds: [1111], '#e': postIds, limit: 200 }
+		],
+		{
+			onevent(event) {
+				if (event?.id) {
+					bufferEvent(event);
+					onEvent?.(event);
+				}
+			},
+			oneose() {},
+			onclose() {}
 		}
+	);
+	return () => {
+		try { sub.close(); } catch { /* noop */ }
+	};
+}
+
+/**
+ * Subscribe to NIP-1111 (kind:1111) comments on addressable task events (#A tag).
+ * Stores received events in the local Dexie cache so liveQueries react to them.
+ * @param {string[]} relayUrls
+ * @param {string[]} taskAddrs - NIP-33 addresses e.g. "37060:pubkey:dtag"
+ * @param {Function} [onEvent]
+ * @returns {() => void} unsubscribe function
+ */
+export function subscribeTaskComments(relayUrls, taskAddrs, onEvent) {
+	if (!Array.isArray(taskAddrs) || taskAddrs.length === 0) return () => {};
+	const p = getPool();
+	const sub = p.subscribeMany(
+		relayUrls,
+		[
+			{ kinds: [1111], '#A': taskAddrs, limit: 400 },
+			{ kinds: [1111], '#a': taskAddrs, limit: 400 }
+		],
+		{
+			onevent(event) {
+				if (event?.id) {
+					bufferEvent(event);
+					onEvent?.(event);
+				}
+			},
+			oneose() {},
+			onclose() {}
+		}
+	);
+	return () => {
+		try { sub.close(); } catch { /* noop */ }
 	};
 }
 
@@ -726,6 +763,37 @@ export function parseZapReceipt(event) {
 	}
 
 	return result;
+}
+
+/**
+ * Fetch events from relays without writing to Dexie.
+ * Use for ephemeral lookups (e.g. resolving missing non-member parent comments for tree display).
+ */
+export async function fetchEventsNoStore(relayUrls, filter, options = {}) {
+	const { timeout = 5000, signal } = options;
+	if (signal?.aborted) return [];
+	return new Promise((resolve) => {
+		const events = [];
+		let settled = false;
+		let eoseTimer = null;
+		let timeoutTimer = null;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			if (eoseTimer) clearTimeout(eoseTimer);
+			if (timeoutTimer) clearTimeout(timeoutTimer);
+			try { sub?.close(); } catch { /* noop */ }
+			resolve(events);
+		};
+		const p = getPool();
+		const sub = p.subscribeMany(relayUrls, filter, {
+			onevent(event) { if (event?.id) events.push(event); },
+			oneose() { if (!eoseTimer) eoseTimer = setTimeout(finish, EOSE_GRACE_MS); },
+			onclose() { if (!settled) finish(); }
+		});
+		signal?.addEventListener('abort', finish, { once: true });
+		timeoutTimer = setTimeout(finish, timeout);
+	});
 }
 
 /**

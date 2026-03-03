@@ -16,9 +16,10 @@
 		parseCommunity,
 		parseProfileList,
 		fetchProfileListFromRelays,
-		fetchLabelEvents
+		fetchLabelEvents,
+		fetchEventsNoStore
 	} from '$lib/nostr';
-	import { EVENT_KINDS, DEFAULT_COMMUNITY_RELAYS } from '$lib/config';
+	import { EVENT_KINDS, DEFAULT_COMMUNITY_RELAYS, DEFAULT_SOCIAL_RELAYS } from '$lib/config';
 	import { tokenizeNostrMarkdown } from '$lib/utils/markdown';
 	import MarkdownBody from '$lib/components/common/MarkdownBody.svelte';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
@@ -56,11 +57,11 @@
 	);
 	/**
 	 * Allowed commenter pubkeys for this community.
-	 * null  = relay is enforced (trust relay) or community not yet loaded — no client filter.
-	 * []    = (never used) treated same as null for safety.
-	 * string[] = members from General profile list; used to filter both relay requests and display.
+	 * undefined = still resolving (community def or profile list not loaded yet — hold comments).
+	 * null      = relay is enforced or no profile list — show all, no client filter.
+	 * string[]  = members from General profile list; filter both relay requests and display.
 	 */
-	let allowedCommenters = $state(/** @type {string[] | null} */ (null));
+	let allowedCommenters = $state(/** @type {string[] | null | undefined} */ (undefined));
 	/** @type {Array<{ label: string, pubkeys: string[] }>} */
 	let labelEntries = $state([]);
 	let labelsLoading = $state(false);
@@ -118,10 +119,10 @@
 	});
 
 	// Resolve allowed commenters from the General section profile list.
-	// Re-runs when communityDef loads. null = enforced relay (trust it) or not yet resolved.
+	// undefined = still loading; null = no filter (enforced relay or no profile list); string[] = filter.
 	$effect(() => {
 		const def = communityDef;
-		if (!def) { allowedCommenters = null; return; }
+		if (!def) { allowedCommenters = undefined; return; }
 		if (def.mainRelayEnforced) { allowedCommenters = null; return; }
 
 		const relays = def.relays?.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
@@ -132,6 +133,8 @@
 		const listPubkey = parts[1];
 		const listDTag = parts.slice(2).join(':');
 
+		allowedCommenters = undefined; // mark pending while the async fetch runs
+		let cancelled = false;
 		(async () => {
 			// Check Dexie first for instant result, then fall back to relay
 			let listEvent = listPubkey && listDTag
@@ -140,10 +143,98 @@
 			if (!listEvent) {
 				listEvent = await fetchProfileListFromRelays(relays, generalSection.profileListAddress);
 			}
+			if (cancelled) return;
 			const list = listEvent ? parseProfileList(listEvent) : null;
 			allowedCommenters = list?.members?.length ? list.members : null;
 		})();
+		return () => { cancelled = true; };
 	});
+
+	// Plain vars for coordinating ghost parent fetching across liveQuery re-fires.
+	let _lastParsedAllowed = /** @type {any[]} */ ([]);
+	let _postIdRef = '';
+	let _nonMemberById = /** @type {Map<string, {loading?: boolean, comment?: any, notFound?: boolean}>} */ (new Map());
+
+	/**
+	 * Build the display comments list (allowed + injected non-member fetched parents).
+	 * Missing parents are fetched silently. Orphaned branches (whose parent isn't yet found)
+	 * are hidden entirely until the parent arrives — iterative pruning handles chains.
+	 */
+	function _refreshComments(parsedAllowed) {
+		const nonMemberEntries = [];
+		for (const [, state] of _nonMemberById) {
+			if (state.comment) nonMemberEntries.push(state.comment);
+			// loading / notFound: omit — branches hidden until parent is actually found
+		}
+
+		const combined = [...parsedAllowed, ...nonMemberEntries];
+		const combinedIdSet = new Set(combined.map((c) => c.id));
+
+		// Start fetches for newly discovered missing parents (use full combined set for detection)
+		for (const c of combined) {
+			if (c.parentId && c.parentId !== _postIdRef && !combinedIdSet.has(c.parentId) && !_nonMemberById.has(c.parentId)) {
+				_nonMemberById.set(c.parentId, { loading: true });
+				_fetchNonMemberParent(c.parentId);
+			}
+		}
+
+		// Iteratively remove orphaned comments until the set is stable.
+		// A comment is displayable only if its parent is either the root post or
+		// another displayable comment. This hides entire orphaned branches.
+		let displayable = combined;
+		let changed = true;
+		while (changed) {
+			const displayIds = new Set(displayable.map((c) => c.id));
+			const next = displayable.filter(
+				(c) => !c.parentId || c.parentId === _postIdRef || displayIds.has(c.parentId)
+			);
+			changed = next.length !== displayable.length;
+			displayable = next;
+		}
+
+		comments = displayable;
+	}
+
+	/** Fetch a single missing parent event from popular social relays (no Dexie write). */
+	async function _fetchNonMemberParent(id) {
+		try {
+			const events = await fetchEventsNoStore(
+				DEFAULT_SOCIAL_RELAYS,
+				[{ ids: [id], kinds: [1111], limit: 1 }],
+				{ timeout: 3000 }
+			);
+			const event = events[0] ?? null;
+			if (event) {
+				const p = parseComment(event);
+				p.npub = nip19.npubEncode(event.pubkey);
+				p.nonMember = true;
+				_nonMemberById.set(id, { comment: p });
+				// Fetch profile for the non-member author so it shows a name
+				fetchProfilesBatch([event.pubkey]).then((batch) => {
+					const ev = batch.get(event.pubkey);
+					if (ev?.content) {
+						try {
+							const c = JSON.parse(ev.content);
+							profiles = {
+								...profiles,
+								[event.pubkey]: {
+									displayName: c.display_name ?? c.name,
+									name: c.name,
+									picture: c.picture
+								}
+							};
+						} catch {}
+					}
+				}).catch(() => {});
+			} else {
+				_nonMemberById.set(id, { notFound: true });
+			}
+		} catch {
+			_nonMemberById.set(id, { notFound: true });
+		}
+		// Rebuild with the updated non-member state
+		_refreshComments(_lastParsedAllowed);
+	}
 
 	// Comments: live from Dexie, filtered by allowedCommenters, backfilled from relay.
 	// Re-runs when post, communityDef, or allowedCommenters changes.
@@ -154,9 +245,21 @@
 		const allowed = allowedCommenters; // reactive — re-runs when member list resolves
 		if (!pid) {
 			comments = [];
+			_lastParsedAllowed = [];
+			_postIdRef = '';
+			_nonMemberById = new Map();
+			return;
+		}
+		// Hold off on subscriptions until we know the filter state.
+		// undefined = profile list still loading; avoid the "show all → filter" flash.
+		if (allowed === undefined) {
+			commentsLoading = true;
 			return;
 		}
 		commentsLoading = true;
+		_postIdRef = pid;
+		_nonMemberById = new Map();
+		_lastParsedAllowed = [];
 		const allowedSet = allowed ? new Set(allowed) : null;
 
 		const sub = liveQuery(async () => {
@@ -173,14 +276,16 @@
 				if (allowedSet) {
 					filtered = filtered.filter((e) => allowedSet.has(e.pubkey));
 				}
-				comments = filtered.map((e) => {
+				const parsedAllowed = filtered.map((e) => {
 					const p = parseComment(e);
 					p.npub = nip19.npubEncode(e.pubkey);
 					return p;
 				});
+				_lastParsedAllowed = parsedAllowed;
 				commentsLoading = false;
 				commentsError = '';
-				const pubkeys = [...new Set(comments.map((c) => c.pubkey).filter(Boolean))];
+				_refreshComments(parsedAllowed);
+				const pubkeys = [...new Set(parsedAllowed.map((c) => c.pubkey).filter(Boolean))];
 				if (pubkeys.length > 0) {
 					fetchProfilesBatch(pubkeys).then((batch) => {
 						const next = { ...profiles };

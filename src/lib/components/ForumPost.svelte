@@ -16,6 +16,8 @@
     labels = [],
     /** @type {{ pubkey: string; displayName?: string; avatarUrl?: string }[]} */
     commenters = [],
+    /** Total number of root-level comments (may differ from commenters.length when one person comments multiple times) */
+    commentCount = 0,
     onClick = () => {}
   } = $props();
 
@@ -126,7 +128,7 @@
         <ProfilePicStack
           profiles={stackProfiles}
           text={stackText}
-          suffix={String(commenters.length)}
+          suffix={String(commentCount || commenters.length)}
           size="sm"
           onclick={() => onClick()}
         />

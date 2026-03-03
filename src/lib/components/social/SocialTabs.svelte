@@ -383,6 +383,8 @@ const combinedFeed = $derived.by(() => {
                 profileUrl={item.profileUrl}
                 loading={item.profileLoading}
                 pending={item.pending}
+                nonMember={item.nonMember ?? false}
+                skeletonLoading={item.loading ?? false}
                 replies={item.replies}
                 threadComments={threadByRootId.get(item.id) ?? []}
                 threadZaps={threadZapsByRootId.get(item.id) ?? []}

@@ -22,6 +22,8 @@ import { parseProfile } from '$lib/nostr/models';
 let {
 	isOpen = $bindable(false),
 	communityName: _communityName = '',
+	/** @type {{ title?: string, status?: string, priority?: string, text?: string, labels?: string[], dTag?: string, assigneeProfiles?: { pubkey: string; name?: string; pictureUrl?: string }[] }|null} */
+	initialData = null,
 	getCurrentPubkey = () => null,
 	searchProfiles: searchProfilesProp = null,
 	searchEmojis: searchEmojisProp = null,
@@ -120,7 +122,8 @@ async function handlePublish() {
 			emojiTags: serialized.emojiTags ?? [],
 			mentions: serialized.mentions ?? [],
 			labels: selectedLabels,
-			assignees: assignees.map((a) => a.pubkey)
+			assignees: assignees.map((a) => a.pubkey),
+			dTag: initialData?.dTag ?? ''
 		});
 		titleValue = '';
 		taskStatus = 'open';
@@ -138,26 +141,55 @@ async function handlePublish() {
 
 $effect(() => {
 	if (isOpen) {
-		const pubkey = getCurrentPubkey?.();
-		if (pubkey) {
-			// Immediately render with pubkey (ProfilePic shows fallback while loading)
-			assignees = [{ pubkey }];
-			// Enrich from local Dexie — no network needed for cached profiles
-			queryEvent({ kinds: [0], authors: [pubkey], limit: 1 })
-				.then((event) => {
-					if (event) {
-						const p = parseProfile(event);
-						assignees = [{
-							pubkey,
-							name: p.name ?? p.displayName ?? '',
-							pictureUrl: p.picture ?? undefined,
-						}];
-					}
-				})
-				.catch(() => {});
+		if (initialData) {
+			// Edit mode: pre-fill from initialData
+			titleValue = initialData.title ?? '';
+			taskStatus = /** @type {any} */ (initialData.status ?? 'open');
+			taskPriority = /** @type {any} */ (initialData.priority ?? 'none');
+			selectedLabels = initialData.labels ?? [];
+			if (initialData.assigneeProfiles?.length) {
+				assignees = initialData.assigneeProfiles;
+			} else {
+				const pubkey = getCurrentPubkey?.();
+				if (pubkey) {
+					assignees = [{ pubkey }];
+					queryEvent({ kinds: [0], authors: [pubkey], limit: 1 })
+						.then((event) => {
+							if (event) {
+								const p = parseProfile(event);
+								assignees = [{ pubkey, name: p.name ?? p.displayName ?? '', pictureUrl: p.picture ?? undefined }];
+							}
+						})
+						.catch(() => {});
+				}
+			}
+			const t = setTimeout(() => {
+				if (initialData.text) contentInput?.setTextContent?.(initialData.text);
+				titleInput?.focus();
+			}, 120);
+			return () => clearTimeout(t);
+		} else {
+			const pubkey = getCurrentPubkey?.();
+			if (pubkey) {
+				// Immediately render with pubkey (ProfilePic shows fallback while loading)
+				assignees = [{ pubkey }];
+				// Enrich from local Dexie — no network needed for cached profiles
+				queryEvent({ kinds: [0], authors: [pubkey], limit: 1 })
+					.then((event) => {
+						if (event) {
+							const p = parseProfile(event);
+							assignees = [{
+								pubkey,
+								name: p.name ?? p.displayName ?? '',
+								pictureUrl: p.picture ?? undefined,
+							}];
+						}
+					})
+					.catch(() => {});
+			}
+			const t = setTimeout(() => titleInput?.focus(), 80);
+			return () => clearTimeout(t);
 		}
-		const t = setTimeout(() => titleInput?.focus(), 80);
-		return () => clearTimeout(t);
 	} else {
 		titleValue = '';
 		error = '';

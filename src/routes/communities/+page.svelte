@@ -14,6 +14,7 @@
 		fetchCommunityForumPosts,
 		subscribeCommunityForumPosts,
 		subscribeForumPostComments,
+		subscribeTaskComments,
 		fetchFromRelays,
 		fetchProfilesBatch,
 		publishToRelays,
@@ -114,6 +115,14 @@
 	let lastActivityByPubkey = $state(new Map());
 	/** @type {Map<string, { pubkey: string; displayName?: string; avatarUrl?: string }[]>} */
 	let commentersByPostId = $state(new Map());
+	/** @type {Map<string, { pubkey: string; name?: string; pictureUrl?: string }[]>} */
+	let commentersByTaskId = $state(new Map());
+	/**
+	 * Allowed commenter pubkeys from the General-section profile list.
+	 * Mirrors ForumPostDetail.allowedCommenters so feed and detail filters are identical.
+	 * undefined = still resolving; null = no filter (enforced relay / no General section); string[] = filter list.
+	 */
+	let generalMembers = $state(/** @type {string[] | null | undefined} */ (undefined));
 	let communityInfoModalOpen = $state(false);
 	let communityInfoShowDetails = $state(false);
 	/** When community info modal is open, sections with list name for display */
@@ -442,8 +451,38 @@
 		};
 	});
 
+	// Resolve General-section profile list — same logic as ForumPostDetail.allowedCommenters.
+	// undefined = community not yet loaded; null = no filter; string[] = member filter.
+	$effect(() => {
+		// Wait until community is actually loaded
+		if (!selectedCommunity) { generalMembers = undefined; return; }
+		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
+		// If we can't parse the community, don't block — just skip filtering
+		if (!comm) { generalMembers = null; return; }
+		// Enforced relay filters server-side — trust it, show all
+		if (comm.mainRelayEnforced) { generalMembers = null; return; }
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+		const generalSection = comm.sections?.find((s) => s.name?.toLowerCase() === 'general');
+		if (!generalSection?.profileListAddress) { generalMembers = null; return; }
+		const parts = generalSection.profileListAddress.split(':');
+		const listPubkey = parts[1];
+		const listDTag = parts.length >= 3 ? parts.slice(2).join(':') : '';
+		generalMembers = undefined; // mark loading while fetching
+		let cancelled = false;
+		(async () => {
+			let listEvent = listPubkey && listDTag
+				? await queryEvent({ kinds: [EVENT_KINDS.PROFILE_LIST], authors: [listPubkey], '#d': [listDTag] })
+				: null;
+			if (!listEvent) listEvent = await fetchProfileListFromRelays(relays, generalSection.profileListAddress);
+			if (cancelled) return;
+			const list = listEvent ? parseProfileList(listEvent) : null;
+			generalMembers = list?.members?.length ? list.members : null;
+		})();
+		return () => { cancelled = true; };
+	});
+
 	let forumCommentsUnsub = null;
-	// Subscribe to kind 1 comments on current forum posts so they are stored and commenters show
+	// Subscribe to NIP-1111 kind:1111 comments on current forum posts so they are stored and commenters show.
 	$effect(() => {
 		if (!browser || !selectedCommunity?.pubkey || !forumPosts?.length) {
 			if (forumCommentsUnsub) {
@@ -485,72 +524,172 @@
 		return () => sub.unsubscribe();
 	});
 
-	// liveQuery: comments on forum posts (kind 1 with #e = post id) → commenters per post
+	// liveQuery: NIP-1111 comments on forum posts → commenters per post
+	// Uses the same generalMembers filter as ForumPostDetail.allowedCommenters for consistency.
 	$effect(() => {
-		if (!browser || !forumPosts?.length) {
+		if (!browser || !forumPosts?.length || generalMembers === undefined) {
 			commentersByPostId = new Map();
 			return;
 		}
 		const postIds = forumPosts.map((p) => p.id).filter(Boolean);
-		if (postIds.length === 0) {
-			commentersByPostId = new Map();
-			return;
-		}
+		if (postIds.length === 0) { commentersByPostId = new Map(); return; }
+		const allowedSet = generalMembers?.length ? new Set(generalMembers) : null;
+
 		const sub = liveQuery(async () => {
-			const commentEvs = await queryEvents({
-				kinds: [1],
-				'#e': postIds,
-				limit: 400
-			});
+			const [byE, bye] = await Promise.all([
+				queryEvents({ kinds: [1111], '#E': postIds, limit: 400 }),
+				queryEvents({ kinds: [1111], '#e': postIds, limit: 400 })
+			]);
+			const seen = new Set();
+			const merged = [];
+			for (const ev of [...byE, ...bye]) {
+				if (!seen.has(ev.id)) { seen.add(ev.id); merged.push(ev); }
+			}
+			// postId → { count: total all-depth comment count, rootPubkeys: unique root-level commenter pubkeys }
 			const byPostId = new Map();
 			const allPubkeys = new Set();
-			for (const ev of commentEvs) {
-				const eTag = ev.tags?.find((t) => t[0] === 'e')?.[1];
-				if (!eTag) continue;
-				if (!byPostId.has(eTag)) byPostId.set(eTag, new Set());
-				byPostId.get(eTag).add(ev.pubkey);
-				allPubkeys.add(ev.pubkey);
+			for (const ev of merged) {
+				if (allowedSet && !allowedSet.has(ev.pubkey)) continue;
+				// Find which post this comment belongs to (E/e tag pointing at one of our postIds)
+				const rootTag = ev.tags?.find((t) => (t[0] === 'E' || t[0] === 'e') && postIds.includes(t[1]));
+				const postId = rootTag?.[1];
+				if (!postId) continue;
+				if (!byPostId.has(postId)) byPostId.set(postId, { count: 0, rootPubkeys: new Set() });
+				const entry = byPostId.get(postId);
+				// Total count includes all depths
+				entry.count++;
+				// Profile stack: only root-level comment authors (mirror parseComment parentId logic)
+				const eTags = ev.tags?.filter((t) => (t[0] === 'e' || t[0] === 'E') && t[1]) ?? [];
+				const replyTag = eTags.find((t) => t[3] === 'reply');
+				const parentId = replyTag?.[1] ?? eTags[eTags.length - 1]?.[1] ?? null;
+				if (postIds.includes(parentId)) {
+					entry.rootPubkeys.add(ev.pubkey);
+					allPubkeys.add(ev.pubkey);
+				}
 			}
-			const profileEvs =
-				allPubkeys.size > 0
-					? await queryEvents({
-							kinds: [EVENT_KINDS.PROFILE],
-							authors: [...allPubkeys],
-							limit: 200
-						})
-					: [];
+			const profileEvs = allPubkeys.size > 0
+				? await queryEvents({ kinds: [EVENT_KINDS.PROFILE], authors: [...allPubkeys], limit: 200 })
+				: [];
 			const profileByPubkey = new Map();
 			for (const e of profileEvs) {
 				try {
 					const p = parseProfile(e);
-					profileByPubkey.set(e.pubkey, {
-						displayName: p.displayName ?? p.name,
-						name: p.name,
-						avatarUrl: p.picture
-					});
-				} catch {
-					profileByPubkey.set(e.pubkey, {});
-				}
+					profileByPubkey.set(e.pubkey, { displayName: p.displayName ?? p.name, avatarUrl: p.picture });
+				} catch { profileByPubkey.set(e.pubkey, {}); }
 			}
 			const out = new Map();
-			for (const [pid, pubkeySet] of byPostId) {
-				const list = [];
-				for (const pk of pubkeySet) {
-					const prof = profileByPubkey.get(pk) || {};
-					list.push({
-						pubkey: pk,
-						displayName: prof.displayName ?? prof.name,
-						avatarUrl: prof.avatarUrl
-					});
-				}
-				out.set(pid, list);
+			for (const [pid, { count, rootPubkeys }] of byPostId) {
+				out.set(pid, {
+					count,
+					profiles: [...rootPubkeys].map((pk) => {
+						const prof = profileByPubkey.get(pk) || {};
+						return { pubkey: pk, displayName: prof.displayName, avatarUrl: prof.avatarUrl };
+					})
+				});
 			}
 			return out;
 		}).subscribe({
-			next: (val) => {
-				commentersByPostId = val ?? new Map();
-			},
+			next: (val) => { commentersByPostId = val ?? new Map(); },
 			error: (e) => console.error('[Communities] commenters liveQuery error', e)
+		});
+		return () => sub.unsubscribe();
+	});
+
+	// Subscribe + initial fetch for task comments so they land in Dexie before the liveQuery fires
+	let taskCommentsUnsub = null;
+	$effect(() => {
+		if (!browser || !selectedCommunity?.pubkey || !taskEvents?.length) {
+			if (taskCommentsUnsub) { taskCommentsUnsub(); taskCommentsUnsub = null; }
+			return;
+		}
+		const taskAddrs = taskEvents.map((e) => {
+			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+			return `${EVENT_KINDS.TASK}:${e.pubkey}:${d}`;
+		}).filter(Boolean);
+		if (taskAddrs.length === 0) return;
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+		// Subscription for future/live events
+		taskCommentsUnsub = subscribeTaskComments(relays, taskAddrs);
+		// Explicit fetch so Dexie is populated immediately (subscription return is async)
+		Promise.all([
+			fetchFromRelays(relays, { kinds: [1111], '#A': taskAddrs, limit: 400 }),
+			fetchFromRelays(relays, { kinds: [1111], '#a': taskAddrs, limit: 400 })
+		]).then(([byA, bya]) => {
+			const evs = [...byA, ...bya];
+			if (evs.length) putEvents(evs);
+		}).catch(() => {});
+		return () => { if (taskCommentsUnsub) { taskCommentsUnsub(); taskCommentsUnsub = null; } };
+	});
+
+	// liveQuery: NIP-1111 comments on tasks → commenters per task (shape: {pubkey,name,pictureUrl} for TaskCard)
+	// Does NOT block on generalMembers — runs immediately and applies filter when available.
+	$effect(() => {
+		if (!browser || !taskEvents?.length) { commentersByTaskId = new Map(); return; }
+		const taskAddrs = taskEvents.map((e) => {
+			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+			return `${EVENT_KINDS.TASK}:${e.pubkey}:${d}`;
+		}).filter(Boolean);
+		if (taskAddrs.length === 0) { commentersByTaskId = new Map(); return; }
+		const addrToId = new Map(taskEvents.map((e) => {
+			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+			return [`${EVENT_KINDS.TASK}:${e.pubkey}:${d}`, e.id];
+		}));
+		// Use generalMembers filter when resolved; null = no filter (also used while still loading)
+		const allowedSet = (generalMembers && generalMembers.length) ? new Set(generalMembers) : null;
+
+		const sub = liveQuery(async () => {
+			const [byA, bya] = await Promise.all([
+				queryEvents({ kinds: [1111], '#A': taskAddrs, limit: 400 }),
+				queryEvents({ kinds: [1111], '#a': taskAddrs, limit: 400 })
+			]);
+			const seen = new Set();
+			const merged = [];
+			for (const ev of [...byA, ...bya]) {
+				if (!seen.has(ev.id)) { seen.add(ev.id); merged.push(ev); }
+			}
+			const byTaskId = new Map();
+			const allPubkeys = new Set();
+			for (const ev of merged) {
+				if (allowedSet && !allowedSet.has(ev.pubkey)) continue;
+				// Find which task addr this comment belongs to (A/a tag pointing to a task addr)
+				const rootAddrTag = ev.tags?.find((t) => (t[0] === 'A' || t[0] === 'a') && taskAddrs.includes(t[1]));
+				const addr = rootAddrTag?.[1];
+				const tid = addr ? addrToId.get(addr) : null;
+				if (!tid) continue;
+				if (!byTaskId.has(tid)) byTaskId.set(tid, { count: 0, rootPubkeys: new Set() });
+				const entry = byTaskId.get(tid);
+				// Total count all depths
+				entry.count++;
+				// Profile stack: only root-level comment authors
+				const pTags = ev.tags?.filter((t) => ['e','E','a','A'].includes(t[0]) && t[1]) ?? [];
+				const replyTag = pTags.find((t) => t[3] === 'reply');
+				const parentId = replyTag?.[1] ?? pTags[pTags.length - 1]?.[1] ?? null;
+				if (taskAddrs.includes(parentId)) {
+					entry.rootPubkeys.add(ev.pubkey);
+					allPubkeys.add(ev.pubkey);
+				}
+			}
+			const profileEvs = allPubkeys.size > 0
+				? await queryEvents({ kinds: [EVENT_KINDS.PROFILE], authors: [...allPubkeys], limit: 200 })
+				: [];
+			const profileByPubkey = new Map();
+			for (const e of profileEvs) {
+				try {
+					const p = parseProfile(e);
+					profileByPubkey.set(e.pubkey, { name: p.displayName ?? p.name, pictureUrl: p.picture });
+				} catch { profileByPubkey.set(e.pubkey, {}); }
+			}
+			const out = new Map();
+			for (const [tid, { rootPubkeys }] of byTaskId) {
+				out.set(tid, [...rootPubkeys].map((pk) => {
+					const prof = profileByPubkey.get(pk) || {};
+					return { pubkey: pk, name: prof.name, pictureUrl: prof.pictureUrl };
+				}));
+			}
+			return out;
+		}).subscribe({
+			next: (val) => { commentersByTaskId = val ?? new Map(); },
+			error: (e) => console.error('[Communities] task commenters liveQuery error', e)
 		});
 		return () => sub.unsubscribe();
 	});
@@ -2173,6 +2312,7 @@
 							{#each forumPosts as post}
 								{@const authorProfile = profilesByPubkey.get(post.pubkey)}
 								{@const authorContent = authorProfile?.content ? (() => { try { return JSON.parse(authorProfile.content); } catch { return {}; } })() : {}}
+								{@const postCommenters = commentersByPostId.get(post.id)}
 								<ForumPost
 									author={{
 										name: authorContent.display_name ?? authorContent.name,
@@ -2183,7 +2323,8 @@
 									content={post.content}
 									timestamp={post.createdAt}
 									labels={post.labels ?? []}
-									commenters={commentersByPostId.get(post.id) ?? []}
+									commenters={postCommenters?.profiles ?? []}
+									commentCount={postCommenters?.count ?? 0}
 									onClick={() => openPost(post.id)}
 								/>
 							{/each}
@@ -2208,11 +2349,12 @@
 						labels={taskLabels}
 						createdAt={task.created_at}
 						author={{ pubkey: task.pubkey, name: authorContent.display_name ?? authorContent.name, pictureUrl: authorContent.picture }}
-						assignees={assigneePubkeys.map((pk) => {
-							const p = profilesByPubkey.get(pk);
-							const c = p?.content ? (() => { try { return JSON.parse(p.content); } catch { return {}; } })() : {};
-							return { pubkey: pk, name: c.display_name ?? c.name, pictureUrl: c.picture };
-						})}
+					assignees={assigneePubkeys.map((pk) => {
+						const p = profilesByPubkey.get(pk);
+						const c = p?.content ? (() => { try { return JSON.parse(p.content); } catch { return {}; } })() : {};
+						return { pubkey: pk, name: c.display_name ?? c.name, pictureUrl: c.picture };
+					})}
+					commenters={commentersByTaskId.get(task.id) ?? []}
 						onClick={() => openTask(task.id)}
 					/>
 						{/each}

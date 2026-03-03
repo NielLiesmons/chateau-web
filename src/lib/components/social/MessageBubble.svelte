@@ -11,10 +11,12 @@
 import { onMount } from "svelte";
 import { nip19 } from "nostr-tools";
 import ProfilePic from "$lib/components/common/ProfilePic.svelte";
+import SkeletonLoader from "$lib/components/common/SkeletonLoader.svelte";
 import Timestamp from "$lib/components/common/Timestamp.svelte";
+import Tilda from "$lib/components/icons/Tilda.svelte";
 import { Loader2 } from "lucide-svelte";
 import { hexToColor, stringToColor, getProfileTextColor, rgbToCssString, } from "$lib/utils/color.js";
-let { pictureUrl = null, name = "", pubkey = null, timestamp = null, profileUrl = "", className = "", loading = false, pending = false, light = false, children, headerActions, } = $props();
+let { pictureUrl = null, name = "", pubkey = null, timestamp = null, profileUrl = "", className = "", loading = false, pending = false, light = false, nonMember = false, skeletonLoading = false, children, headerActions, } = $props();
 function formatNpubDisplay(npubStr) {
     if (!npubStr || typeof npubStr !== "string") return "";
     const s = npubStr.trim();
@@ -47,6 +49,18 @@ const textColor = $derived(getProfileTextColor(profileColor, isDarkMode));
 const nameColorStyle = $derived(rgbToCssString(textColor));
 </script>
 
+{#if skeletonLoading}
+  <div class="message-bubble {className}">
+    <div class="profile-column">
+      <div class="skeleton-avatar">
+        <SkeletonLoader />
+      </div>
+    </div>
+    <div class="skeleton-bubble">
+      <SkeletonLoader />
+    </div>
+  </div>
+{:else}
 <div class="message-bubble {className}">
   <div class="profile-column">
     {#if profileUrl}
@@ -60,7 +74,12 @@ const nameColorStyle = $derived(rgbToCssString(textColor));
 
   <div class="bubble" class:bubble-light={light}>
     <div class="bubble-header">
-      {#if profileUrl}
+      {#if nonMember}
+        <span class="author-name non-member-name">
+          <Tilda size={14} color="hsl(var(--white33))" className="non-member-tilda" />
+          {displayName}
+        </span>
+      {:else if profileUrl}
         <a href={profileUrl} class="author-name" style="color: {nameColorStyle};">
           {displayName}
         </a>
@@ -88,6 +107,7 @@ const nameColorStyle = $derived(rgbToCssString(textColor));
     </div>
   </div>
 </div>
+{/if}
 
 <style>
   .message-bubble {
@@ -174,5 +194,32 @@ const nameColorStyle = $derived(rgbToCssString(textColor));
 
   .bubble-content :global(a:hover) {
     text-decoration: underline;
+  }
+
+  .skeleton-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .skeleton-bubble {
+    min-width: 160px;
+    height: 52px;
+    border-radius: 16px 16px 16px 4px;
+    overflow: hidden;
+  }
+
+  .non-member-name {
+    color: hsl(var(--white66));
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  :global(.non-member-tilda) {
+    flex-shrink: 0;
+    display: inline-flex;
   }
 </style>
