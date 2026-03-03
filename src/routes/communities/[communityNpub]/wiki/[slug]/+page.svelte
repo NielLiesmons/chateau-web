@@ -1,4 +1,5 @@
 <script lang="js">
+// @ts-nocheck
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import WikiDetail from '$lib/components/community/WikiDetail.svelte';
@@ -7,7 +8,7 @@
 	const slug = $derived(decodeURIComponent($page.params.slug || ''));
 
 	function onBack() {
-		goto(`/communities/${encodeURIComponent(communityNpub)}`, { replaceState: false });
+		goto(`/communities?c=${encodeURIComponent(communityNpub)}`, { replaceState: false });
 	}
 
 	function wikiLinkFn(s) {

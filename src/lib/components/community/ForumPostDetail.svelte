@@ -54,6 +54,13 @@
 	const communityRelays = $derived(
 		communityDef?.relays?.length ? communityDef.relays : DEFAULT_COMMUNITY_RELAYS
 	);
+	/**
+	 * Allowed commenter pubkeys for this community.
+	 * null  = relay is enforced (trust relay) or community not yet loaded — no client filter.
+	 * []    = (never used) treated same as null for safety.
+	 * string[] = members from General profile list; used to filter both relay requests and display.
+	 */
+	let allowedCommenters = $state(/** @type {string[] | null} */ (null));
 	/** @type {Array<{ label: string, pubkeys: string[] }>} */
 	let labelEntries = $state([]);
 	let labelsLoading = $state(false);
@@ -110,25 +117,63 @@
 		})();
 	});
 
-	// Comments from Dexie (NIP-22 kind 1111 only) — live-reactive, backfilled from community relays
+	// Resolve allowed commenters from the General section profile list.
+	// Re-runs when communityDef loads. null = enforced relay (trust it) or not yet resolved.
+	$effect(() => {
+		const def = communityDef;
+		if (!def) { allowedCommenters = null; return; }
+		if (def.mainRelayEnforced) { allowedCommenters = null; return; }
+
+		const relays = def.relays?.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
+		const generalSection = def.sections?.find((s) => s.name === 'General');
+		if (!generalSection?.profileListAddress) { allowedCommenters = null; return; }
+
+		const parts = generalSection.profileListAddress.split(':');
+		const listPubkey = parts[1];
+		const listDTag = parts.slice(2).join(':');
+
+		(async () => {
+			// Check Dexie first for instant result, then fall back to relay
+			let listEvent = listPubkey && listDTag
+				? await queryEvent({ kinds: [EVENT_KINDS.PROFILE_LIST], authors: [listPubkey], '#d': [listDTag] })
+				: null;
+			if (!listEvent) {
+				listEvent = await fetchProfileListFromRelays(relays, generalSection.profileListAddress);
+			}
+			const list = listEvent ? parseProfileList(listEvent) : null;
+			allowedCommenters = list?.members?.length ? list.members : null;
+		})();
+	});
+
+	// Comments: live from Dexie, filtered by allowedCommenters, backfilled from relay.
+	// Re-runs when post, communityDef, or allowedCommenters changes.
 	$effect(() => {
 		const pid = post?.id;
-		const relays = communityRelays; // reactive: re-runs when communityDef loads
+		const def = communityDef;
+		const relays = def?.relays?.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
+		const allowed = allowedCommenters; // reactive — re-runs when member list resolves
 		if (!pid) {
 			comments = [];
 			return;
 		}
 		commentsLoading = true;
+		const allowedSet = allowed ? new Set(allowed) : null;
+
 		const sub = liveQuery(async () => {
 			const events = await queryEvents({
 				kinds: [1111],
-				'#e': [pid],
+				'#E': [pid],
 				limit: 500
 			});
 			return events.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
 		}).subscribe({
 			next: (events) => {
-				comments = (events ?? []).map((e) => {
+				let filtered = events ?? [];
+				// Filter display by allowed members when relay is not enforced
+				if (allowedSet) {
+					filtered = filtered.filter((e) => allowedSet.has(e.pubkey));
+				}
+				comments = filtered.map((e) => {
 					const p = parseComment(e);
 					p.npub = nip19.npubEncode(e.pubkey);
 					return p;
@@ -161,10 +206,12 @@
 				commentsError = 'Failed to load comments';
 			}
 		});
-		// Backfill from community relays so we have latest from network (writes to Dexie → liveQuery will update)
-		fetchForumPostComments(pid, { relays })
+
+		// Backfill from relay with authors filter (server-side, for non-enforced relays)
+		fetchForumPostComments(pid, { relays, authors: allowed })
 			.then(() => {})
 			.catch(() => {});
+
 		return () => sub.unsubscribe();
 	});
 
@@ -394,16 +441,17 @@
 			kind: EVENT_KINDS.FORUM_POST
 		};
 		try {
-			const signed = await publishComment(
-				e.text,
-				target,
-				signEvent,
-				e.emojiTags ?? [],
-				parentId,
-				replyToPubkey,
-				parentId ? 1111 : EVENT_KINDS.FORUM_POST,
-				e.mentions ?? []
-			);
+		const signed = await publishComment(
+			e.text,
+			target,
+			signEvent,
+			e.emojiTags ?? [],
+			parentId,
+			replyToPubkey,
+			parentId ? 1111 : EVENT_KINDS.FORUM_POST,
+			e.mentions ?? [],
+			communityRelays
+		);
 			const parsed = parseComment(signed);
 			parsed.npub = nip19.npubEncode(signed.pubkey);
 			if (parentId) parsed.parentId = parentId;

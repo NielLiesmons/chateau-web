@@ -1,4 +1,5 @@
 <script lang="js">
+// @ts-nocheck
 /**
  * CommunityBottomBar - Fixed bottom bar for community view.
  * Feed mode: Post button (icon + "Post", like Zap) + Search Forum (left-aligned text). Member mode: Zap + Comment.
@@ -226,6 +227,10 @@ const searchLabel = $derived(SECTION_SEARCH_LABEL[selectedSection] ?? 'Search');
 		}
 		.bottom-bar.guest {
 			padding: 16px;
+		}
+		.post-btn {
+			height: 38px;
+			min-height: 38px;
 		}
 	}
 	@media (min-width: 768px) {

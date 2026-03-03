@@ -2,7 +2,7 @@
 // @ts-nocheck
 import { page } from '$app/stores';
 import { goto } from '$app/navigation';
-import ForumPostDetail from '$lib/components/community/ForumPostDetail.svelte';
+import TaskDetail from '$lib/components/community/TaskDetail.svelte';
 
 const communityNpub = $derived(decodeURIComponent($page.params.communityNpub || ''));
 const eventId = $derived(decodeURIComponent($page.params.eventId || ''));
@@ -13,11 +13,11 @@ function onBack() {
 </script>
 
 <svelte:head>
-	<title>Post - Chateau</title>
+	<title>Task - Chateau</title>
 </svelte:head>
 
-<main class="post-page">
-	<ForumPostDetail
+<main class="task-page">
+	<TaskDetail
 		{eventId}
 		{communityNpub}
 		{onBack}
@@ -25,7 +25,7 @@ function onBack() {
 </main>
 
 <style>
-	.post-page {
+	.task-page {
 		min-height: 100dvh;
 	}
 </style>

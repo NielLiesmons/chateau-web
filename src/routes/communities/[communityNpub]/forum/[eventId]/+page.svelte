@@ -9,7 +9,7 @@
 
 	onMount(() => {
 		if (communityNpub && eventId) {
-			goto(`/communities/${encodeURIComponent(communityNpub)}/post/${encodeURIComponent(eventId)}`, { replaceState: true });
+			goto(`/communities?c=${encodeURIComponent(communityNpub)}&post=${encodeURIComponent(eventId)}`, { replaceState: true });
 		}
 	});
 </script>

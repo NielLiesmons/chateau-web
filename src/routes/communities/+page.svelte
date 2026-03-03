@@ -22,9 +22,10 @@
 	import GetStartedModal from '$lib/components/modals/GetStartedModal.svelte';
 	import SpinKeyModal from '$lib/components/modals/SpinKeyModal.svelte';
 	import OnboardingBuildingModal from '$lib/components/modals/OnboardingBuildingModal.svelte';
-	import { DEFAULT_COMMUNITY_RELAYS, EVENT_KINDS } from '$lib/config';
+	import { DEFAULT_COMMUNITY_RELAYS, COMMUNITY_WRITE_RELAYS, PROFILE_RELAYS, EVENT_KINDS } from '$lib/config';
 	import { getCurrentPubkey, signEvent, encrypt44, decrypt44, signOut, connect } from '$lib/stores/auth.svelte.js';
 	import ProfilePic from '$lib/components/common/ProfilePic.svelte';
+	import BackButton from '$lib/components/common/BackButton.svelte';
 	import ForumPost from '$lib/components/ForumPost.svelte';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
 	import CommunityBottomBar from '$lib/components/community/CommunityBottomBar.svelte';
@@ -58,7 +59,8 @@
 		{ id: 'tasks', name: 'Tasks', kinds: [30400], description: 'Tasks' },
 		{ id: 'apps', name: 'Apps', kinds: [32267], description: 'Apps' },
 		{ id: 'docs', name: 'Docs', kinds: [30101], description: 'Docs' },
-		{ id: 'wikis', name: 'Wikis', kinds: [30808], description: 'Wikis' }
+		{ id: 'wikis', name: 'Wikis', kinds: [30808], description: 'Wikis' },
+		{ id: 'forms', name: 'Forms', kinds: [30168], description: 'Membership application forms' }
 	];
 
 	const communityNpub = $derived($page.url.searchParams.get('c') || '');
@@ -97,12 +99,15 @@
 	let joinableLists = $state([]);
 	let selectedJoinList = $state(null); // { formAddress, listName }
 	let joinFormTemplate = $state(null);
+	let joinFormLoading = $state(false);
+	let joinParsedForm = $state(/** @type {ReturnType<typeof parseFormTemplate>} */(null));
 	let joinMessage = $state('');
 	/** @type {Record<string, string>} */
 	let joinFieldValues = $state({});
 	let joinConfirmationMessage = $state('');
 	let joinSubmitting = $state(false);
 	let joinError = $state('');
+	/** @deprecated use joinFormLoading instead — kept for legacy guard compat */
 	let joinFetched = $state(false);
 	let searchQuery = $state('');
 	let forumCountByPubkey = $state(new Map());
@@ -119,6 +124,7 @@
 	let communityEditName = $state('');
 	let communityEditDescription = $state('');
 	let communityEditRelays = $state('');
+	let communityEditRelayEnforced = $state(false);
 	let communityEditBlossom = $state('');
 	let communityEditSectionName = $state('');
 	let communityEditSectionListAddress = $state('');
@@ -162,6 +168,7 @@
 	let adminName = $state('');
 	let adminDescription = $state('');
 	let adminRelays = $state('');
+	let adminRelayEnforced = $state(false);
 	let adminBlossom = $state('');
 	/** Preset id -> enabled (boolean) */
 	let adminSectionEnabled = $state({});
@@ -199,7 +206,8 @@
 
 	// Resolve selected community (event + profile) from npub
 	$effect(() => {
-		if (!communityNpub || !browser) return;
+		if (!browser) return;
+		if (!communityNpub) { selectedCommunity = null; return; }
 		try {
 			const decoded = nip19.decode(communityNpub);
 			if (decoded.type !== 'npub') return;
@@ -731,6 +739,8 @@
 			adminName = selectedCommunity.displayName ?? selectedCommunity.name ?? '';
 			adminDescription = selectedCommunity.about ?? selectedCommunity.description ?? '';
 			adminRelays = (selectedCommunity.relays ?? []).join('\n');
+			const firstRTag = (selectedCommunity.raw?.tags ?? []).find((t) => t[0] === 'r');
+			adminRelayEnforced = firstRTag?.[2] === 'enforced';
 			adminBlossom = ((selectedCommunity.raw?.tags ?? []).filter((t) => t[0] === 'blossom').map((t) => t[1])).join('\n');
 			const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
 			const sections = comm?.sections ?? [];
@@ -1058,45 +1068,52 @@
 		}
 	}
 
-	/** Save list edits; overrides = { name, image, description, form } from unified list form. */
+	/** Save list edits; overrides = { name, image, description, form } from unified list form.
+	 *  Pure save — caller is responsible for managing listFormSubmitting / listFormError. */
 	async function saveListEdits(listEvent, overrides) {
-		if (!overrides || listFormSubmitting) return;
-		listFormError = '';
-		listFormSubmitting = true;
-		try {
-			const rawTags = listEvent.tags || [];
-			const newTags = rawTags
-				.filter((t) => t[0] !== 'name' && t[0] !== 'form' && t[0] !== 'image')
-				.map((t) => [...t]);
-			newTags.push(['name', (overrides.name || '').trim() || 'List']);
-			const formVal = (overrides.form || '').trim();
-			if (formVal) newTags.push(['form', formVal]);
-			const imageVal = (overrides.image || '').trim();
-			if (imageVal) newTags.push(['image', imageVal]);
-			const newEv = await signEvent({
-				kind: EVENT_KINDS.PROFILE_LIST,
-				content: String(overrides.description ?? ''),
-				tags: newTags,
-				created_at: Math.floor(Date.now() / 1000)
-			});
-			await putEvents([newEv]);
-			await publishToRelays(selectedCommunity?.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS, newEv);
-			const newParsed = parseProfileList(newEv);
-			if (listViewMoreModal?.listEvent?.id === listEvent.id) {
-				listViewMoreModal = { ...listViewMoreModal, listEvent: newEv, parsed: newParsed };
+		if (!overrides) return;
+		// Per spec, all community content goes to the community's own declared relays.
+		const writeRelays = selectedCommunity?.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
+		const rawTags = listEvent.tags || [];
+		const newTags = rawTags
+			.filter((t) => t[0] !== 'name' && t[0] !== 'form' && t[0] !== 'image')
+			.map((t) => [...t]);
+		newTags.push(['name', (overrides.name || '').trim() || 'List']);
+		const formVal = (overrides.form || '').trim();
+		if (formVal) newTags.push(['form', formVal]);
+		const imageVal = (overrides.image || '').trim();
+		if (imageVal) newTags.push(['image', imageVal]);
+		const newEv = await signEvent({
+			kind: EVENT_KINDS.PROFILE_LIST,
+			content: String(overrides.description ?? ''),
+			tags: newTags,
+			created_at: Math.floor(Date.now() / 1000)
+		});
+		await putEvents([newEv]);
+		await publishToRelays(writeRelays, newEv);
+		// Re-publish the linked form template so it is findable by joining users on the relay.
+		if (formVal) {
+			const fParts = formVal.split(':');
+			const fPubkey = fParts[1];
+			const fD = fParts.length >= 3 ? fParts.slice(2).join(':') : '';
+			if (fPubkey && fD) {
+				try {
+					const formEv = await queryEvent({ kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [fPubkey], '#d': [fD] });
+					if (formEv) await publishToRelays(writeRelays, formEv);
+				} catch { /* non-fatal */ }
 			}
-			membersListData = membersListData.map((item) =>
-				item.listEvent?.id === listEvent.id ? { ...item, listEvent: newEv, parsed: newParsed } : item
-			);
-			adminProfileLists = adminProfileLists.map((entry) =>
-				entry.listEvent?.id === listEvent.id ? { ...entry, listEvent: newEv, parsed: newParsed, name: newParsed?.name ?? entry.name, image: newParsed?.image ?? null } : entry
-			);
-			listFormModal = null;
-		} catch (e) {
-			listFormError = e?.message || 'Failed to save list';
-		} finally {
-			listFormSubmitting = false;
 		}
+		const newParsed = parseProfileList(newEv);
+		if (listViewMoreModal?.listEvent?.id === listEvent.id) {
+			listViewMoreModal = { ...listViewMoreModal, listEvent: newEv, parsed: newParsed };
+		}
+		membersListData = membersListData.map((item) =>
+			item.listEvent?.id === listEvent.id ? { ...item, listEvent: newEv, parsed: newParsed } : item
+		);
+		adminProfileLists = adminProfileLists.map((entry) =>
+			entry.listEvent?.id === listEvent.id ? { ...entry, listEvent: newEv, parsed: newParsed, name: newParsed?.name ?? entry.name, image: newParsed?.image ?? null } : entry
+		);
+		listFormModal = null;
 	}
 
 	function openViewMoreModal(item) {
@@ -1141,7 +1158,7 @@
 					created_at: Math.floor(Date.now() / 1000)
 				});
 			await putEvents([listEv]);
-			const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+			const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
 			await publishToRelays(relays, listEv);
 			const newParsed = parseProfileList(listEv);
 			const newListItem = { listAddress: `30000:${listEv.pubkey}:${dTag}`, name: newParsed?.name ?? listName, image: newParsed?.image ?? null, listEvent: listEv, parsed: newParsed };
@@ -1179,81 +1196,105 @@
 		if (joinStep !== 'list') return;
 		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
 		const sections = comm?.sections ?? [];
-		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+		// Per spec: check community's own declared relays first; fall back to write-safe relays.
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
 		(async () => {
-			const list = [];
-			const addrs = (sec) => sec.profileListAddresses ?? (sec.profileListAddress ? [sec.profileListAddress] : []);
-			for (const sec of sections) {
-				for (const listAddress of addrs(sec)) {
-					if (!listAddress) continue;
-					const parts = listAddress.split(':');
-					const dTag = parts.length >= 3 ? parts.slice(2).join(':') : '';
-					let listEv = await queryEvent({
-						kinds: [EVENT_KINDS.PROFILE_LIST],
-						authors: [selectedCommunity.pubkey],
-						'#d': [dTag]
-					});
-					if (!listEv) {
-						listEv = await fetchProfileListFromRelays(relays, listAddress);
-						if (listEv) await putEvents([listEv]);
-					}
-					const parsed = listEv ? parseProfileList(listEv) : null;
-					if (!parsed?.form) continue;
-					if (parsed.members?.includes(currentPubkey)) continue;
-					list.push({
-						formAddress: parsed.form,
-						listName: parsed.name || sec.name || 'Members',
-						listAddress
-					});
+		const list = [];
+		const seenAddresses = new Set();
+		const addrs = (sec) => sec.profileListAddresses ?? (sec.profileListAddress ? [sec.profileListAddress] : []);
+		for (const sec of sections) {
+			for (const listAddress of addrs(sec)) {
+				if (!listAddress || seenAddresses.has(listAddress)) continue;
+				seenAddresses.add(listAddress);
+				const parts = listAddress.split(':');
+				const dTag = parts.length >= 3 ? parts.slice(2).join(':') : '';
+				let listEv = await queryEvent({
+					kinds: [EVENT_KINDS.PROFILE_LIST],
+					authors: [selectedCommunity.pubkey],
+					'#d': [dTag]
+				});
+				if (!listEv) {
+					listEv = await fetchProfileListFromRelays(relays, listAddress);
+					if (listEv) await putEvents([listEv]);
 				}
+				const parsed = listEv ? parseProfileList(listEv) : null;
+				if (!parsed?.form) continue;
+				if (parsed.members?.includes(currentPubkey)) continue;
+				// Pre-fetch & cache the form template now, while we're already connected to relays.
+				// This makes the form appear instantly when the user taps the list item.
+				const fParts = parsed.form.split(':');
+				const fPubkey = fParts[1];
+				const fD = fParts.length >= 3 ? fParts.slice(2).join(':') : '';
+				const cachedForm = await queryEvent({ kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [fPubkey], '#d': [fD] });
+				if (!cachedForm && fPubkey) {
+					try {
+						const forms = await fetchFromRelays(relays, { kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [fPubkey], limit: 100 });
+						if (forms.length) await putEvents(forms);
+					} catch { /* non-fatal */ }
+				}
+				list.push({
+					formAddress: parsed.form,
+					listName: parsed.name || sec.name || 'Members',
+					listAddress
+				});
 			}
-			joinableLists = list;
+		}
+		joinableLists = list;
 		})();
 	});
 
-	// When form step and selected list, fetch form template (30168)
-	$effect(() => {
-		if (!joinModalOpen || joinStep !== 'form' || !selectedJoinList?.formAddress || !selectedCommunity?.pubkey || joinFetched) {
-		if (!joinModalOpen) {
-			joinFormTemplate = null;
-			joinFetched = false;
-			joinMessage = '';
-			joinFieldValues = {};
-			joinConfirmationMessage = '';
-			joinError = '';
+	/**
+	 * Fetch the form template for the selected join list.
+	 * Hard 2-second total deadline: if the form isn't found in time we still show
+	 * a usable plain-message join form — the user is NEVER stuck on "Loading form…".
+	 */
+	async function fetchJoinForm(formAddressVal) {
+		joinFormTemplate = null;
+		joinParsedForm = null;
+		console.log('[fetchJoinForm] called with:', formAddressVal);
+		if (!formAddressVal || !selectedCommunity?.pubkey) return;
+		const parts = formAddressVal.split(':');
+		if (parts.length < 3 || parts[0] !== String(EVENT_KINDS.FORM_TEMPLATE)) return;
+		const formD = parts.slice(2).join(':');
+		const communityPubkey = selectedCommunity.pubkey;
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
+		console.log('[fetchJoinForm] formD:', formD, '| communityPubkey:', communityPubkey);
+
+		function pickEvent(events) {
+			return events?.find((e) => (e.tags?.find((t) => t[0] === 'd')?.[1] ?? '') === formD) ?? null;
 		}
+
+		// Step 1: local DB
+		const localAll = await queryEvents({ kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [communityPubkey], limit: 100 });
+		console.log('[fetchJoinForm] localAll count:', localAll.length, '| d-tags:', localAll.map(e => e.tags?.find(t=>t[0]==='d')?.[1]));
+		const local = pickEvent(localAll);
+		console.log('[fetchJoinForm] local match:', local ? `found (d=${local.tags?.find(t=>t[0]==='d')?.[1]}, fields=${local.tags?.filter(t=>t[0]==='field').length})` : 'not found');
+		if (local) {
+			joinFormTemplate = local;
+			joinParsedForm = parseFormTemplate(local);
 			return;
 		}
-		joinFetched = true;
-		joinFormTemplate = null;
-		joinError = '';
-		const formAddressVal = selectedJoinList.formAddress;
-		const parts = formAddressVal.split(':');
-		const formPubkey = parts[1];
-		const formD = parts.length >= 3 ? parts.slice(2).join(':') : '';
-		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
-		(async () => {
-			try {
-				let ev = await queryEvent({
-					kinds: [EVENT_KINDS.FORM_TEMPLATE],
-					authors: [formPubkey],
-					'#d': [formD]
-				});
-				if (!ev) {
-					ev = await fetchFormTemplateFromRelays(relays, formAddressVal);
-					if (ev) await putEvents([ev]);
-				}
+
+		// Step 2: relay fetch
+		try {
+			const fromRelay = await Promise.race([
+				fetchFromRelays(relays, { kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [communityPubkey], limit: 100 }, { timeout: 3000 }),
+				new Promise((resolve) => setTimeout(() => resolve([]), 3000))
+			]);
+			console.log('[fetchJoinForm] relay count:', fromRelay?.length, '| d-tags:', fromRelay?.map(e => e.tags?.find(t=>t[0]==='d')?.[1]));
+			if (fromRelay?.length) await putEvents(fromRelay);
+			const ev = pickEvent(fromRelay);
+			if (ev) {
 				joinFormTemplate = ev;
-			} catch (e) {
-				joinError = e?.message || 'Failed to load form';
+				joinParsedForm = parseFormTemplate(ev);
 			}
-		})();
-	});
+		} catch (e) { console.error('[fetchJoinForm] relay error:', e); }
+	}
 
 	async function submitJoinForm() {
 		const formAddr = selectedJoinList?.formAddress;
 		if (!formAddr || !selectedCommunity?.pubkey || !currentPubkey) return;
-		const parsed = joinFormTemplate ? parseFormTemplate(joinFormTemplate) : null;
+		const parsed = joinParsedForm;
 		// Validate required fields
 		for (const field of parsed?.fields ?? []) {
 			if (field.required && !(joinFieldValues[field.id] ?? '').trim()) {
@@ -1272,15 +1313,24 @@
 		const responseTags = hasFields
 			? (parsed?.fields ?? []).map((f) => ['response', f.id, joinFieldValues[f.id] ?? ''])
 			: [['response', 'message', joinMessage.trim() || ' ']];
-			let eventContent = '';
-			/** @type {string[][]} */
-			const eventTags = [['a', formAddr], ['p', selectedCommunity.pubkey]];
-			if (isPublic) {
-				responseTags.forEach((t) => eventTags.push(t));
-			} else {
+		let eventContent = '';
+		/** @type {string[][]} */
+		const eventTags = [['a', formAddr], ['p', selectedCommunity.pubkey]];
+		if (isPublic) {
+			responseTags.forEach((t) => eventTags.push(t));
+		} else {
+			try {
 				eventContent = await encrypt44(selectedCommunity.pubkey, JSON.stringify(responseTags));
 				eventTags.push(['encrypted']);
+			} catch (encErr) {
+				// NIP-44 not supported by this signer — send as plaintext instead
+				if (String(encErr?.message).includes('not supported')) {
+					responseTags.forEach((t) => eventTags.push(t));
+				} else {
+					throw encErr;
+				}
 			}
+		}
 			const signed = await signEvent({
 				kind: EVENT_KINDS.FORM_RESPONSE,
 				content: eventContent,
@@ -1302,6 +1352,8 @@
 		selectedJoinList = null;
 		joinableLists = [];
 		joinFormTemplate = null;
+		joinParsedForm = null;
+		joinFormLoading = false;
 		joinFetched = false;
 		joinMessage = '';
 		joinFieldValues = {};
@@ -1412,7 +1464,10 @@
 			for (const t of raw.tags ?? []) {
 				if (t[0] !== 'r' && t[0] !== 'blossom') newTags.push([...t]);
 			}
-			relayList.forEach((r) => newTags.push(['r', r]));
+			relayList.forEach((r, i) => {
+				if (i === 0 && communityEditRelayEnforced) newTags.push(['r', r, 'enforced']);
+				else newTags.push(['r', r]);
+			});
 			blossomList.forEach((b) => newTags.push(['blossom', b]));
 			const ev = await signEvent({
 				kind: EVENT_KINDS.COMMUNITY,
@@ -1457,10 +1512,13 @@
 			await publishToRelays(relays, profileEv);
 
 			// 2. Kind 10222 community (r, blossom, content sections)
-			const blossomList = adminBlossom.split(/[\n,]+/).map((b) => b.trim()).filter(Boolean);
-			const newTags = [];
-			relayList.forEach((r) => newTags.push(['r', r]));
-			blossomList.forEach((b) => newTags.push(['blossom', b]));
+		const blossomList = adminBlossom.split(/[\n,]+/).map((b) => b.trim()).filter(Boolean);
+		const newTags = [];
+		relayList.forEach((r, i) => {
+			if (i === 0 && adminRelayEnforced) newTags.push(['r', r, 'enforced']);
+			else newTags.push(['r', r]);
+		});
+		blossomList.forEach((b) => newTags.push(['blossom', b]));
 			for (const preset of ADMIN_SECTION_PRESETS) {
 				if (!adminSectionEnabled[preset.id]) continue;
 				const addrs = Array.isArray(adminSectionListAddress[preset.id])
@@ -1536,6 +1594,8 @@
 		adminName = selectedCommunity.displayName ?? selectedCommunity.name ?? '';
 		adminDescription = selectedCommunity.about ?? selectedCommunity.description ?? '';
 		adminRelays = (selectedCommunity.relays ?? []).join('\n');
+		const _firstRTag = (selectedCommunity.raw?.tags ?? []).find((t) => t[0] === 'r');
+		adminRelayEnforced = _firstRTag?.[2] === 'enforced';
 		adminBlossom = ((selectedCommunity.raw?.tags ?? []).filter((t) => t[0] === 'blossom').map((t) => t[1])).join('\n');
 		// Parse content sections synchronously so Content tab is populated immediately
 		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
@@ -1595,21 +1655,26 @@
 		formTemplateSubmitting = true;
 		formTemplateError = '';
 		try {
-			const relays = selectedCommunity?.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
-			// Preserve unrelated existing tags (auto_response, etc.); drop fields we now manage
+		// Per the community spec, all community content must go to the community's own declared relays.
+		// If the community has no declared relays, fall back to COMMUNITY_WRITE_RELAYS (excludes
+		// relay.primal.net which is read-only and silently drops all write attempts).
+		const relays = selectedCommunity?.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
+		// Preserve unrelated existing tags (auto_response, etc.); drop fields we now manage
 			const managedKeys = new Set(['name', 'description', 'd', 'field', 'confirmation_message', 'public']);
 			const existingTags = formTemplateModal?.mode === 'edit'
 				? (formTemplateModal.event?.tags ?? []).filter((t) => !managedKeys.has(t[0]))
 				: [];
-			const fieldTags = formTemplateFields
-				.filter((f) => f.id.trim() && f.label.trim())
-				.map((f) => {
-					const opts = {};
-					if (f.required) opts.required = true;
-					if (f.placeholder) opts.placeholder = f.placeholder;
-					if (f.selectOptions?.length) opts.options = f.selectOptions;
-					return ['field', f.id.trim(), f.type, f.label.trim(), f.defaultValue ?? '', JSON.stringify(opts)];
-				});
+		const fieldTags = formTemplateFields
+			.filter((f) => f.label.trim())
+			.map((f) => {
+				// Auto-generate an ID from the label if the admin left it blank
+				const id = f.id.trim() || f.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+				const opts = {};
+				if (f.required) opts.required = true;
+				if (f.placeholder) opts.placeholder = f.placeholder;
+				if (f.selectOptions?.length) opts.options = f.selectOptions;
+				return ['field', id, f.type, f.label.trim(), f.defaultValue ?? '', JSON.stringify(opts)];
+			});
 			const tags = [
 				['d', formTemplateDTag.trim()],
 				['name', formTemplateName.trim()],
@@ -1655,6 +1720,8 @@
 		if (target === 'description' || target === 'full') communityEditDescription = selectedCommunity?.about ?? selectedCommunity?.description ?? '';
 		if (target === 'relays' || target === 'full') {
 			communityEditRelays = (selectedCommunity?.relays ?? []).join('\n');
+			const _editFirstRTag = (selectedCommunity?.raw?.tags ?? []).find((t) => t[0] === 'r');
+			communityEditRelayEnforced = _editFirstRTag?.[2] === 'enforced';
 			communityEditBlossom = ((selectedCommunity?.raw?.tags ?? []).filter((t) => t[0] === 'blossom').map((t) => t[1])).join('\n');
 		}
 		const sectionMatch = target && String(target).match(/^section-(\d+)$/);
@@ -1670,10 +1737,6 @@
 	}
 
 	function selectCommunity(npub) {
-		if (typeof window !== 'undefined' && window.innerWidth < 768) {
-			goto(`/communities/${encodeURIComponent(npub)}`);
-			return;
-		}
 		goto(`/communities?c=${encodeURIComponent(npub)}`, { replaceState: true });
 	}
 
@@ -1907,7 +1970,7 @@
 	<meta name="description" content="Browse and join Nostr communities" />
 </svelte:head>
 
-<main class="communities-layout">
+<main class="communities-layout" class:community-open={!!selectedCommunity}>
 	<!-- Left column: fixed header + communities list -->
 	<aside class="left-column">
 		<header class="left-header">
@@ -2063,13 +2126,16 @@
 	{:else}
 			<div class="right-header-block">
 				<div class="right-header-row1">
+					<span class="mobile-community-back">
+						<BackButton onBack={() => goto('/communities', { replaceState: true })} />
+					</span>
 					<button type="button" class="community-info-row-tap" onclick={() => (communityInfoModalOpen = true)} aria-label="Community info">
-						<ProfilePic
-							pictureUrl={selectedCommunity.picture}
-							name={selectedCommunity.displayName || selectedCommunity.name}
-							pubkey={selectedCommunity.pubkey}
-							size="md"
-						/>
+					<ProfilePic
+						pictureUrl={selectedCommunity.picture}
+						name={selectedCommunity.displayName || selectedCommunity.name}
+						pubkey={selectedCommunity.pubkey}
+						size="bubble"
+					/>
 						<h1 class="community-display-name">{selectedCommunity.displayName || selectedCommunity.name || 'Unnamed'}</h1>
 					</button>
 				<div class="header-icon-group">
@@ -2341,6 +2407,10 @@
 						<div class="join-form-field">
 							<label class="labels-label" for="edit-community-relays">Relays (one per line or comma-separated)</label>
 							<InputTextField bind:value={communityEditRelays} placeholder="wss://…" singleLine={false} size="medium" id="edit-community-relays" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+							<label class="relay-enforced-label">
+								<input type="checkbox" bind:checked={communityEditRelayEnforced} />
+								Main relay is enforced (relay filters membership — skip client-side author filter)
+							</label>
 						</div>
 						<div class="join-form-field">
 							<label class="labels-label" for="edit-community-blossom">Blossom servers (one per line or comma-separated)</label>
@@ -2401,6 +2471,10 @@
 							<div class="join-form-field">
 								<label class="labels-label" for="edit-full-relays">Relays (one per line or comma-separated)</label>
 								<InputTextField bind:value={communityEditRelays} placeholder="wss://…" singleLine={false} size="medium" id="edit-full-relays" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+								<label class="relay-enforced-label">
+									<input type="checkbox" bind:checked={communityEditRelayEnforced} />
+									Main relay is enforced (relay filters membership — skip client-side author filter)
+								</label>
 							</div>
 							<div class="join-form-field">
 								<label class="labels-label" for="edit-full-blossom">Blossom servers</label>
@@ -2464,6 +2538,10 @@
 					<div class="admin-form-section">
 						<label class="labels-label" for="crown-admin-relays">Relays (one per line or comma-separated)</label>
 						<InputTextField bind:value={adminRelays} placeholder="wss://…" singleLine={false} size="medium" id="crown-admin-relays" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+						<label class="relay-enforced-label">
+							<input type="checkbox" bind:checked={adminRelayEnforced} />
+							Main relay is enforced (relay filters membership — skip client-side author filter)
+						</label>
 					</div>
 					<div class="admin-form-section">
 						<label class="labels-label" for="crown-admin-blossom">Blossom servers</label>
@@ -2823,17 +2901,32 @@
 					/>
 				</div>
 				<div class="join-form-field">
-					<label class="labels-label" for="list-form-join">Join form (Nostr event reference)</label>
-					<InputTextField
-						bind:value={listFormFormAddress}
-						placeholder="naddr or 30168:pubkey:d-tag (optional)"
-						singleLine={true}
-						id="list-form-join"
-						oninput={() => {}}
-						onkeydown={() => {}}
-						onfocus={() => {}}
-						onblur={() => {}}
-					/>
+					<label class="labels-label" for="list-form-join">Join form</label>
+					{#if adminFormTemplates.length > 0}
+						<select
+							id="list-form-join"
+							class="list-form-select"
+							value={listFormFormAddress}
+							onchange={(e) => { listFormFormAddress = e.currentTarget.value; }}
+						>
+							<option value="">— No form —</option>
+							{#each adminFormTemplates as tpl (tpl.formAddr)}
+								<option value={tpl.formAddr}>{tpl.parsed?.name ?? tpl.formAddr}</option>
+							{/each}
+						</select>
+					{:else}
+						<InputTextField
+							bind:value={listFormFormAddress}
+							placeholder="30168:pubkey:d-tag (optional)"
+							singleLine={true}
+							id="list-form-join"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+						<p class="list-form-hint">No forms found — create one in the Forms tab first.</p>
+					{/if}
 				</div>
 				{#if listFormError}
 					<p class="text-sm text-red-500">{listFormError}</p>
@@ -2984,8 +3077,7 @@
 />
 <OnboardingBuildingModal bind:open={onboardingBuildingModalOpen} zIndex={56} />
 
-{#key joinModalOpen ? 'open' : 'closed'}
-<Modal open={joinModalOpen} onClose={closeJoinModal} ariaLabel="Join community">
+<Modal open={joinModalOpen} onClose={closeJoinModal} ariaLabel="Join community" closeButtonMobile={true}>
 	{#if joinModalOpen}
 		<h2 class="join-modal-title">Join</h2>
 		{#if !currentPubkey}
@@ -3005,7 +3097,7 @@
 							<button
 								type="button"
 								class="btn-secondary-large btn-secondary-modal join-list-btn"
-								onclick={() => { selectedJoinList = item; joinFetched = false; joinStep = 'form'; }}
+								onclick={() => { selectedJoinList = item; joinStep = 'form'; fetchJoinForm(item.formAddress); }}
 							>
 								{item.listName}
 							</button>
@@ -3017,14 +3109,6 @@
 				<button type="button" class="btn-secondary-small" onclick={closeJoinModal}>Cancel</button>
 			</div>
 		{:else if joinStep === 'form'}
-			{#if joinError && !joinFormTemplate}
-				<p class="text-sm text-red-500">{joinError}</p>
-				<button type="button" class="btn-secondary-small" onclick={() => { joinStep = 'list'; selectedJoinList = null; }}>Back</button>
-			{:else if joinFormTemplate === null && !joinError}
-				<p class="text-sm text-muted-foreground">Loading form…</p>
-				<button type="button" class="btn-secondary-small" onclick={() => { joinStep = 'list'; selectedJoinList = null; }}>Cancel</button>
-			{:else}
-				{@const joinParsedForm = joinFormTemplate ? parseFormTemplate(joinFormTemplate) : null}
 				{#if joinParsedForm?.name}
 					<p class="join-form-subtitle">{joinParsedForm.name}</p>
 				{/if}
@@ -3103,13 +3187,13 @@
 						<p class="text-sm text-red-500">{joinError}</p>
 					{/if}
 					<div class="join-modal-actions">
-						<button type="button" class="btn-secondary-small" onclick={() => { joinStep = 'list'; selectedJoinList = null; joinError = ''; }} disabled={joinSubmitting}>Back</button>
+						<button type="button" class="btn-secondary-small" onclick={() => { joinStep = 'list'; selectedJoinList = null; joinFormTemplate = null; joinParsedForm = null; joinError = ''; }} disabled={joinSubmitting}>Back</button>
+						<button type="button" class="btn-secondary-small" onclick={closeJoinModal} disabled={joinSubmitting}>Cancel</button>
 						<button type="submit" class="btn-primary-small" disabled={joinSubmitting}>
 							{joinSubmitting ? 'Submitting…' : 'Submit request'}
 						</button>
 					</div>
 				</form>
-			{/if}
 		{:else if joinStep === 'done'}
 			<div class="join-done-wrap">
 				{#if joinConfirmationMessage}
@@ -3124,7 +3208,6 @@
 		{/if}
 	{/if}
 </Modal>
-{/key}
 		</div>
 	</div>
 </main>
@@ -3401,6 +3484,9 @@
 		justify-content: center;
 		padding: 2rem;
 		min-height: 200px;
+	}
+	.mobile-community-back {
+		display: none;
 	}
 	.right-header-block {
 		flex-shrink: 0;
@@ -4169,6 +4255,41 @@
 	.join-form-field {
 		width: 100%;
 	}
+	.list-form-select {
+		width: 100%;
+		padding: 8px 10px;
+		border-radius: 8px;
+		border: 1px solid hsl(var(--white15));
+		background: hsl(var(--white8));
+		color: hsl(var(--foreground));
+		font-size: 0.9rem;
+		outline: none;
+		cursor: pointer;
+		appearance: auto;
+	}
+	.list-form-select:focus {
+		border-color: hsl(var(--blurple));
+	}
+	.list-form-hint {
+		margin-top: 4px;
+		font-size: 0.78rem;
+		color: hsl(var(--white66));
+	}
+	.relay-enforced-label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 8px;
+		font-size: 0.8125rem;
+		color: hsl(var(--muted-foreground));
+		cursor: pointer;
+	}
+	.relay-enforced-label input[type="checkbox"] {
+		width: 15px;
+		height: 15px;
+		flex-shrink: 0;
+		cursor: pointer;
+	}
 	.labels-label {
 		display: block;
 		margin-bottom: 6px;
@@ -4312,17 +4433,30 @@
 	@media (max-width: 767px) {
 		.communities-layout {
 			grid-template-columns: 1fr;
-			grid-template-rows: auto minmax(0, 1fr);
 		}
+		/* No community selected: show list full-screen */
 		.left-column {
 			border-right: none;
-			border-bottom: 1px solid hsl(var(--white11));
-			max-height: 40vh;
-			min-height: 120px;
+			border-bottom: none;
+			height: 100vh;
 			overflow-y: auto;
 		}
 		.right-column {
-			min-height: 0;
+			display: none;
+		}
+		/* Community selected: hide list, show detail full-screen */
+		.communities-layout.community-open .left-column {
+			display: none;
+		}
+		.communities-layout.community-open .right-column {
+			display: flex;
+			flex-direction: column;
+			height: 100vh;
+		}
+		.mobile-community-back {
+			display: flex;
+			align-items: center;
+			flex-shrink: 0;
 		}
 	}
 </style>

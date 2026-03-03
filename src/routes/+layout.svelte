@@ -2,7 +2,6 @@
 import { onMount } from 'svelte';
 import { browser } from '$app/environment';
 import { initAuth } from '$lib/stores/auth.svelte.js';
-import { initCatalogs } from '$lib/stores/catalogs.svelte.js';
 import { initOnlineStatus, isOnline } from '$lib/stores/online.svelte.js';
 import { startProfileSearchBackground } from '$lib/services/profile-search';
 import { startLiveSubscriptions, stopLiveSubscriptions } from '$lib/nostr/service';
@@ -20,7 +19,6 @@ onMount(() => {
 		startLiveSubscriptions();
 		evictOldEvents();
 		startProfileSearchBackground();
-		initCatalogs();
 	}
 	return () => {
 		stopLiveSubscriptions();

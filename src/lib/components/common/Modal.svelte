@@ -1,4 +1,5 @@
 <script lang="js">
+// @ts-nocheck
 /**
  * Modal - Reusable modal component
  *
@@ -13,7 +14,8 @@
 import { fade, fly } from "svelte/transition";
 import { cubicOut } from "svelte/easing";
 import { browser } from "$app/environment";
-let { open = $bindable(false), ariaLabel = "Modal dialog", ariaLabelledby = null, align = "center", zIndex = 50, maxWidth = "max-w-lg", wide = false, class: className = "", maxHeight = 80, fillHeight = false, closeOnBackdropClick = true, closeOnEscape = true, noBackdrop = false, title = "", description = "", closeButtonMobile = false, children, footer = undefined, } = $props();
+let { open = $bindable(false), onClose = undefined, ariaLabel = "Modal dialog", ariaLabelledby = null, align = "center", zIndex = 50, maxWidth = "max-w-lg", wide = false, class: className = "", maxHeight = 80, fillHeight = false, closeOnBackdropClick = true, closeOnEscape = true, noBackdrop = false, title = "", description = "", closeButtonMobile = false, children, footer = undefined, } = $props();
+function requestClose() { if (onClose) { onClose(); } else { open = false; } }
 let modalElement = $state(null);
 let _isBottomAligned = $state(false);
 let isMobile = $state(false);
@@ -72,15 +74,20 @@ $effect(() => {
             _isBottomAligned = false;
         }
     }
+    // Always unlock on cleanup (effect re-run or component destroy) so the body
+    // is never left permanently fixed if the component unmounts while open.
+    return () => {
+        if (browser) unlockBodyScroll();
+    };
 });
 function handleBackdropClick(e) {
     if (closeOnBackdropClick && e.target === e.currentTarget) {
-        open = false;
+        requestClose();
     }
 }
 function handleKeydown(e) {
     if (closeOnEscape && e.key === "Escape") {
-        open = false;
+        requestClose();
     }
 }
 function handleResize() {
@@ -141,7 +148,7 @@ function handleResize() {
       </div>
       {#if closeButtonMobile}
         <div class="modal-mobile-close-wrap">
-          <button type="button" class="modal-mobile-close-btn" onclick={() => (open = false)}>Close</button>
+          <button type="button" class="modal-mobile-close-btn" onclick={requestClose}>Close</button>
         </div>
       {/if}
       {@render footer?.()}

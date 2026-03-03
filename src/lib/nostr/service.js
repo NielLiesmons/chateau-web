@@ -85,25 +85,10 @@ export function startLiveSubscriptions() {
 		oneose() {
 			// Don't close — keep connection open for live updates
 		},
-		onclose(reasons) {
-			console.log('[Service] Catalog subscription closed:', reasons);
-		}
+		onclose() {}
 	};
 
-	// Separate subscriptions per filter (subscribeMany takes a single filter)
-	// Limits = POLL_LIMIT (3 × page size) — load-more handles deeper data
-	activeSubscriptions.push(
-		p.subscribeMany(DEFAULT_CATALOG_RELAYS, { kinds: [EVENT_KINDS.APP], ...PLATFORM_FILTER, limit: APPS_POLL_LIMIT }, subParams)
-	);
-	// Releases: needed for app detail pages + liveQuery reactivity
-	activeSubscriptions.push(
-		p.subscribeMany(DEFAULT_CATALOG_RELAYS, { kinds: [EVENT_KINDS.RELEASE], limit: APPS_POLL_LIMIT }, subParams)
-	);
-	// Stacks
-	activeSubscriptions.push(
-		p.subscribeMany(DEFAULT_CATALOG_RELAYS, { kinds: [EVENT_KINDS.APP_STACK], ...PLATFORM_FILTER, limit: STACKS_POLL_LIMIT }, subParams)
-	);
-	// Communities (Chateau)
+	// Communities only — Chateau has no need for Zapstore catalog data
 	activeSubscriptions.push(
 		p.subscribeMany(DEFAULT_COMMUNITY_RELAYS, { kinds: [EVENT_KINDS.COMMUNITY], limit: 100 }, subParams)
 	);
@@ -528,15 +513,18 @@ export async function queryCommentsFromStore(pubkey, identifier, aTagKind = 3226
 /**
  * Fetch comments from relays and store in Dexie.
  * For non-replaceable event roots (e.g. forum posts) pass options.eventId instead of pubkey/identifier.
+ * Pass options.authors (string[]) to add a server-side authors filter (non-enforced relay use case).
  */
 export async function fetchComments(pubkey, identifier, options = {}) {
-	const { timeout = 5000, signal, relays = SOCIAL_RELAYS, aTagKind = 32267, eventId = null } = options;
+	const { timeout = 5000, signal, relays = SOCIAL_RELAYS, aTagKind = 32267, eventId = null, authors = null } = options;
 	if (signal?.aborted) return [];
+
+	const authorsFilter = authors?.length ? { authors } : {};
 
 	// Non-replaceable event root: filter by #e / #E tags
 	if (eventId) {
-		const filterLower = { kinds: [1111], '#e': [eventId], limit: 500 };
-		const filterUpper = { kinds: [1111], '#E': [eventId], limit: 500 };
+		const filterLower = { kinds: [1111], '#e': [eventId], limit: 500, ...authorsFilter };
+		const filterUpper = { kinds: [1111], '#E': [eventId], limit: 500, ...authorsFilter };
 		const [eventsLower, eventsUpper] = await Promise.all([
 			fetchFromRelays(relays, filterLower, { timeout, signal }),
 			fetchFromRelays(relays, filterUpper, { timeout, signal })
@@ -589,13 +577,14 @@ export async function fetchCommentRepliesByE(eventIds, options = {}) {
 
 /**
  * Fetch NIP-22 (kind 1111) comments that reference a forum post (#e = eventId).
+ * Pass options.authors (string[]) for server-side member filtering on non-enforced relays.
  */
 export async function fetchForumPostComments(eventId, options = {}) {
-	const { timeout = 5000, signal, relays = DEFAULT_COMMUNITY_RELAYS } = options;
+	const { timeout = 5000, signal, relays = DEFAULT_COMMUNITY_RELAYS, authors = null } = options;
 	if (signal?.aborted || !eventId || typeof eventId !== 'string') return [];
 	const id = eventId.trim().toLowerCase();
 	if (!/^[a-f0-9]{64}$/.test(id)) return [];
-	return fetchComments(null, null, { timeout, signal, relays, eventId: id });
+	return fetchComments(null, null, { timeout, signal, relays, eventId: id, authors });
 }
 
 /**
@@ -751,7 +740,7 @@ export function parseZapReceipt(event) {
  * @param {number} [parentKind] - Kind of parent (e.g. 1111 or 9735)
  * @param {string[]} [mentions] - Pubkeys mentioned in content (p tags for notifications)
  */
-export async function publishComment(content, target, signEvent, emojiTags, parentEventId, replyToPubkey, parentKind, mentions) {
+export async function publishComment(content, target, signEvent, emojiTags, parentEventId, replyToPubkey, parentKind, mentions, relayUrls = null) {
 	if (!content?.trim()) throw new Error('Comment content is required');
 	if (!target?.pubkey?.trim()) throw new Error('Comment target pubkey is required');
 
@@ -837,8 +826,11 @@ export async function publishComment(content, target, signEvent, emojiTags, pare
 	const signed = await signEvent(template);
 	const p = getPool();
 
-	// Publish to relays — pool.publish returns an array of promises (one per relay)
-	await Promise.allSettled(p.publish(SOCIAL_RELAYS, signed));
+	// Publish to community relay(s) + social relays for broad reach
+	const publishRelays = relayUrls?.length
+		? [...new Set([...relayUrls, ...SOCIAL_RELAYS])]
+		: SOCIAL_RELAYS;
+	await Promise.allSettled(p.publish(publishRelays, signed));
 
 	// Write to Dexie
 	await putEvents([signed]);

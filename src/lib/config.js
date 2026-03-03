@@ -22,6 +22,12 @@ export const PROFILE_RELAYS = [
     ...DEFAULT_SOCIAL_RELAYS,
     ...DEFAULT_CATALOG_RELAYS,
 ];
+// Write-safe community relays — excludes relay.primal.net which is read-only and silently drops
+// writes. Used as a last-resort fallback when a community declares no 'r' relays of its own.
+export const COMMUNITY_WRITE_RELAYS = [
+    'wss://relay.damus.io',
+    'wss://nos.lol',
+];
 // Server-side poll interval (ms) — how often the server polls upstream relays
 export const POLL_INTERVAL_MS = 60_000;
 // Relay subscription timeout (ms after first EOSE)
