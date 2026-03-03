@@ -1,4 +1,5 @@
 <script lang="js">
+// @ts-nocheck
 	import { nip19 } from 'nostr-tools';
 	import {
 		queryEvent,
@@ -18,7 +19,8 @@
 		fetchLabelEvents
 	} from '$lib/nostr';
 	import { EVENT_KINDS, DEFAULT_COMMUNITY_RELAYS } from '$lib/config';
-	import { renderMarkdown } from '$lib/utils/markdown';
+	import { tokenizeNostrMarkdown } from '$lib/utils/markdown';
+	import MarkdownBody from '$lib/components/common/MarkdownBody.svelte';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
 	import DetailHeader from '$lib/components/layout/DetailHeader.svelte';
 	import SocialTabs from '$lib/components/social/SocialTabs.svelte';
@@ -311,7 +313,14 @@
 		};
 	}
 
-	const descriptionHtml = $derived(post?.content ? renderMarkdown(post.content) : '');
+	const postEmojiMap = $derived(Object.fromEntries(
+		(rawPostEvent?.tags ?? [])
+			.filter((t) => t[0] === 'emoji' && t[1] && t[2])
+			.map((t) => [t[1], t[2]])
+	));
+	const descriptionTokens = $derived(
+		post?.content ? tokenizeNostrMarkdown(post.content, { emojiMap: postEmojiMap }) : []
+	);
 	const npub = $derived(
 		post?.pubkey
 			? (() => {
@@ -444,10 +453,10 @@
 		<div class="content-scroll">
 			<div class="content-inner">
 			<h1 class="post-title">{post.title}</h1>
-			<div class="description-container" class:expanded={descriptionExpanded}>
-					<div class="post-description prose prose-invert max-w-none" use:checkTruncation>
-						{@html descriptionHtml}
-					</div>
+		<div class="description-container" class:expanded={descriptionExpanded}>
+				<div class="post-description" use:checkTruncation>
+					<MarkdownBody tokens={descriptionTokens} />
+				</div>
 					{#if isTruncated && !descriptionExpanded}
 						<div class="description-fade" aria-hidden="true"></div>
 						<button
@@ -514,7 +523,7 @@
 			</div>
 		</div>
 
-		{#if post && zapTarget}
+		{#if post && zapTarget && getIsSignedIn()}
 			<BottomBar
 				publisherName={authorProfile?.displayName ?? authorProfile?.name ?? ''}
 				contentType="forum"
@@ -551,7 +560,7 @@
 		padding-right: 0;
 	}
 	.content-inner {
-		padding-bottom: 16px;
+		padding: 0 16px 16px;
 		max-width: 100%;
 	}
 	.post-title {
@@ -575,17 +584,8 @@
 	}
 	.post-description {
 		line-height: 1.6;
-		color: hsl(var(--foreground) / 0.9);
-	}
-	.post-description :global(p) {
-		margin-top: 0.5em;
-		margin-bottom: 0.5em;
-	}
-	.post-description :global(p:first-child) {
-		margin-top: 0;
-	}
-	.post-description :global(p:last-child) {
-		margin-bottom: 0;
+		color: hsl(var(--foreground));
+		font-size: 0.9375rem;
 	}
 	.description-fade {
 		position: absolute;

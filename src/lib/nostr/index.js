@@ -35,7 +35,8 @@ export {
 	subscribeCommunityForumPosts,
 	subscribeForumPostComments,
 	fetchLabelEvents,
-	publishToRelays
+	publishToRelays,
+	fetchCommunityWikis
 } from './service';
 
 // Models (event parsing)

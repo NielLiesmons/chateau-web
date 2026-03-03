@@ -2180,3 +2180,70 @@ a, button {
     font-size: 1.25rem; /* sm:text-xl */
   }
 }
+
+/* Nostr custom emoji rendered by renderNostrMarkdown */
+img.nostr-emoji {
+  display: inline;
+  width: 1.25em;
+  height: 1.25em;
+  vertical-align: -0.2em;
+  object-fit: contain;
+}
+
+/* ── highlight.js theme ─────────────────────────────────────────────────────
+   Colours for <span class="hljs-*"> elements produced by highlightCode().
+   Design tokens match the original custom JSON highlighter:
+     keys / identifiers  →  --blurpleLightColor
+     values (str/num)    →  near-white  (0 0% 100% / 0.9)
+     punctuation         →  --white66
+     braces / brackets   →  --goldColor  (hljs merges {} and [] into one class)
+     comments            →  --white33  italic
+   These rules are global so they work inside {@html} blocks at any nesting depth. */
+.hljs                          { color: hsl(var(--foreground)); }
+
+/* Comments */
+.hljs-comment,
+.hljs-quote                    { color: hsl(var(--white33)); font-style: italic; }
+
+/* Keys, attributes, identifiers, keywords → blurple */
+.hljs-attr,
+.hljs-attribute,
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-meta-keyword,
+.hljs-title,
+.hljs-section,
+.hljs-built_in,
+.hljs-addition                 { color: hsl(var(--blurpleLightColor)); }
+
+/* Values: strings, numbers, literals, template vars → near-white */
+.hljs-string,
+.hljs-template-variable,
+.hljs-variable,
+.hljs-number,
+.hljs-literal,
+.hljs-meta-string,
+.hljs-deletion                 { color: hsl(0 0% 100% / 0.9); }
+
+/* Types, tags, class names, selectors, regexp, links → gold (rarer elements) */
+.hljs-type,
+.hljs-tag,
+.hljs-name,
+.hljs-class .hljs-title,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-link                     { color: hsl(var(--goldColor)); }
+
+/* Punctuation: : , " { } [ ] → white66 */
+.hljs-punctuation,
+.hljs-bullet,
+.hljs-symbol,
+.hljs-subst,
+.hljs-doctag                   { color: hsl(var(--white66)); }
+
+/* Misc */
+.hljs-formula                  { background: hsl(var(--white8)); font-style: italic; }
+.hljs-meta                     { color: hsl(var(--white33)); }
+.hljs-emphasis                 { font-style: italic; }
+.hljs-strong                   { font-weight: 700; }

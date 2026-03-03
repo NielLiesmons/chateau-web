@@ -278,21 +278,35 @@ export function parseFormTemplate(event) {
 	if (!event?.tags) return null;
 	const dTag = event.tags.find((t) => t[0] === 'd')?.[1] ?? '';
 	const name = event.tags.find((t) => t[0] === 'name')?.[1] ?? event.tags.find((t) => t[0] === 'title')?.[1] ?? '';
-	let fields = [];
-	try {
-		const content = event.content?.trim();
-		if (content) {
-			const parsed = JSON.parse(content);
-			if (Array.isArray(parsed.fields)) fields = parsed.fields;
-		}
-	} catch {
-		// content is plain text description
-	}
+	const description = event.tags.find((t) => t[0] === 'description')?.[1] ?? '';
+	const confirmationMessage = event.tags.find((t) => t[0] === 'confirmation_message')?.[1] ?? '';
+	const isPublic = event.tags.some((t) => t[0] === 'public');
+	// ["field", "<field-id>", "<type>", "<label>", "<default-value>", "<options-json>"]
+	const fields = event.tags
+		.filter((t) => t[0] === 'field' && t[1])
+		.map((t) => {
+			let options = {};
+			try { if (t[5]) options = JSON.parse(t[5]); } catch { /* ignore */ }
+			return {
+				id: t[1] ?? '',
+				type: t[2] ?? 'text',
+				label: t[3] ?? '',
+				defaultValue: t[4] ?? '',
+				required: options.required === true,
+				placeholder: options.placeholder ?? '',
+				min: options.min ?? '',
+				max: options.max ?? '',
+				selectOptions: Array.isArray(options.options) ? options.options : []
+			};
+		});
 	return {
 		id: event.id,
 		pubkey: event.pubkey,
 		dTag,
 		name,
+		description,
+		confirmationMessage,
+		isPublic,
 		content: event.content || '',
 		fields,
 		createdAt: event.created_at

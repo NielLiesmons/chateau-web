@@ -1,4 +1,5 @@
 <script lang="js">
+// @ts-nocheck
 /**
  * ShortTextInput - TipTap-based rich input with @mentions and :emoji: (tippy.js popups)
  */
@@ -581,7 +582,10 @@ function getSerializedContent() {
         block.content?.forEach((child) => collectFromNode(child));
         text += "\n";
     });
-    return { text: text.trim(), emojiTags, mentions };
+    // Collapse 3+ consecutive newlines to 2 — TipTap represents blank paragraphs
+    // with a hardBreak node, which contributes an extra \n on top of the block
+    // separator, turning a single blank line into \n\n\n instead of \n\n.
+    return { text: text.trim().replace(/\n{3,}/g, '\n\n'), emojiTags, mentions };
 }
 function clearContent() {
     editor?.commands.clearContent();
@@ -671,6 +675,41 @@ onMount(() => {
                 }
                 return false;
             },
+            /**
+             * Force plain-text paste so that HTML clipboard representations
+             * (e.g. from VS Code, Obsidian) don't produce doubled blank lines.
+             * We reconstruct the paragraph/hard-break structure ourselves,
+             * capping consecutive blank lines at one (\n\n = one empty paragraph).
+             */
+            handlePaste(_view, event) {
+                const text = event.clipboardData?.getData('text/plain');
+                if (!text) return false;
+                event.preventDefault();
+
+                const normalized = text
+                    .replace(/\r\n/g, '\n')
+                    .replace(/\r/g, '\n')
+                    .replace(/\n{3,}/g, '\n\n')
+                    .trim();
+
+                if (!normalized) return true;
+
+                /** @type {import('@tiptap/core').JSONContent[]} */
+                const nodes = [];
+                normalized.split('\n\n').forEach((block, i) => {
+                    if (i > 0) nodes.push({ type: 'paragraph' });
+                    /** @type {import('@tiptap/core').JSONContent[]} */
+                    const inline = [];
+                    block.split('\n').forEach((line, j) => {
+                        if (j > 0) inline.push({ type: 'hardBreak' });
+                        if (line) inline.push({ type: 'text', text: line });
+                    });
+                    nodes.push({ type: 'paragraph', content: inline });
+                });
+
+                editor?.commands.insertContent(nodes);
+                return true;
+            },
         },
         autofocus: autoFocus,
         onUpdate: () => {
@@ -707,6 +746,24 @@ export function insertEmoji(shortcode, url, source) {
             { type: 'text', text: ' ' }
         ]).run();
     }
+}
+export function setTextContent(text) {
+    if (!editor) return;
+    const paragraphs = text.split('\n\n').map(block => {
+        const lines = block.split('\n');
+        /** @type {any[]} */
+        const content = [];
+        lines.forEach((line, i) => {
+            if (line) content.push({ type: 'text', text: line });
+            if (i < lines.length - 1) content.push({ type: 'hardBreak' });
+        });
+        return { type: 'paragraph', content };
+    });
+    editor.commands.setContent({
+        type: 'doc',
+        content: paragraphs.length ? paragraphs : [{ type: 'paragraph' }]
+    });
+    hasContent = !editor.isEmpty;
 }
 export { getContent, getSerializedContent, isEmpty };
 </script>

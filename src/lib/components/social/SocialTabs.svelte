@@ -446,7 +446,7 @@ const combinedFeed = $derived.by(() => {
                 ? `${profiles[entry.pubkeys[0]]?.displayName ?? 'Someone'} & ${profiles[entry.pubkeys[1]]?.displayName ?? 'Someone'}`
                 : `${profiles[entry.pubkeys[0]]?.displayName ?? 'Someone'} & others`}
             <div class="label-entry">
-              <Label text={entry.label} isSelected={false} isEmphasized={false} />
+              <Label text={entry.label} isEmphasized={true} />
               <ProfilePicStack
                 profiles={stackProfiles}
                 text={stackText}

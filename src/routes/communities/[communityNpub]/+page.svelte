@@ -14,7 +14,8 @@
 		fetchFormTemplateFromRelays,
 		fetchCommunityForumPosts,
 		subscribeCommunityForumPosts,
-		publishToRelays
+		publishToRelays,
+		fetchCommunityWikis
 	} from '$lib/nostr';
 	import { parseFormTemplate } from '$lib/nostr';
 	import { DEFAULT_COMMUNITY_RELAYS, EVENT_KINDS } from '$lib/config';
@@ -25,10 +26,12 @@
 	import ForumPostModal from '$lib/components/modals/ForumPostModal.svelte';
 	import TaskModal from '$lib/components/modals/TaskModal.svelte';
 	import WikiModal from '$lib/components/modals/WikiModal.svelte';
+	import WikiCard from '$lib/components/WikiCard.svelte';
 
 	const SECTION_PILLS = [
 		{ id: 'forum', label: 'Forum' },
 		{ id: 'tasks', label: 'Tasks' },
+		{ id: 'wikis', label: 'Wikis' },
 		{ id: 'chat', label: 'Chat' },
 		{ id: 'apps', label: 'Apps' },
 		{ id: 'badges', label: 'Badges' }
@@ -52,6 +55,7 @@
 	let joinSubmitting = $state(false);
 	let joinError = $state('');
 	let joinFetched = $state(false);
+	let wikiEvents = $state([]);
 	let addPostModalOpen = $state(false);
 	let addTaskModalOpen = $state(false);
 	let addWikiModalOpen = $state(false);
@@ -400,6 +404,22 @@
 		return () => sub.unsubscribe();
 	});
 
+	// liveQuery + relay fetch for wiki events
+	$effect(() => {
+		if (!browser || !communityPubkey) { wikiEvents = []; return; }
+		const sub = liveQuery(async () => {
+			return await queryEvents({ kinds: [EVENT_KINDS.WIKI], '#h': [communityPubkey], limit: 200 });
+		}).subscribe({
+			next: (val) => { wikiEvents = val || []; },
+			error: () => {}
+		});
+		const relays = community?.relays?.length ? community.relays : DEFAULT_COMMUNITY_RELAYS;
+		fetchCommunityWikis(relays, communityPubkey)
+			.then((events) => { if (events.length) putEvents(events); })
+			.catch(() => {});
+		return () => sub.unsubscribe();
+	});
+
 	const isMember = $derived(currentPubkey && forumMembers.includes(currentPubkey));
 	const hasForm = $derived(profileListEvent && parseProfileList(profileListEvent)?.form);
 	const isAdmin = $derived(!!communityPubkey && !!currentPubkey && communityPubkey === currentPubkey);
@@ -450,30 +470,54 @@
 			{/each}
 		</div>
 		<div class="panel-content">
-			{#if selectedSection === 'forum'}
-				{#if forumPosts.length === 0}
-					<EmptyState message="No forum posts yet" minHeight={200} />
-				{:else}
-					{#each forumPosts as post}
-						{@const authorProfile = profilesByPubkey.get(post.pubkey)}
-						{@const authorContent = authorProfile?.content ? (() => { try { return JSON.parse(authorProfile.content); } catch { return {}; } })() : {}}
-						<ForumPost
-							author={{
-								name: authorContent.display_name ?? authorContent.name,
-								picture: authorContent.picture,
-								npub: (() => { try { return nip19.npubEncode(post.pubkey); } catch { return ''; } })()
-							}}
-							title={post.title}
-							content={post.content}
-							timestamp={formatDate(post.createdAt)}
-							labels={[]}
-							onClick={() => openPost(post.id)}
-						/>
-					{/each}
-				{/if}
+		{#if selectedSection === 'forum'}
+			{#if forumPosts.length === 0}
+				<EmptyState message="No forum posts yet" minHeight={200} />
 			{:else}
-				<EmptyState message="{SECTION_PILLS.find((p) => p.id === selectedSection)?.label ?? selectedSection} coming soon" minHeight={200} />
+				{#each forumPosts as post}
+					{@const authorProfile = profilesByPubkey.get(post.pubkey)}
+					{@const authorContent = authorProfile?.content ? (() => { try { return JSON.parse(authorProfile.content); } catch { return {}; } })() : {}}
+					<ForumPost
+						author={{
+							name: authorContent.display_name ?? authorContent.name,
+							picture: authorContent.picture,
+							npub: (() => { try { return nip19.npubEncode(post.pubkey); } catch { return ''; } })()
+						}}
+						title={post.title}
+						content={post.content}
+						timestamp={formatDate(post.createdAt)}
+						labels={[]}
+						onClick={() => openPost(post.id)}
+					/>
+				{/each}
 			{/if}
+		{:else if selectedSection === 'wikis'}
+		<div class="wiki-list">
+			{#if wikiEvents.length === 0}
+				<EmptyState message="No wiki articles yet" minHeight={200} />
+			{:else}
+				{#each wikiEvents.slice().sort((a, b) => b.created_at - a.created_at) as wiki}
+					{@const wTitle = wiki.tags?.find((t) => t[0] === 'title')?.[1] ?? 'Untitled'}
+					{@const wSummary = wiki.tags?.find((t) => t[0] === 'summary')?.[1] ?? ''}
+					{@const wSlug = wiki.tags?.find((t) => t[0] === 'd')?.[1] ?? wiki.id}
+					{@const wLabels = wiki.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
+					{@const wAuthor = profilesByPubkey.get(wiki.pubkey)}
+					{@const wAuthorContent = wAuthor?.content ? (() => { try { return JSON.parse(wAuthor.content); } catch { return {}; } })() : {}}
+					<WikiCard
+						title={wTitle}
+						summary={wSummary}
+						slug={wSlug}
+						labels={wLabels}
+						author={{ name: wAuthorContent.display_name ?? wAuthorContent.name, picture: wAuthorContent.picture, pubkey: wiki.pubkey }}
+						createdAt={wiki.created_at}
+						onClick={() => goto(`/communities/${encodeURIComponent(communityNpubParam)}/wiki/${encodeURIComponent(wSlug)}`)}
+					/>
+				{/each}
+			{/if}
+		</div>
+	{:else}
+			<EmptyState message="{SECTION_PILLS.find((p) => p.id === selectedSection)?.label ?? selectedSection} coming soon" minHeight={200} />
+		{/if}
 		</div>
 	{#if !(selectedSection === 'badges' && !isAdmin)}
 		<CommunityBottomBar
@@ -606,6 +650,20 @@
 		flex: 1;
 		overflow-y: auto;
 		padding: 1rem 1.5rem;
+		padding-bottom: 100px;
+	}
+
+	/* Remove panel-content padding when showing wiki panels */
+	.panel-content:has(.wiki-list) {
+		padding: 0;
+	}
+
+	/* Wiki panels — gapped cards with their own padding */
+	.wiki-list {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 12px 16px;
 		padding-bottom: 100px;
 	}
 	.join-modal-backdrop {

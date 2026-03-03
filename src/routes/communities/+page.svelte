@@ -1,4 +1,5 @@
 <script lang="js">
+// @ts-nocheck
 	import { browser } from '$app/environment';
 	import InputTextField from '$lib/components/common/InputTextField.svelte';
 	import { page } from '$app/stores';
@@ -15,7 +16,8 @@
 		subscribeForumPostComments,
 		fetchFromRelays,
 		fetchProfilesBatch,
-		publishToRelays
+		publishToRelays,
+		fetchCommunityWikis
 	} from '$lib/nostr';
 	import GetStartedModal from '$lib/components/modals/GetStartedModal.svelte';
 	import SpinKeyModal from '$lib/components/modals/SpinKeyModal.svelte';
@@ -38,6 +40,8 @@
 	import SingleBadge from '$lib/components/common/SingleBadge.svelte';
 	import Selector from '$lib/components/common/Selector.svelte';
 	import TaskCard from '$lib/components/TaskCard.svelte';
+	import WikiCard from '$lib/components/WikiCard.svelte';
+	import WikiDetail from '$lib/components/community/WikiDetail.svelte';
 
 	const SECTION_PILLS = [
 		{ id: 'forum', label: 'Forum', kinds: [11] },
@@ -60,6 +64,7 @@
 	const communityNpub = $derived($page.url.searchParams.get('c') || '');
 	const openPostId = $derived($page.url.searchParams.get('post') || '');
 	const openTaskId = $derived($page.url.searchParams.get('task') || '');
+	const openWikiSlug = $derived($page.url.searchParams.get('wiki') || '');
 	const currentPubkey = $derived(getCurrentPubkey());
 
 	let profileDropdownOpen = $state(false);
@@ -82,16 +87,20 @@
 	let forumMembers = $state([]);
 	/** @type {import('nostr-tools').NostrEvent[]} */
 	let taskEvents = $state([]);
+	let wikiEvents = $state([]);
 	/** @type {Map<string, import('nostr-tools').NostrEvent>} */
 	let taskStatusMap = $state(new Map());
 	let profileListEvent = $state(null);
 	let forumUnsub = $state(null);
 	let joinModalOpen = $state(false);
-	let joinStep = $state('list'); // 'list' | 'form'
+	let joinStep = $state('list'); // 'list' | 'form' | 'done'
 	let joinableLists = $state([]);
 	let selectedJoinList = $state(null); // { formAddress, listName }
 	let joinFormTemplate = $state(null);
 	let joinMessage = $state('');
+	/** @type {Record<string, string>} */
+	let joinFieldValues = $state({});
+	let joinConfirmationMessage = $state('');
 	let joinSubmitting = $state(false);
 	let joinError = $state('');
 	let joinFetched = $state(false);
@@ -181,6 +190,10 @@
 	let formTemplateName = $state('');
 	let formTemplateDescription = $state('');
 	let formTemplateDTag = $state('');
+	let formTemplateConfirmMsg = $state('');
+	let formTemplatePublic = $state(false);
+	/** @type {Array<{id: string, type: string, label: string, defaultValue: string, required: boolean, placeholder: string, selectOptions: string[]}>} */
+	let formTemplateFields = $state([]);
 	let formTemplateSubmitting = $state(false);
 	let formTemplateError = $state('');
 
@@ -554,7 +567,18 @@
 		// Also fetch from relays so we get tasks from other clients
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
 		fetchFromRelays(relays, { kinds: [EVENT_KINDS.TASK], '#h': [communityPubkey], limit: 200 })
-			.then((events) => { if (events.length) putEvents(events); })
+			.then(async (events) => {
+				if (events.length) await putEvents(events);
+				// Fetch status events for all tasks (so deployed version with empty Dexie gets status)
+				const addrs = events.map((e) => {
+					const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+					return `${EVENT_KINDS.TASK}:${e.pubkey}:${d}`;
+				}).filter(Boolean);
+				if (addrs.length) {
+					const statusEvs = await fetchFromRelays(relays, { kinds: [EVENT_KINDS.STATUS], '#a': addrs, limit: 1000 });
+					if (statusEvs.length) await putEvents(statusEvs);
+				}
+			})
 			.catch(() => {});
 		return () => sub.unsubscribe();
 	});
@@ -585,6 +609,30 @@
 			next: (val) => { taskStatusMap = val ?? new Map(); },
 			error: (e) => console.error('[Tasks] status liveQuery error', e)
 		});
+		return () => sub.unsubscribe();
+	});
+
+	// liveQuery: wiki events (kind 30818) for the selected community
+	$effect(() => {
+		if (!browser || !selectedCommunity?.pubkey) {
+			wikiEvents = [];
+			return;
+		}
+		const communityPubkey = selectedCommunity.pubkey;
+		const sub = liveQuery(async () => {
+			return await queryEvents({
+				kinds: [EVENT_KINDS.WIKI],
+				'#h': [communityPubkey],
+				limit: 200
+			});
+		}).subscribe({
+			next: (val) => { wikiEvents = val || []; },
+			error: (e) => console.error('[Wikis] liveQuery error', e)
+		});
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+		fetchCommunityWikis(relays, communityPubkey)
+			.then((events) => { if (events.length) putEvents(events); })
+			.catch(() => {});
 		return () => sub.unsubscribe();
 	});
 
@@ -632,6 +680,15 @@
 	const isCommunityAdmin = $derived(
 		!!selectedCommunity?.pubkey && !!currentPubkey && selectedCommunity.pubkey === currentPubkey
 	);
+
+	/** All profile lists for the admin Profiles tab — section-linked ones first (with sectionName), then any uncategorised ones. */
+	const allAdminProfileLists = $derived.by(() => {
+		const inSections = new Set(membersListData.map((m) => m.listAddress));
+		const uncategorised = adminProfileLists
+			.filter((l) => !inSections.has(l.listAddress))
+			.map((l) => ({ ...l, sectionName: '—' }));
+		return [...membersListData, ...uncategorised];
+	});
 
 	const currentUserProfileContent = $derived.by(() => {
 		if (!currentPubkey) return {};
@@ -923,6 +980,10 @@
 
 	async function addProfileToList(listEvent) {
 		if (!listViewMoreAddInput.trim() || listViewMoreAddSubmitting || !listViewMoreModal) return;
+		if (!listEvent) {
+			listViewMoreAddError = 'List event not loaded yet. Close and reopen this panel.';
+			return;
+		}
 		let pubkey = listViewMoreAddInput.trim();
 		if (pubkey.startsWith('npub')) {
 			try {
@@ -950,14 +1011,18 @@
 			const newTags = rawTags.filter((t) => t[0] !== 'p').map((t) => [...t]);
 			newMembers.forEach((p) => newTags.push(['p', p]));
 			const newEv = await signEvent({
-				kind: EVENT_KINDS.PROFILE_LIST,
+				kind: listEvent.kind ?? EVENT_KINDS.PROFILE_LIST,
 				content: String(listEvent.content ?? ''),
 				tags: newTags,
 				created_at: Math.floor(Date.now() / 1000)
 			});
 			await putEvents([newEv]);
 			await publishToRelays(selectedCommunity?.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS, newEv);
-			listViewMoreModal = { ...listViewMoreModal, listEvent: newEv, parsed: { ...parsed, members: newMembers } };
+			const newParsed = parseProfileList(newEv);
+			const addr = listViewMoreModal.listAddress;
+			listViewMoreModal = { ...listViewMoreModal, listEvent: newEv, parsed: newParsed };
+			adminProfileLists = adminProfileLists.map((l) => l.listAddress === addr ? { ...l, listEvent: newEv, parsed: newParsed } : l);
+			membersListData = membersListData.map((l) => l.listAddress === addr ? { ...l, listEvent: newEv, parsed: newParsed } : l);
 			listViewMoreAddInput = '';
 		} catch (e) {
 			listViewMoreAddError = e?.message || 'Failed to add';
@@ -1075,9 +1140,12 @@
 					tags,
 					created_at: Math.floor(Date.now() / 1000)
 				});
-				await putEvents([listEv]);
-				const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
-				await publishToRelays(relays, listEv);
+			await putEvents([listEv]);
+			const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+			await publishToRelays(relays, listEv);
+			const newParsed = parseProfileList(listEv);
+			const newListItem = { listAddress: `30000:${listEv.pubkey}:${dTag}`, name: newParsed?.name ?? listName, image: newParsed?.image ?? null, listEvent: listEv, parsed: newParsed };
+			adminProfileLists = [...adminProfileLists, newListItem];
 			listFormModal = null;
 			} else {
 				await saveListEdits(listFormModal.listEvent, {
@@ -1146,12 +1214,14 @@
 	// When form step and selected list, fetch form template (30168)
 	$effect(() => {
 		if (!joinModalOpen || joinStep !== 'form' || !selectedJoinList?.formAddress || !selectedCommunity?.pubkey || joinFetched) {
-			if (!joinModalOpen) {
-				joinFormTemplate = null;
-				joinFetched = false;
-				joinMessage = '';
-				joinError = '';
-			}
+		if (!joinModalOpen) {
+			joinFormTemplate = null;
+			joinFetched = false;
+			joinMessage = '';
+			joinFieldValues = {};
+			joinConfirmationMessage = '';
+			joinError = '';
+		}
 			return;
 		}
 		joinFetched = true;
@@ -1181,29 +1251,45 @@
 	});
 
 	async function submitJoinForm() {
-		const formAddr = selectedJoinList?.formAddress ?? formAddress;
+		const formAddr = selectedJoinList?.formAddress;
 		if (!formAddr || !selectedCommunity?.pubkey || !currentPubkey) return;
+		const parsed = joinFormTemplate ? parseFormTemplate(joinFormTemplate) : null;
+		// Validate required fields
+		for (const field of parsed?.fields ?? []) {
+			if (field.required && !(joinFieldValues[field.id] ?? '').trim()) {
+				joinError = `"${field.label}" is required.`;
+				return;
+			}
+		}
 		joinSubmitting = true;
 		joinError = '';
 		try {
-			const plaintext = joinMessage.trim() || ' ';
-			const content = await encrypt44(selectedCommunity.pubkey, plaintext);
 			const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
-			const template = {
+			const isPublic = parsed?.isPublic ?? false;
+			// Build response tags: one per field + fallback message field
+			const hasFields = (parsed?.fields?.length ?? 0) > 0;
+			/** @type {string[][]} */
+		const responseTags = hasFields
+			? (parsed?.fields ?? []).map((f) => ['response', f.id, joinFieldValues[f.id] ?? ''])
+			: [['response', 'message', joinMessage.trim() || ' ']];
+			let eventContent = '';
+			/** @type {string[][]} */
+			const eventTags = [['a', formAddr], ['p', selectedCommunity.pubkey]];
+			if (isPublic) {
+				responseTags.forEach((t) => eventTags.push(t));
+			} else {
+				eventContent = await encrypt44(selectedCommunity.pubkey, JSON.stringify(responseTags));
+				eventTags.push(['encrypted']);
+			}
+			const signed = await signEvent({
 				kind: EVENT_KINDS.FORM_RESPONSE,
-				content,
-				tags: [
-					['a', formAddr],
-					['p', selectedCommunity.pubkey]
-				],
+				content: eventContent,
+				tags: eventTags,
 				created_at: Math.floor(Date.now() / 1000)
-			};
-			const signed = await signEvent(template);
+			});
 			await publishToRelays(relays, signed);
-			joinModalOpen = false;
-			joinStep = 'list';
-			selectedJoinList = null;
-			joinMessage = '';
+			joinConfirmationMessage = parsed?.confirmationMessage ?? '';
+			joinStep = 'done';
 		} catch (e) {
 			joinError = e?.message || 'Failed to submit';
 		} finally {
@@ -1218,6 +1304,8 @@
 		joinFormTemplate = null;
 		joinFetched = false;
 		joinMessage = '';
+		joinFieldValues = {};
+		joinConfirmationMessage = '';
 		joinError = '';
 	}
 
@@ -1469,18 +1557,34 @@
 
 	function openFormTemplateModal(mode, item = null) {
 		if (mode === 'edit' && item) {
-			const descTag = item.event?.tags?.find((t) => t[0] === 'description')?.[1] ?? '';
-			formTemplateName = item.parsed?.name ?? '';
-			formTemplateDescription = descTag;
-			formTemplateDTag = item.parsed?.dTag ?? '';
-			formTemplateModal = { mode: 'edit', event: item.event, parsed: item.parsed };
+			const parsed = item.parsed;
+			formTemplateName = parsed?.name ?? '';
+			formTemplateDescription = parsed?.description ?? item.event?.tags?.find((t) => t[0] === 'description')?.[1] ?? '';
+			formTemplateDTag = parsed?.dTag ?? '';
+			formTemplateConfirmMsg = parsed?.confirmationMessage ?? '';
+			formTemplatePublic = parsed?.isPublic ?? false;
+			formTemplateFields = (parsed?.fields ?? []).map((f) => ({ ...f, optionsStr: (f.selectOptions ?? []).join(', ') }));
+			formTemplateModal = { mode: 'edit', event: item.event, parsed };
 		} else {
 			formTemplateName = '';
 			formTemplateDescription = '';
 			formTemplateDTag = '';
+			formTemplateConfirmMsg = '';
+			formTemplatePublic = false;
+			formTemplateFields = [];
 			formTemplateModal = { mode: 'add' };
 		}
 		formTemplateError = '';
+	}
+
+	function addFormField() {
+		formTemplateFields = [...formTemplateFields, { id: '', type: 'text', label: '', defaultValue: '', required: false, placeholder: '', optionsStr: '' }];
+	}
+	function removeFormField(idx) {
+		formTemplateFields = formTemplateFields.filter((_, i) => i !== idx);
+	}
+	function updateFormField(idx, key, value) {
+		formTemplateFields = formTemplateFields.map((f, i) => i === idx ? { ...f, [key]: value } : f);
 	}
 
 	async function saveFormTemplate() {
@@ -1492,14 +1596,27 @@
 		formTemplateError = '';
 		try {
 			const relays = selectedCommunity?.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
-			// Preserve existing tags (fields, encrypted, auto_response, etc.) except name/description/d
+			// Preserve unrelated existing tags (auto_response, etc.); drop fields we now manage
+			const managedKeys = new Set(['name', 'description', 'd', 'field', 'confirmation_message', 'public']);
 			const existingTags = formTemplateModal?.mode === 'edit'
-				? (formTemplateModal.event?.tags ?? []).filter((t) => !['name', 'description', 'd'].includes(t[0]))
+				? (formTemplateModal.event?.tags ?? []).filter((t) => !managedKeys.has(t[0]))
 				: [];
+			const fieldTags = formTemplateFields
+				.filter((f) => f.id.trim() && f.label.trim())
+				.map((f) => {
+					const opts = {};
+					if (f.required) opts.required = true;
+					if (f.placeholder) opts.placeholder = f.placeholder;
+					if (f.selectOptions?.length) opts.options = f.selectOptions;
+					return ['field', f.id.trim(), f.type, f.label.trim(), f.defaultValue ?? '', JSON.stringify(opts)];
+				});
 			const tags = [
 				['d', formTemplateDTag.trim()],
 				['name', formTemplateName.trim()],
 				...(formTemplateDescription.trim() ? [['description', formTemplateDescription.trim()]] : []),
+				...fieldTags,
+				...(formTemplateConfirmMsg.trim() ? [['confirmation_message', formTemplateConfirmMsg.trim()]] : []),
+				...(formTemplatePublic ? [['public']] : []),
 				...existingTags
 			];
 			const ev = await signEvent({
@@ -1567,6 +1684,10 @@
 	function openTask(eventId) {
 		if (!selectedCommunity?.npub) return;
 		goto(`/communities?c=${encodeURIComponent(selectedCommunity.npub)}&task=${encodeURIComponent(eventId)}`);
+	}
+	function openWiki(slug) {
+		if (!selectedCommunity?.npub) return;
+		goto(`/communities?c=${encodeURIComponent(selectedCommunity.npub)}&wiki=${encodeURIComponent(slug)}`);
 	}
 	function backToForum() {
 		if (!selectedCommunity?.npub) return;
@@ -1930,6 +2051,15 @@
 				onBack={backToForum}
 			/>
 		</div>
+	{:else if openWikiSlug}
+		<div class="panel-content panel-content-detail">
+			<WikiDetail
+				slug={openWikiSlug}
+				communityNpub={selectedCommunity.npub}
+				wikiLinkFn={(s) => `/communities?c=${encodeURIComponent(selectedCommunity.npub)}&wiki=${encodeURIComponent(s)}`}
+				onBack={backToForum}
+			/>
+		</div>
 	{:else}
 			<div class="right-header-block">
 				<div class="right-header-row1">
@@ -2022,11 +2152,35 @@
 						{/each}
 					{/if}
 				</div>
-				{:else}
+				{:else if selectedSection === 'wikis'}
+				<div class="wiki-list">
+					{#if wikiEvents.length === 0}
+						<EmptyState message="No wiki articles yet" minHeight={600} />
+					{:else}
+						{#each wikiEvents.slice().sort((a, b) => b.created_at - a.created_at) as wiki}
+						{@const wTitle = wiki.tags?.find((t) => t[0] === 'title')?.[1] ?? 'Untitled'}
+						{@const wSummary = wiki.tags?.find((t) => t[0] === 'summary')?.[1] ?? ''}
+						{@const wSlug = wiki.tags?.find((t) => t[0] === 'd')?.[1] ?? wiki.id}
+						{@const wLabels = wiki.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
+						{@const wAuthor = profilesByPubkey.get(wiki.pubkey)}
+						{@const wAuthorContent = wAuthor?.content ? (() => { try { return JSON.parse(wAuthor.content); } catch { return {}; } })() : {}}
+						<WikiCard
+							title={wTitle}
+							summary={wSummary}
+							slug={wSlug}
+							labels={wLabels}
+							author={{ name: wAuthorContent.display_name ?? wAuthorContent.name, picture: wAuthorContent.picture, pubkey: wiki.pubkey }}
+							createdAt={wiki.created_at}
+							onClick={() => openWiki(wSlug)}
+						/>
+						{/each}
+					{/if}
+				</div>
+			{:else}
 					<EmptyState message="{sectionPills.find((p) => p.id === selectedSection)?.label ?? selectedSection} coming soon" minHeight={200} />
 				{/if}
 			</div>
-	{#if selectedCommunity && !openPostId && !openTaskId}
+	{#if selectedCommunity && !openPostId && !openTaskId && !openWikiSlug}
 		<CommunityBottomBar
 			isMember={isMember}
 			hasForm={hasForm}
@@ -2349,24 +2503,27 @@
 					</div>
 				</div>
 
-			{:else if adminCrownSection === 'Profiles'}
-				<div class="crown-profiles-tab">
-					{#if membersListData.length === 0}
-						<p class="community-info-profiles-empty">No profile lists yet.</p>
-					{/if}
-					{#each membersListData as item}
-						<div class="info-list-panel">
-							<div class="info-list-panel-header">
-								<SingleBadge image={item.parsed?.image ?? null} name={item.parsed?.name ?? item.sectionName} sizePx={52} />
-								<div class="info-list-panel-meta">
-									<span class="info-list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
-									{#if item.parsed?.content}
-										<span class="info-list-panel-desc">{item.parsed.content}</span>
-									{/if}
-								</div>
+		{:else if adminCrownSection === 'Profiles'}
+			<div class="crown-profiles-tab">
+				{#if allAdminProfileLists.length === 0}
+					<p class="community-info-profiles-empty">No profile lists yet.</p>
+				{/if}
+			{#each allAdminProfileLists as item}
+					{@const listDisplayName = item.parsed?.name ?? item.name ?? item.sectionName}
+					<div class="info-list-panel">
+						<div class="info-list-panel-header">
+							<SingleBadge image={item.parsed?.image ?? null} name={listDisplayName} sizePx={52} />
+							<div class="info-list-panel-meta">
+								<span class="info-list-panel-name">{listDisplayName}</span>
+								{#if item.parsed?.content}
+									<span class="info-list-panel-desc">{item.parsed.content}</span>
+								{/if}
 							</div>
+						</div>
+						{#if item.sectionName && item.sectionName !== '—'}
 							<p class="info-list-panel-sections">Can write in: {item.sectionName}</p>
-							<div class="info-list-actions">
+						{/if}
+						<div class="info-list-actions">
 								<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
 								<button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => openEditListModal(item)}>
 									<Pen variant="fill" size={13} color="hsl(var(--white66))" />
@@ -2383,8 +2540,122 @@
 					</div>
 				</div>
 
-			{:else if adminCrownSection === 'Forms'}
-				<div class="crown-forms-tab">
+		{:else if adminCrownSection === 'Forms'}
+			<div class="crown-forms-tab">
+				{#if formTemplateModal}
+					<!-- Inline form editor -->
+					<form class="join-form ft-form" onsubmit={(e) => { e.preventDefault(); saveFormTemplate(); }}>
+						<div class="ft-inline-back">
+							<button type="button" class="ft-back-btn" onclick={() => { formTemplateModal = null; formTemplateError = ''; }}>← Back</button>
+							<span class="ft-inline-title">{formTemplateModal.mode === 'edit' ? 'Edit form' : 'New form'}</span>
+						</div>
+
+						<div class="join-form-field">
+							<label class="labels-label" for="ft-name">Form name</label>
+							<InputTextField bind:value={formTemplateName} placeholder="e.g. Membership Application" singleLine={true} id="ft-name" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+						</div>
+						{#if formTemplateModal.mode === 'add'}
+							<div class="join-form-field">
+								<label class="labels-label" for="ft-dtag">Form ID (slug)</label>
+								<InputTextField bind:value={formTemplateDTag} placeholder="e.g. membership-application" singleLine={true} id="ft-dtag" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+							</div>
+						{:else}
+							<p class="ft-id-display">ID: <code>{formTemplateDTag}</code></p>
+						{/if}
+						<div class="join-form-field">
+							<label class="labels-label" for="ft-description">Description</label>
+							<InputTextField bind:value={formTemplateDescription} placeholder="What is this form for?" singleLine={false} size="medium" id="ft-description" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+						</div>
+
+						<div class="ft-section-header">
+							<span class="labels-label">Fields</span>
+							<button type="button" class="ft-add-field-btn" onclick={addFormField}>+ Add field</button>
+						</div>
+						{#each formTemplateFields as field, idx}
+							<div class="ft-field-row">
+								<div class="ft-field-top">
+									<InputTextField
+										bind:value={formTemplateFields[idx].id}
+										placeholder="field-id"
+										singleLine={true}
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+									<select class="ft-type-select" value={field.type} onchange={(e) => updateFormField(idx, 'type', e.currentTarget.value)}>
+										<option value="text">Text</option>
+										<option value="textarea">Textarea</option>
+										<option value="number">Number</option>
+										<option value="email">Email</option>
+										<option value="url">URL</option>
+										<option value="select">Select</option>
+										<option value="checkbox">Checkbox</option>
+										<option value="radio">Radio</option>
+										<option value="date">Date</option>
+									</select>
+									<button type="button" class="ft-remove-btn" onclick={() => removeFormField(idx)} aria-label="Remove field">×</button>
+								</div>
+								<div class="ft-field-bottom">
+									<InputTextField
+										bind:value={formTemplateFields[idx].label}
+										placeholder="Label shown to user"
+										singleLine={true}
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+									<InputTextField
+										bind:value={formTemplateFields[idx].placeholder}
+										placeholder="Placeholder hint"
+										singleLine={true}
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+									<label class="ft-required-label">
+										<input type="checkbox" checked={field.required} onchange={(e) => updateFormField(idx, 'required', e.currentTarget.checked)} />
+										Required
+									</label>
+								</div>
+								{#if field.type === 'select' || field.type === 'radio'}
+									<div class="ft-field-options">
+										<InputTextField
+											value={field.selectOptions.join(', ')}
+											placeholder="Options, comma-separated"
+											singleLine={true}
+											oninput={(e) => updateFormField(idx, 'selectOptions', e.currentTarget.value.split(',').map((s) => s.trim()).filter(Boolean))}
+											onkeydown={() => {}}
+											onfocus={() => {}}
+											onblur={() => {}}
+										/>
+									</div>
+								{/if}
+							</div>
+						{/each}
+						{#if formTemplateFields.length === 0}
+							<p class="ft-no-fields">No fields yet. Add one above.</p>
+						{/if}
+
+						<div class="join-form-field">
+							<label class="labels-label" for="ft-confirm-msg">Confirmation message</label>
+							<InputTextField bind:value={formTemplateConfirmMsg} placeholder="Shown to users after they submit (e.g. Thank you! We'll review within 48h.)" singleLine={false} size="medium" id="ft-confirm-msg" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
+						</div>
+						<label class="ft-public-label">
+							<input type="checkbox" bind:checked={formTemplatePublic} />
+							Public responses (unencrypted)
+						</label>
+
+						{#if formTemplateError}<p class="text-sm text-red-500">{formTemplateError}</p>{/if}
+						<div class="join-modal-actions" style="margin-top: 0.75rem;">
+							<button type="button" class="btn-secondary-small" onclick={() => { formTemplateModal = null; formTemplateError = ''; }}>Cancel</button>
+							<button type="submit" class="btn-primary-small" disabled={formTemplateSubmitting}>{formTemplateSubmitting ? 'Saving…' : 'Save'}</button>
+						</div>
+					</form>
+				{:else}
+					<!-- Form list -->
 					{#if adminFormTemplates.length === 0}
 						<p class="community-info-profiles-empty">No form templates yet.</p>
 					{:else}
@@ -2413,38 +2684,10 @@
 							<span>New form template</span>
 						</button>
 					</div>
-				</div>
-			{/if}
-		</div>
-
-		{#if formTemplateModal}
-			<Modal open={true} onClose={() => { formTemplateModal = null; formTemplateError = ''; }} ariaLabel="Form template" zIndex={51} maxWidth="max-w-md">
-				<h2 class="join-modal-title">{formTemplateModal.mode === 'edit' ? 'Edit form template' : 'New form template'}</h2>
-				<form class="join-form" onsubmit={(e) => { e.preventDefault(); saveFormTemplate(); }}>
-					<div class="join-form-field">
-						<label class="labels-label" for="ft-name">Form name</label>
-						<InputTextField bind:value={formTemplateName} placeholder="e.g. Membership Application" singleLine={true} id="ft-name" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
-					</div>
-					{#if formTemplateModal.mode === 'add'}
-						<div class="join-form-field">
-							<label class="labels-label" for="ft-dtag">Form ID</label>
-							<InputTextField bind:value={formTemplateDTag} placeholder="e.g. membership-application" singleLine={true} id="ft-dtag" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
-						</div>
-					{:else}
-						<p class="ft-id-display">ID: <code>{formTemplateDTag}</code></p>
-					{/if}
-					<div class="join-form-field">
-						<label class="labels-label" for="ft-description">Description</label>
-						<InputTextField bind:value={formTemplateDescription} placeholder="What is this form for?" singleLine={false} size="medium" id="ft-description" oninput={() => {}} onkeydown={() => {}} onfocus={() => {}} onblur={() => {}} />
-					</div>
-					{#if formTemplateError}<p class="text-sm text-red-500">{formTemplateError}</p>{/if}
-					<div class="join-modal-actions">
-						<button type="button" class="btn-secondary-small" onclick={() => { formTemplateModal = null; formTemplateError = ''; }}>Cancel</button>
-						<button type="submit" class="btn-primary-small" disabled={formTemplateSubmitting}>{formTemplateSubmitting ? 'Saving…' : 'Save'}</button>
-					</div>
-				</form>
-			</Modal>
+				{/if}
+			</div>
 		{/if}
+	</div>
 		</div>
 	{/if}
 </Modal>
@@ -2781,25 +3024,81 @@
 				<p class="text-sm text-muted-foreground">Loading form…</p>
 				<button type="button" class="btn-secondary-small" onclick={() => { joinStep = 'list'; selectedJoinList = null; }}>Cancel</button>
 			{:else}
-				{@const form = joinFormTemplate ? parseFormTemplate(joinFormTemplate) : null}
-				{#if form?.name}
-					<p class="text-sm text-muted-foreground">{form.name}</p>
+				{@const joinParsedForm = joinFormTemplate ? parseFormTemplate(joinFormTemplate) : null}
+				{#if joinParsedForm?.name}
+					<p class="join-form-subtitle">{joinParsedForm.name}</p>
+				{/if}
+				{#if joinParsedForm?.description}
+					<p class="join-form-desc">{joinParsedForm.description}</p>
 				{/if}
 				<form class="join-form" onsubmit={(e) => { e.preventDefault(); submitJoinForm(); }}>
-					<div class="join-form-field">
-						<InputTextField
-							bind:value={joinMessage}
-							title="Message (optional)"
-							placeholder="Why do you want to join?"
-							singleLine={false}
-							size="medium"
-							id="join-message"
-							oninput={() => {}}
-							onkeydown={() => {}}
-							onfocus={() => {}}
-							onblur={() => {}}
-						/>
-					</div>
+					{#if joinParsedForm?.fields?.length}
+						{#each joinParsedForm.fields as field (field.id)}
+							<div class="join-form-field">
+								<label class="labels-label" for="jf-{field.id}">{field.label}{#if field.required}<span class="join-required">*</span>{/if}</label>
+								{#if field.type === 'textarea'}
+									<InputTextField
+										bind:value={joinFieldValues[field.id]}
+										placeholder={field.placeholder || field.defaultValue || ''}
+										singleLine={false}
+										size="medium"
+										id="jf-{field.id}"
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+								{:else if field.type === 'select' && field.selectOptions?.length}
+									<select
+										class="join-select"
+										id="jf-{field.id}"
+										bind:value={joinFieldValues[field.id]}
+									>
+										<option value="">— Select —</option>
+										{#each field.selectOptions as opt}
+											<option value={opt}>{opt}</option>
+										{/each}
+									</select>
+								{:else if field.type === 'checkbox'}
+									<label class="join-checkbox-label">
+										<input
+											type="checkbox"
+											id="jf-{field.id}"
+											checked={joinFieldValues[field.id] === 'true'}
+											onchange={(e) => { joinFieldValues[field.id] = e.currentTarget.checked ? 'true' : 'false'; }}
+										/>
+										{field.placeholder || ''}
+									</label>
+								{:else}
+									<InputTextField
+										bind:value={joinFieldValues[field.id]}
+										placeholder={field.placeholder || field.defaultValue || ''}
+										singleLine={true}
+										id="jf-{field.id}"
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+								{/if}
+							</div>
+						{/each}
+					{:else}
+						<div class="join-form-field">
+							<InputTextField
+								bind:value={joinMessage}
+								title="Message (optional)"
+								placeholder="Why do you want to join?"
+								singleLine={false}
+								size="medium"
+								id="join-message"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+					{/if}
 					{#if joinError}
 						<p class="text-sm text-red-500">{joinError}</p>
 					{/if}
@@ -2811,6 +3110,17 @@
 					</div>
 				</form>
 			{/if}
+		{:else if joinStep === 'done'}
+			<div class="join-done-wrap">
+				{#if joinConfirmationMessage}
+					<p class="join-confirm-msg">{joinConfirmationMessage}</p>
+				{:else}
+					<p class="join-confirm-msg">Your request has been submitted!</p>
+				{/if}
+				<div class="join-modal-actions">
+					<button type="button" class="btn-primary-small" onclick={closeJoinModal}>Close</button>
+				</div>
+			</div>
 		{/if}
 	{/if}
 </Modal>
@@ -3081,115 +3391,6 @@
 		flex-direction: column;
 		overflow: hidden;
 	}
-	.detail-header-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
-		padding: 0.75rem 1rem;
-		border-bottom: 1px solid hsl(var(--white11));
-		flex-shrink: 0;
-	}
-	.detail-publisher {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-		min-width: 0;
-	}
-	.detail-meta {
-		display: flex;
-		flex-direction: column;
-		gap: 0.125rem;
-		min-width: 0;
-	}
-	.detail-name {
-		font-weight: 600;
-		font-size: 0.9375rem;
-	}
-	.detail-communities {
-		font-size: 0.8125rem;
-		color: hsl(var(--muted-foreground));
-	}
-	.back-to-list {
-		flex-shrink: 0;
-		padding: 0.35rem 0.5rem;
-		font-size: 0.875rem;
-		color: hsl(var(--muted-foreground));
-		background: none;
-		border: none;
-		cursor: pointer;
-		border-radius: 6px;
-	}
-	.back-to-list:hover {
-		background: hsl(var(--white8));
-		color: hsl(var(--foreground));
-	}
-	.post-detail-content {
-		padding: 1rem 1.5rem;
-	}
-	.post-detail-title {
-		font-size: 1.25rem;
-		font-weight: 600;
-		margin: 0 0 0.75rem;
-	}
-	.post-detail-body {
-		font-size: 0.9375rem;
-		line-height: 1.6;
-	}
-	.post-detail-description-wrap {
-		position: relative;
-		margin-bottom: 1rem;
-	}
-	.post-detail-description-wrap:not(.expanded) .post-detail-body {
-		max-height: 150px;
-		overflow: hidden;
-	}
-	.post-detail-description-wrap.expanded .post-detail-body {
-		max-height: none;
-	}
-	.post-detail-fade {
-		position: absolute;
-		bottom: 0;
-		left: 0;
-		right: 0;
-		height: 80px;
-		background: linear-gradient(to bottom, transparent, hsl(var(--gray66)));
-		pointer-events: none;
-	}
-	.read-more-btn {
-		margin-top: 0.5rem;
-		padding: 0.35rem 0.75rem;
-		font-size: 0.875rem;
-		background: hsl(var(--white8));
-		border: 1px solid hsl(var(--white16));
-		border-radius: 9999px;
-		color: hsl(var(--foreground));
-		cursor: pointer;
-	}
-	.read-more-btn:hover {
-		background: hsl(var(--white11));
-	}
-	.post-detail-labels {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px;
-		margin-bottom: 1rem;
-		overflow-x: auto;
-		scrollbar-width: none;
-		-ms-overflow-style: none;
-	}
-	.post-detail-labels::-webkit-scrollbar {
-		display: none;
-	}
-	.post-detail-label-slot {
-		display: inline-flex;
-		flex-shrink: 0;
-	}
-	.post-detail-social {
-		margin-top: 1rem;
-		border-top: 1px solid hsl(var(--white11));
-		padding-top: 1rem;
-	}
 	.tab-row.pills-row-under :global(.tab-selected) {
 		background-image: var(--gradient-blurple66);
 	}
@@ -3333,6 +3534,163 @@
 		background: hsl(var(--white8));
 		padding: 1px 5px;
 		border-radius: 4px;
+	}
+	.ft-form {
+		padding-bottom: 4px;
+	}
+	.ft-inline-back {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		margin-bottom: 4px;
+	}
+	.ft-back-btn {
+		background: none;
+		border: none;
+		color: hsl(var(--white66));
+		font-size: 0.8125rem;
+		cursor: pointer;
+		padding: 0;
+	}
+	.ft-back-btn:hover { color: hsl(var(--foreground)); }
+	.ft-inline-title {
+		font-size: 0.9375rem;
+		font-weight: 600;
+		color: hsl(var(--foreground));
+	}
+	.ft-section-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 6px;
+	}
+	.ft-add-field-btn {
+		font-size: 0.75rem;
+		color: hsl(var(--blurpleLightColor));
+		background: none;
+		border: none;
+		cursor: pointer;
+		padding: 2px 4px;
+	}
+	.ft-add-field-btn:hover { opacity: 0.8; }
+	.ft-field-row {
+		background: hsl(var(--white5));
+		border: 1px solid hsl(var(--white11));
+		border-radius: 8px;
+		padding: 8px 10px;
+		margin-bottom: 8px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.ft-field-top {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+	}
+	.ft-field-top :global(.input-wrapper) {
+		flex: 1;
+	}
+	.ft-type-select {
+		background: hsl(var(--white8));
+		border: 1px solid hsl(var(--white22));
+		border-radius: 6px;
+		color: hsl(var(--foreground));
+		font-size: 0.8125rem;
+		padding: 4px 8px;
+		cursor: pointer;
+	}
+	.ft-remove-btn {
+		background: none;
+		border: none;
+		color: hsl(var(--white33));
+		font-size: 1.1rem;
+		cursor: pointer;
+		padding: 0 4px;
+		line-height: 1;
+	}
+	.ft-remove-btn:hover { color: hsl(var(--white66)); }
+	.ft-field-bottom {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+	.ft-field-bottom :global(.input-wrapper) {
+		flex: 1;
+		min-width: 100px;
+	}
+	.ft-required-label {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 0.75rem;
+		color: hsl(var(--white66));
+		white-space: nowrap;
+		cursor: pointer;
+	}
+	.ft-field-options {
+		margin-top: 2px;
+	}
+	.ft-no-fields {
+		font-size: 0.8rem;
+		color: hsl(var(--white33));
+		margin: 0 0 8px;
+		text-align: center;
+	}
+	.ft-public-label {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 0.8125rem;
+		color: hsl(var(--white66));
+		cursor: pointer;
+		margin-bottom: 6px;
+	}
+	.join-form-subtitle {
+		font-size: 0.9375rem;
+		font-weight: 500;
+		color: hsl(var(--foreground));
+		margin: 0 0 2px;
+	}
+	.join-form-desc {
+		font-size: 0.875rem;
+		color: hsl(var(--white66));
+		margin: 0 0 10px;
+	}
+	.join-required {
+		color: hsl(var(--blurpleLightColor));
+		margin-left: 2px;
+	}
+	.join-select {
+		width: 100%;
+		background: hsl(var(--white8));
+		border: 1px solid hsl(var(--white22));
+		border-radius: 8px;
+		color: hsl(var(--foreground));
+		font-size: 0.9375rem;
+		padding: 8px 12px;
+		cursor: pointer;
+	}
+	.join-checkbox-label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 0.875rem;
+		color: hsl(var(--foreground));
+		cursor: pointer;
+	}
+	.join-done-wrap {
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+		padding: 8px 0;
+	}
+	.join-confirm-msg {
+		font-size: 0.9375rem;
+		color: hsl(var(--foreground));
+		line-height: 1.55;
+		margin: 0;
 	}
 	.tab-row.pills-row-under {
 		display: flex;
@@ -3607,17 +3965,6 @@
 		font-weight: 500;
 		color: hsl(var(--foreground));
 	}
-	.admin-sections-title {
-		margin: 1.25rem 0 0.5rem;
-		font-size: 1rem;
-		font-weight: 600;
-		color: hsl(var(--foreground));
-	}
-	.admin-sections-desc {
-		margin: 0 0 0.75rem;
-		font-size: 0.8125rem;
-		color: hsl(var(--muted-foreground));
-	}
 	.admin-section-row {
 		display: flex;
 		flex-direction: column;
@@ -3734,44 +4081,6 @@
 	.admin-add-section-preset-row:hover {
 		background: hsl(var(--white11));
 	}
-	.admin-section-toggle {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		cursor: pointer;
-		font-weight: 500;
-		color: hsl(var(--foreground));
-	}
-	.admin-section-toggle input {
-		width: 18px;
-		height: 18px;
-		accent-color: hsl(var(--blurpleColor));
-	}
-	.admin-section-name {
-		flex-shrink: 0;
-	}
-	.admin-section-desc-inline {
-		font-size: 0.8125rem;
-		color: hsl(var(--muted-foreground));
-		margin-left: 26px;
-	}
-	.admin-section-input {
-		width: 100%;
-		min-height: 38px;
-		padding: 0 14px;
-		font-size: 14px;
-		background: hsl(var(--black33));
-		border: 0.33px solid hsl(var(--white16));
-		border-radius: var(--radius-16, 16px);
-		color: hsl(var(--foreground));
-	}
-	.admin-section-input::placeholder {
-		color: hsl(var(--white33));
-	}
-	.admin-section-select {
-		cursor: pointer;
-		appearance: auto;
-	}
 	.members-join-requests-panel {
 		display: flex;
 		align-items: center;
@@ -3847,24 +4156,6 @@
 		font-size: 0.875rem;
 		color: hsl(var(--muted-foreground));
 	}
-	.list-modal-edit-form-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.5rem;
-		width: 100%;
-		padding: 0.6rem 1rem;
-		margin-bottom: 0.75rem;
-		background: hsl(var(--white16));
-		border: 0.33px solid hsl(var(--white24));
-		border-radius: var(--radius-16);
-		color: hsl(var(--foreground));
-		font-size: 0.875rem;
-		cursor: pointer;
-	}
-	.list-modal-edit-form-btn:hover {
-		background: hsl(var(--white24));
-	}
 	.list-modal-add-wrap {
 		display: flex;
 		gap: 0.5rem;
@@ -3883,54 +4174,6 @@
 		margin-bottom: 6px;
 		font-size: 0.875rem;
 		font-weight: 500;
-		color: hsl(var(--foreground));
-	}
-	.labels-row {
-		display: flex;
-		gap: 8px;
-		align-items: center;
-		margin-bottom: 8px;
-	}
-	.labels-input {
-		flex: 1;
-		min-width: 0;
-		height: 36px;
-		padding: 0 12px;
-		border-radius: var(--radius-12);
-		border: 1px solid hsl(var(--white16));
-		background: hsl(var(--white4));
-		color: hsl(var(--foreground));
-		font-size: 14px;
-	}
-	.labels-input::placeholder {
-		color: hsl(var(--white44));
-	}
-	.labels-chips {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-	.label-chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 4px 10px;
-		border-radius: var(--radius-12);
-		background: hsl(var(--white8));
-		color: hsl(var(--foreground));
-		font-size: 13px;
-	}
-	.label-chip-remove {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 0;
-		border: none;
-		background: none;
-		cursor: pointer;
-		color: hsl(var(--white66));
-	}
-	.label-chip-remove:hover {
 		color: hsl(var(--foreground));
 	}
 	.list-modal-members {
@@ -3981,18 +4224,27 @@
 		padding-bottom: 100px;
 	}
 	.panel-content:has(.forum-list),
-	.panel-content:has(.tasks-list) {
+	.panel-content:has(.tasks-list),
+	.panel-content:has(.wiki-list) {
 		padding: 0;
 	}
 	/* No top padding: title sits 16px below fixed header via ForumPostDetail .content-scroll padding-top */
 	.panel-content-detail {
-		padding: 0 16px 100px;
+		padding: 0 0 100px;
 	}
 	.forum-list {
 		display: flex;
 		flex-direction: column;
 		padding: 0;
 		gap: 0;
+	}
+
+	/* Wiki panels — gapped cards with horizontal padding */
+	.wiki-list {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 12px 16px;
 	}
 	.join-modal-title {
 		margin: 0 0 0.5rem;
@@ -4030,21 +4282,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
-	}
-	.admin-section-choose-lists {
-		width: 100%;
-		min-height: 38px;
-		padding: 0 14px;
-		font-size: 14px;
-		text-align: left;
-		background: hsl(var(--black33));
-		border: 0.33px solid hsl(var(--white16));
-		border-radius: var(--radius-16);
-		color: hsl(var(--foreground));
-		cursor: pointer;
-	}
-	.admin-section-choose-lists:hover {
-		background: hsl(var(--white16));
 	}
 	.list-picker-desc {
 		margin: 0 0 0.75rem;

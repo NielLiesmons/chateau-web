@@ -1,4 +1,5 @@
 <script lang="js">
+// @ts-nocheck
 	import { nip19 } from 'nostr-tools';
 	import {
 		queryEvent,
@@ -11,10 +12,13 @@
 		parseZapReceipt,
 		publishComment,
 		fetchProfilesBatch,
-		parseCommunity
+		parseCommunity,
+		fetchFromRelays,
+		putEvents
 	} from '$lib/nostr';
 	import { EVENT_KINDS, DEFAULT_COMMUNITY_RELAYS } from '$lib/config';
-	import { renderMarkdown } from '$lib/utils/markdown';
+	import { tokenizeNostrMarkdown } from '$lib/utils/markdown';
+	import MarkdownBody from '$lib/components/common/MarkdownBody.svelte';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
 	import DetailHeader from '$lib/components/layout/DetailHeader.svelte';
 	import SocialTabs from '$lib/components/social/SocialTabs.svelte';
@@ -22,6 +26,7 @@
 	import TaskBox from '$lib/components/common/TaskBox.svelte';
 	import PriorityBox from '$lib/components/common/PriorityBox.svelte';
 	import ProfilePicStack from '$lib/components/common/ProfilePicStack.svelte';
+	import ProfilePic from '$lib/components/common/ProfilePic.svelte';
 	import { getCurrentPubkey, getIsSignedIn, signEvent } from '$lib/stores/auth.svelte.js';
 	import { createSearchProfilesFunction } from '$lib/services/profile-search.js';
 	import { createSearchEmojisFunction } from '$lib/services/emoji-search.js';
@@ -41,12 +46,12 @@
 	let communityPicture = $state('');
 	let descriptionExpanded = $state(false);
 	let isTruncated = $state(false);
-	let comments = $state(/** @type {any[]} */([]));
+	let comments = $state(/** @type {any[]} */ ([]));
 	let commentsLoading = $state(false);
 	let commentsError = $state('');
-	let zaps = $state(/** @type {any[]} */([]));
+	let zaps = $state(/** @type {any[]} */ ([]));
 	let zapsLoading = $state(false);
-	let profiles = $state(/** @type {Record<string, any>} */({}));
+	let profiles = $state(/** @type {Record<string, any>} */ ({}));
 	let zapperProfiles = $state(new Map());
 	let getStartedModalOpen = $state(false);
 	/** @type {any} */
@@ -60,19 +65,22 @@
 
 	/** @type {Record<string,string>} */
 	const SPEC_TO_CAMEL = {
-		'open': 'open', 'backlog': 'backlog',
-		'in-progress': 'inProgress', 'in-review': 'inReview', 'closed': 'closed'
+		open: 'open',
+		backlog: 'backlog',
+		'in-progress': 'inProgress',
+		'in-review': 'inReview',
+		closed: 'closed'
 	};
 
-	const taskStatus = $derived((() => {
-		if (!statusEvent) return 'open';
-		const spec = statusEvent.tags?.find((t) => t[0] === 'status')?.[1] ?? 'open';
-		return SPEC_TO_CAMEL[spec] ?? 'open';
-	})());
-
-	const taskPriority = $derived(
-		statusEvent?.tags?.find((t) => t[0] === 'priority')?.[1] ?? 'none'
+	const taskStatus = $derived(
+		(() => {
+			if (!statusEvent) return 'open';
+			const spec = statusEvent.tags?.find((t) => t[0] === 'status')?.[1] ?? 'open';
+			return SPEC_TO_CAMEL[spec] ?? 'open';
+		})()
 	);
+
+	const taskPriority = $derived(statusEvent?.tags?.find((t) => t[0] === 'priority')?.[1] ?? 'none');
 
 	const taskTitle = $derived(task?.tags?.find((t) => t[0] === 'title')?.[1] ?? '');
 	const taskLabels = $derived(task?.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []);
@@ -80,6 +88,63 @@
 	// Labels formatted for the SocialTabs Labels tab (same shape as forum post labelEntries)
 	const taskLabelEntries = $derived(
 		taskLabels.map((l) => ({ label: l, pubkeys: task?.pubkey ? [task.pubkey] : [] }))
+	);
+
+	/** @type {Record<string, string>} */
+	const STATUS_LABELS = {
+		open: 'Open',
+		backlog: 'Backlog',
+		inProgress: 'In Progress',
+		inReview: 'In Review',
+		closed: 'Closed'
+	};
+	/** @type {Record<string, string>} */
+	const PRIORITY_LABELS = {
+		none: 'No priority',
+		low: 'Low',
+		medium: 'Medium',
+		high: 'High',
+		urgent: 'Urgent'
+	};
+
+	const statusDisplayLabel = $derived(STATUS_LABELS[taskStatus] ?? 'Open');
+	const priorityDisplayLabel = $derived(PRIORITY_LABELS[taskPriority] ?? taskPriority);
+
+	// Project (kind 30315) and milestone (kind 30316) from `a` tags
+	const projectRef = $derived(
+		task?.tags?.find((t) => t[0] === 'a' && t[1]?.startsWith('30315:'))?.[1] ?? null
+	);
+	const milestoneRef = $derived(
+		task?.tags?.find((t) => t[0] === 'a' && t[1]?.startsWith('30316:'))?.[1] ?? null
+	);
+	// Human label: take the d-tag segment (after second colon) and replace hyphens with spaces
+	/** @param {string} addr */
+	function addrLabel(addr) {
+		const parts = addr.split(':');
+		return parts.length >= 3 ? parts.slice(2).join(':').replace(/-/g, ' ') : addr.slice(0, 12);
+	}
+
+	// Other targets: first two `e` or `a` tags that are NOT project/milestone
+	const taskTargetRefs = $derived(
+		(() => {
+			if (!task?.tags) return [];
+			/** @type {{type: string, label: string}[]} */
+			const out = [];
+			for (const t of task.tags) {
+				if (out.length >= 2) break;
+				if (t[0] === 'e' && t[1]) {
+					out.push({ type: 'event', label: t[1].slice(0, 10) + '…' });
+				} else if (
+					t[0] === 'a' &&
+					t[1] &&
+					!t[1].startsWith('30315:') &&
+					!t[1].startsWith('30316:')
+				) {
+					out.push({ type: 'addr', label: addrLabel(t[1]) });
+				}
+			}
+			return out;
+		})()
 	);
 
 	$effect(() => {
@@ -92,24 +157,45 @@
 		try {
 			const decoded = nip19.decode(communityNpub);
 			if (decoded.type === 'npub') communityPubkey = decoded.data;
-		} catch { return; }
+		} catch {
+			return;
+		}
 
 		(async () => {
 			// Query by id only (task events may be addressed, not easily filtered by #h in all impls)
-			const raw = await queryEvent({ kinds: [EVENT_KINDS.TASK], ids: [eventId] })
-				?? await queryEvent({ kinds: [EVENT_KINDS.TASK], '#h': [communityPubkey] });
+			const raw =
+				(await queryEvent({ kinds: [EVENT_KINDS.TASK], ids: [eventId] })) ??
+				(await queryEvent({ kinds: [EVENT_KINDS.TASK], '#h': [communityPubkey] }));
 
 			if (raw && raw.id === eventId) {
 				rawTaskEvent = raw;
 				task = raw;
 
-				// Load status event
+				// Load status event — check Dexie first, then fetch from relays in background
 				const dTag = raw.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
 				const addr = `${EVENT_KINDS.TASK}:${raw.pubkey}:${dTag}`;
-				const statusEvs = await queryEvents({ kinds: [EVENT_KINDS.STATUS], '#a': [addr], limit: 50 });
+				const statusEvs = await queryEvents({
+					kinds: [EVENT_KINDS.STATUS],
+					'#a': [addr],
+					limit: 50
+				});
 				if (statusEvs.length > 0) {
 					statusEvent = statusEvs.reduce((a, b) => (b.created_at > a.created_at ? b : a));
 				}
+				// Always fetch from relays so the deployed version (empty Dexie) gets status too
+				const relaysForStatus = communityDef?.relays?.length
+					? communityDef.relays
+					: DEFAULT_COMMUNITY_RELAYS;
+				fetchFromRelays(relaysForStatus, { kinds: [EVENT_KINDS.STATUS], '#a': [addr], limit: 50 })
+					.then(async (relayEvs) => {
+						if (!relayEvs.length) return;
+						await putEvents(relayEvs);
+						const best = relayEvs.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+						if (!statusEvent || best.created_at > statusEvent.created_at) {
+							statusEvent = best;
+						}
+					})
+					.catch(() => {});
 
 				// Load author + community info in parallel
 				const [profileEv, communityEv, communityProfileEv] = await Promise.all([
@@ -135,12 +221,21 @@
 				}
 
 				// Load assignee profiles
-				const assigneePubkeys = raw.tags?.filter((t) => t[0] === 'p' && t[2] === 'assignee').map((t) => t[1]) ?? [];
+				const assigneePubkeys =
+					raw.tags?.filter((t) => t[0] === 'p' && t[2] === 'assignee').map((t) => t[1]) ?? [];
 				if (assigneePubkeys.length > 0) {
 					const batch = await fetchProfilesBatch(assigneePubkeys);
 					assigneeProfiles = assigneePubkeys.map((pk) => {
 						const ev = batch.get(pk);
-						const c = ev?.content ? (() => { try { return JSON.parse(ev.content); } catch { return {}; } })() : {};
+						const c = ev?.content
+							? (() => {
+									try {
+										return JSON.parse(ev.content);
+									} catch {
+										return {};
+									}
+								})()
+							: {};
 						return { pubkey: pk, name: c.display_name ?? c.name, pictureUrl: c.picture };
 					});
 				}
@@ -156,7 +251,10 @@
 	$effect(() => {
 		const tid = task?.id;
 		const relays = communityRelays;
-		if (!tid) { comments = []; return; }
+		if (!tid) {
+			comments = [];
+			return;
+		}
 		commentsLoading = true;
 		const sub = liveQuery(async () => {
 			const events = await queryEvents({ kinds: [1111], '#e': [tid], limit: 500 });
@@ -179,7 +277,11 @@
 							if (ev?.content) {
 								try {
 									const c = JSON.parse(ev.content);
-									next[pk] = { displayName: c.display_name ?? c.name, name: c.name, picture: c.picture };
+									next[pk] = {
+										displayName: c.display_name ?? c.name,
+										name: c.name,
+										picture: c.picture
+									};
 								} catch {}
 							}
 						}
@@ -187,9 +289,14 @@
 					});
 				}
 			},
-			error: () => { commentsLoading = false; commentsError = 'Failed to load comments'; }
+			error: () => {
+				commentsLoading = false;
+				commentsError = 'Failed to load comments';
+			}
 		});
-		fetchForumPostComments(tid, { relays }).then(() => {}).catch(() => {});
+		fetchForumPostComments(tid, { relays })
+			.then(() => {})
+			.catch(() => {});
 		return () => sub.unsubscribe();
 	});
 
@@ -213,7 +320,11 @@
 					if (ev?.content) {
 						try {
 							const c = JSON.parse(ev.content);
-							next.set(pk, { displayName: c.display_name ?? c.name, name: c.name, picture: c.picture });
+							next.set(pk, {
+								displayName: c.display_name ?? c.name,
+								name: c.name,
+								picture: c.picture
+							});
 						} catch {}
 					}
 				}
@@ -228,42 +339,86 @@
 
 	/** @param {HTMLElement} node */
 	function checkTruncation(node) {
-		const check = () => { isTruncated = node.scrollHeight > node.clientHeight; };
+		const check = () => {
+			isTruncated = node.scrollHeight > node.clientHeight;
+		};
 		setTimeout(check, 0);
-		const ro = new ResizeObserver(() => { if (!descriptionExpanded) check(); });
+		const ro = new ResizeObserver(() => {
+			if (!descriptionExpanded) check();
+		});
 		ro.observe(node);
-		return { destroy() { ro.disconnect(); } };
+		return {
+			destroy() {
+				ro.disconnect();
+			}
+		};
 	}
 
-	const descriptionHtml = $derived(task?.content ? renderMarkdown(task.content) : '');
-
-	const npub = $derived(
-		task?.pubkey ? (() => { try { return nip19.npubEncode(task.pubkey); } catch { return ''; } })() : ''
+	const taskEmojiMap = $derived(
+		Object.fromEntries(
+			(rawTaskEvent?.tags ?? [])
+				.filter((t) => t[0] === 'emoji' && t[1] && t[2])
+				.map((t) => [t[1], t[2]])
+		)
+	);
+	const descriptionTokens = $derived(
+		task?.content ? tokenizeNostrMarkdown(task.content, { emojiMap: taskEmojiMap }) : []
 	);
 
-	const taskNaddr = $derived((() => {
-		if (!task) return '';
-		const dTag = task.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
-		try {
-			return nip19.naddrEncode({ kind: EVENT_KINDS.TASK, pubkey: task.pubkey, identifier: dTag });
-		} catch { return ''; }
-	})());
+	const npub = $derived(
+		task?.pubkey
+			? (() => {
+					try {
+						return nip19.npubEncode(task.pubkey);
+					} catch {
+						return '';
+					}
+				})()
+			: ''
+	);
+
+	const taskNaddr = $derived(
+		(() => {
+			if (!task) return '';
+			const dTag = task.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+			try {
+				return nip19.naddrEncode({ kind: EVENT_KINDS.TASK, pubkey: task.pubkey, identifier: dTag });
+			} catch {
+				return '';
+			}
+		})()
+	);
 
 	const zapTarget = $derived(
-		task ? { name: taskTitle, pubkey: task.pubkey, id: task.id, pictureUrl: authorProfile?.picture } : null
+		task
+			? { name: taskTitle, pubkey: task.pubkey, id: task.id, pictureUrl: authorProfile?.picture }
+			: null
 	);
 
 	const publisherName = $derived(authorProfile?.displayName ?? authorProfile?.name ?? 'Author');
 	const searchProfiles = $derived(createSearchProfilesFunction(() => getCurrentPubkey()));
 	const searchEmojis = $derived(createSearchEmojisFunction(() => getCurrentPubkey()));
 
-	const communityPubkeyFromNpub = $derived((() => {
-		try { const d = nip19.decode(communityNpub); return d?.type === 'npub' ? d.data : ''; } catch { return ''; }
-	})());
+	const communityPubkeyFromNpub = $derived(
+		(() => {
+			try {
+				const d = nip19.decode(communityNpub);
+				return d?.type === 'npub' ? d.data : '';
+			} catch {
+				return '';
+			}
+		})()
+	);
 
 	const catalogs = $derived(
 		communityPubkeyFromNpub
-			? [{ name: communityName || 'Community', pictureUrl: communityPicture || undefined, pubkey: communityPubkeyFromNpub }]
+			? [
+					{
+						name: communityName || 'Community',
+						pictureUrl: communityPicture || undefined,
+						pubkey: communityPubkeyFromNpub
+					}
+				]
 			: []
 	);
 
@@ -273,11 +428,22 @@
 		if (!pubkey) return;
 		const parentId = e.parentId ?? null;
 		const replyToPubkey = e.replyToPubkey ?? task.pubkey;
-		const target = { contentType: 'task', pubkey: task.pubkey, id: task.id, kind: EVENT_KINDS.TASK };
+		const target = {
+			contentType: 'task',
+			pubkey: task.pubkey,
+			id: task.id,
+			kind: EVENT_KINDS.TASK
+		};
 		try {
 			const signed = await publishComment(
-				e.text, target, signEvent, e.emojiTags ?? [], parentId, replyToPubkey,
-				parentId ? 1111 : EVENT_KINDS.TASK, e.mentions ?? []
+				e.text,
+				target,
+				signEvent,
+				e.emojiTags ?? [],
+				parentId,
+				replyToPubkey,
+				parentId ? 1111 : EVENT_KINDS.TASK,
+				e.mentions ?? []
 			);
 			const parsed = parseComment(signed);
 			parsed.npub = nip19.npubEncode(signed.pubkey);
@@ -291,7 +457,11 @@
 	function refetchZaps() {
 		if (!task?.id) return;
 		fetchZapsByEventIds([task.id], { relays: communityRelays }).then((events) => {
-			zaps = events.map((e) => { const z = parseZapReceipt(e); z.id = e.id; return z; });
+			zaps = events.map((e) => {
+				const z = parseZapReceipt(e);
+				z.id = e.id;
+				return z;
+			});
 		});
 	}
 </script>
@@ -323,56 +493,100 @@
 
 		<div class="content-scroll">
 			<div class="content-inner">
+				<!-- Title -->
+				<h1 class="task-title">{taskTitle}</h1>
 
-				<!-- Title row: TaskBox | title | PriorityBox — mirrors feed card layout -->
-				<div class="task-title-row">
-					<div class="taskbox-col">
-						<TaskBox state={taskStatus} size={28} />
-					</div>
-					<h1 class="task-title">{taskTitle}</h1>
-					<div class="priority-col">
-						<PriorityBox priority={taskPriority} size={24} />
+				<!-- Meta panel -->
+				<div class="task-meta-panel">
+					<div class="task-meta-cols">
+						<!-- STATUS + PRIORITY -->
+						<div class="task-meta-col">
+							<span class="task-meta-label">STATUS</span>
+							<div class="task-meta-line">
+								<TaskBox state={taskStatus} size={16} />
+								<span class="task-meta-val">{statusDisplayLabel}</span>
+							</div>
+							<div class="task-meta-line">
+								<PriorityBox priority={taskPriority !== 'none' ? taskPriority : 'none'} size={16} />
+								<span class="task-meta-val" class:task-meta-empty={taskPriority === 'none'}
+									>{priorityDisplayLabel}</span
+								>
+							</div>
+						</div>
+
+						<!-- PROJECT + MILESTONE -->
+						<div class="task-meta-col">
+							<span class="task-meta-label">PROJECT</span>
+							<div class="task-meta-line">
+								<span
+									class="task-meta-val"
+									class:task-meta-cap={!!projectRef}
+									class:task-meta-empty={!projectRef}
+								>
+									{projectRef ? addrLabel(projectRef) : 'No project'}
+								</span>
+							</div>
+							<div class="task-meta-line">
+								<span class="task-meta-val" class:task-meta-empty={!milestoneRef}>
+									{milestoneRef ? addrLabel(milestoneRef) : 'No milestone'}
+								</span>
+							</div>
+						</div>
+
+						<!-- TARGETS -->
+						<div class="task-meta-col">
+							<span class="task-meta-label">TARGETS</span>
+							{#if taskTargetRefs.length > 0}
+								{#each taskTargetRefs as ref}
+									<div class="task-meta-line">
+										<span class="task-meta-val task-meta-mono">{ref.label}</span>
+									</div>
+								{/each}
+							{:else}
+								<span class="task-meta-val task-meta-empty">No targets</span>
+							{/if}
+						</div>
+
+						<!-- ASSIGNED TO -->
+						<div class="task-meta-col">
+							<span class="task-meta-label">ASSIGNED TO</span>
+							{#if assigneeProfiles.length > 0}
+								{#each assigneeProfiles.slice(0, 2) as profile (profile.pubkey)}
+									<div class="task-meta-line">
+										<ProfilePic pubkey={profile.pubkey} size="xs" />
+										<span class="task-meta-val"
+											>{profile.name || profile.pubkey.slice(0, 8) + '…'}</span
+										>
+									</div>
+								{/each}
+							{:else}
+								<span class="task-meta-val task-meta-empty">Unassigned</span>
+							{/if}
+						</div>
 					</div>
 				</div>
 
-				<!-- L-shape row: targets + assignees, aligned under the TaskBox -->
-				{#if assigneeProfiles.length > 0}
-					<div class="task-bottom-row">
-						<div class="connector-col">
-							<svg viewBox="0 0 22 24" width="22" height="24" fill="none" aria-hidden="true">
-								<path
-									d="M1 0 L1 11 Q1 23 10 23 L22 23"
-									stroke="hsl(var(--white16))"
-									stroke-width="1.5"
-									fill="none"
-								/>
-							</svg>
-						</div>
-					<div class="bottom-items">
-						<ProfilePicStack
-							profiles={assigneeProfiles}
-							text={assigneeProfiles.length === 1
-								? (assigneeProfiles[0].name || assigneeProfiles[0].pubkey.slice(0, 8))
-								: `${assigneeProfiles.length} assignees`}
-							size="xs"
-						/>
-					</div>
-					</div>
-				{/if}
-
 				{#if task.content?.trim()}
 					<div class="description-container" class:expanded={descriptionExpanded}>
-						<div class="task-description prose prose-invert max-w-none" use:checkTruncation>
-							{@html descriptionHtml}
+						<div class="task-description" use:checkTruncation>
+							<MarkdownBody tokens={descriptionTokens} />
 						</div>
 						{#if isTruncated && !descriptionExpanded}
 							<div class="description-fade" aria-hidden="true"></div>
-							<button type="button" class="read-more-btn" onclick={() => (descriptionExpanded = true)}>
+							<button
+								type="button"
+								class="read-more-btn"
+								onclick={() => (descriptionExpanded = true)}
+							>
 								Read more
 							</button>
 						{/if}
 						{#if descriptionExpanded}
-							<button type="button" class="show-less-btn" onclick={() => (descriptionExpanded = false)}>
+							<button
+								type="button"
+								class="show-less-btn"
+								onclick={() => (descriptionExpanded = false)}
+							>
 								Show less
 							</button>
 						{/if}
@@ -389,7 +603,11 @@
 						detailsNpub={npub}
 						detailsPubkey={task.pubkey ?? ''}
 						detailsRawData={rawTaskEvent
-							? (() => { const c = { ...rawTaskEvent }; delete c._tags; return c; })()
+							? (() => {
+									const c = { ...rawTaskEvent };
+									delete c._tags;
+									return c;
+								})()
 							: null}
 						{comments}
 						{commentsLoading}
@@ -420,7 +638,7 @@
 			</div>
 		</div>
 
-		{#if task && zapTarget}
+		{#if task && zapTarget && getIsSignedIn()}
 			<BottomBar
 				publisherName={authorProfile?.displayName ?? authorProfile?.name ?? ''}
 				contentType="task"
@@ -457,71 +675,84 @@
 	}
 
 	.content-inner {
-		padding-bottom: 16px;
+		padding: 0 16px 16px;
 		max-width: 100%;
 	}
 
-	/* ── Title row: mirrors TaskCard row-main but larger ── */
-	.task-title-row {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		margin-bottom: 0;
-	}
-
-	.taskbox-col {
-		width: 28px;
-		flex-shrink: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
+	/* ── Title ── */
 	.task-title {
-		flex: 1;
-		min-width: 0;
-		font-size: 1.375rem;
+		font-size: 1.5rem;
 		font-weight: 700;
-		margin: 0;
+		margin: 12px 0 10px;
 		line-height: 1.3;
 		color: hsl(var(--foreground));
 	}
 
-	.priority-col {
-		flex-shrink: 0;
-		display: flex;
-		align-items: center;
-	}
-
-	/* ── L-shape bottom row: mirrors TaskCard row-bottom ── */
-	/*
-	 * margin-left = half TaskBox width (28/2 = 14px) so connector aligns
-	 * with the centre of the TaskBox above.
-	 */
-	.task-bottom-row {
-		display: flex;
-		align-items: flex-start;
-		margin-left: 14px;
+	/* ── Meta panel ── */
+	.task-meta-panel {
+		background: hsl(var(--gray33));
+		border-radius: 12px;
+		padding: 6px 14px;
 		margin-bottom: 14px;
-		width: calc(100% - 14px);
 	}
 
-	.connector-col {
-		width: 22px;
-		flex-shrink: 0;
+	.task-meta-cols {
 		display: flex;
-		align-items: flex-start;
+		flex-wrap: wrap;
+		gap: 0;
 	}
 
-	.bottom-items {
+	.task-meta-col {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		flex: 1;
+		min-width: 90px;
+		padding: 6px 14px 6px 0;
+		border-right: 1px solid hsl(var(--white11));
+	}
+	.task-meta-col:not(:first-child) {
+		padding-left: 14px;
+	}
+	.task-meta-col:last-child {
+		border-right: none;
+		padding-right: 0;
+	}
+
+	.task-meta-label {
+		font-size: 0.625rem;
+		font-weight: 600;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: hsl(var(--white33));
+		margin-bottom: 3px;
+	}
+
+	.task-meta-line {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		flex: 1;
-		min-width: 0;
-		padding-top: 8px;
+		gap: 6px;
 	}
 
+	.task-meta-val {
+		font-size: 0.875rem;
+		color: hsl(var(--white66));
+		line-height: 1.4;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.task-meta-empty {
+		color: hsl(var(--white33));
+		font-style: italic;
+	}
+	.task-meta-cap {
+		text-transform: capitalize;
+	}
+	.task-meta-mono {
+		font-family: var(--font-mono);
+		font-size: 0.8125rem;
+	}
 
 	/* Description */
 	.description-container {
@@ -540,12 +771,9 @@
 
 	.task-description {
 		line-height: 1.6;
-		color: hsl(var(--foreground) / 0.9);
+		color: hsl(var(--foreground));
+		font-size: 0.9375rem;
 	}
-
-	.task-description :global(p) { margin-top: 0.5em; margin-bottom: 0.5em; }
-	.task-description :global(p:first-child) { margin-top: 0; }
-	.task-description :global(p:last-child) { margin-bottom: 0; }
 
 	.description-fade {
 		position: absolute;
@@ -586,11 +814,11 @@
 	}
 
 	.read-more-btn:hover,
-	.show-less-btn:hover { transform: scale(1.025); }
+	.show-less-btn:hover {
+		transform: scale(1.025);
+	}
 	.read-more-btn:active,
-	.show-less-btn:active { transform: scale(0.98); }
-
-	.social-tabs-wrap {
-		margin-top: 16px;
+	.show-less-btn:active {
+		transform: scale(0.98);
 	}
 </style>

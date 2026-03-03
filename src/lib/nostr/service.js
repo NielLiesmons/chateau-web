@@ -251,6 +251,17 @@ export async function fetchCommunityForumPosts(relayUrls, communityPubkey, autho
 }
 
 /**
+ * Fetch wiki articles (kind 30818) for a community from relays.
+ */
+export async function fetchCommunityWikis(relayUrls, communityPubkey, options = {}) {
+	return fetchFromRelays(relayUrls, {
+		kinds: [EVENT_KINDS.WIKI],
+		'#h': [communityPubkey],
+		limit: 100
+	}, options);
+}
+
+/**
  * Subscribe to forum posts for a community (live updates). Call close() when changing community.
  */
 export function subscribeCommunityForumPosts(relayUrls, communityPubkey, authorPubkeys, onEvent) {

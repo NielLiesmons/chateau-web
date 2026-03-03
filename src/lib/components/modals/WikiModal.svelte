@@ -28,6 +28,8 @@ let {
 	getCurrentPubkey = () => null,
 	searchProfiles: searchProfilesProp = null,
 	searchEmojis: searchEmojisProp = null,
+	/** @type {{ title?: string, slug?: string, summary?: string, text?: string, labels?: string[] } | null} */
+	initialData = null,
 	onsubmit,
 	onclose
 } = $props();
@@ -111,6 +113,8 @@ async function handlePublish() {
 	}
 }
 
+const isEditMode = $derived(!!initialData);
+
 $effect(() => {
 	if (isOpen) {
 		const t = setTimeout(() => titleInput?.focus(), 80);
@@ -127,6 +131,24 @@ $effect(() => {
 		selectedLabels = [];
 	}
 });
+
+$effect(() => {
+	if (isOpen && initialData) {
+		titleValue = initialData.title ?? '';
+		summaryValue = initialData.summary ?? '';
+		if (initialData.slug) {
+			slugValue = initialData.slug;
+			slugEdited = true;
+		}
+		selectedLabels = [...(initialData.labels ?? [])];
+		if (initialData.text) {
+			const text = initialData.text;
+			setTimeout(() => {
+				contentInput?.setTextContent?.(text);
+			}, 150);
+		}
+	}
+});
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -135,7 +157,7 @@ $effect(() => {
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 	<div class="overlay bg-overlay" onclick={close} role="presentation" transition:fade={{ duration: 180 }}></div>
 
-	<div class="wiki-sheet-wrapper" role="dialog" aria-modal="true" aria-label="New wiki article">
+	<div class="wiki-sheet-wrapper" role="dialog" aria-modal="true" aria-label={isEditMode ? 'Edit wiki article' : 'New wiki article'}>
 		<div
 			class="wiki-sheet"
 			class:child-modal-open={emojiPickerOpen || labelsModalOpen}
@@ -256,7 +278,7 @@ $effect(() => {
 						onclick={handlePublish}
 						disabled={!titleValue.trim() || submitting}
 					>
-						{submitting ? 'Publishing…' : 'Publish'}
+						{submitting ? (isEditMode ? 'Saving…' : 'Publishing…') : (isEditMode ? 'Save' : 'Publish')}
 					</button>
 				</div>
 			</div>
@@ -476,6 +498,39 @@ $effect(() => {
 	.post-content-area {
 		flex: 1;
 		min-height: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	/* Make ShortTextInput fill the full content area height */
+	.post-content-area :global(.short-text-input) {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.post-content-area :global(.editor-wrapper) {
+		flex: 1;
+		min-height: 0 !important;
+		max-height: none !important;
+		height: 100%;
+		overflow: hidden;
+	}
+
+	.post-content-area :global(.editor-container) {
+		flex: 1;
+		min-height: 0 !important;
+		max-height: none !important;
+		height: 100%;
+		overflow: hidden;
+	}
+
+	.post-content-area :global(.editor-mount) {
+		height: 100%;
+		min-height: 0 !important;
+		max-height: none !important;
 		overflow-y: auto;
 	}
 
