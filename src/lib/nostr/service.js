@@ -351,15 +351,20 @@ export function subscribeCommunityForumPosts(relayUrls, communityPubkey, authorP
  * Subscribe to NIP-1111 kind:1111 comments referencing any of the given post/event ids.
  * Uses both uppercase E (root marker) and lowercase e (parent/fallback) filters.
  * Events are buffered to Dexie.
+ * @param {string[]} relayUrls
+ * @param {string[]} postIds
+ * @param {{ authors?: string[] | null, onEvent?: Function }} [options]
  */
-export function subscribeForumPostComments(relayUrls, postIds, onEvent) {
+export function subscribeForumPostComments(relayUrls, postIds, options = {}) {
+	const { authors = null, onEvent } = options;
 	if (!Array.isArray(postIds) || postIds.length === 0) return () => {};
 	const p = getPool();
+	const authorsFilter = authors?.length ? { authors } : {};
 	const sub = p.subscribeMany(
 		relayUrls,
 		[
-			{ kinds: [1111], '#E': postIds, limit: 200 },
-			{ kinds: [1111], '#e': postIds, limit: 200 }
+			{ kinds: [1111], '#E': postIds, limit: 200, ...authorsFilter },
+			{ kinds: [1111], '#e': postIds, limit: 200, ...authorsFilter }
 		],
 		{
 			onevent(event) {

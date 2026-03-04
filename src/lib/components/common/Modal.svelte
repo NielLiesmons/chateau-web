@@ -256,7 +256,7 @@ function handleResize() {
 
   /* When directly after a title block, title already provides top spacing */
   .modal-title-block + .modal-children-padded {
-    padding-top: 8px;
+    padding-top: 4px;
   }
 
   @media (min-width: 768px) {
@@ -264,33 +264,33 @@ function handleResize() {
       padding: 20px;
     }
     .modal-title-block + .modal-children-padded {
-      padding-top: 8px;
+      padding-top: 4px;
     }
   }
 
   .modal-title-block {
     flex-shrink: 0;
-    padding: 24px 16px 0;
+    padding: 32px 16px 0;
   }
   .modal-title {
     margin: 0;
-    font-size: 2.25rem;
+    font-size: 1.875rem;
   }
   .modal-title-block:has(.modal-description) .modal-title {
     margin-bottom: 10px;
   }
   .modal-description {
-    margin: 0 0 20px 0;
+    margin: 0 0 12px 0;
     font-size: 0.9375rem;
     text-align: center;
     color: hsl(var(--white66));
   }
   @media (min-width: 768px) {
     .modal-title-block {
-      padding: 20px 20px 0;
+      padding: 28px 20px 0;
     }
     .modal-title-block:has(.modal-description) .modal-description {
-      margin-bottom: 24px;
+      margin-bottom: 14px;
     }
   }
 

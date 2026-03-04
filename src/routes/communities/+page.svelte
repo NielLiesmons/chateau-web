@@ -30,6 +30,7 @@
 	import SpinKeyModal from '$lib/components/modals/SpinKeyModal.svelte';
 	import OnboardingBuildingModal from '$lib/components/modals/OnboardingBuildingModal.svelte';
 	import { DEFAULT_COMMUNITY_RELAYS, COMMUNITY_WRITE_RELAYS, PROFILE_RELAYS, EVENT_KINDS } from '$lib/config';
+	import { contentTypesFromKinds, CONTENT_TYPE_BY_SECTION } from '$lib/config/contentTypes.js';
 	import { getCurrentPubkey, signEvent, encrypt44, decrypt44, signOut, connect } from '$lib/stores/auth.svelte.js';
 	import ProfilePic from '$lib/components/common/ProfilePic.svelte';
 	import BackButton from '$lib/components/common/BackButton.svelte';
@@ -116,6 +117,7 @@
 	let profileListEvent = $state(null);
 	let forumUnsub = $state(null);
 	let joinModalOpen = $state(false);
+	let joinContext = $state(null); // section id ('forum', 'tasks', …) or null for generic
 	let joinStep = $state('list'); // 'list' | 'form' | 'done'
 	let joinableLists = $state([]);
 	let selectedJoinList = $state(null); // { formAddress, listName }
@@ -503,8 +505,10 @@
 
 	let forumCommentsUnsub = null;
 	// Subscribe to NIP-1111 kind:1111 comments on current forum posts so they are stored and commenters show.
+	// Waits for generalMembers to resolve so the authors filter matches ForumPostDetail.allowedCommenters exactly:
+	// null = no client-side filter (relay-enforced or open community); string[] = General-section member list.
 	$effect(() => {
-		if (!browser || !selectedCommunity?.pubkey || !forumPosts?.length) {
+		if (!browser || !selectedCommunity?.pubkey || !forumPosts?.length || generalMembers === undefined) {
 			if (forumCommentsUnsub) {
 				forumCommentsUnsub();
 				forumCommentsUnsub = null;
@@ -514,7 +518,7 @@
 		const postIds = forumPosts.map((p) => p.id).filter(Boolean);
 		if (postIds.length === 0) return;
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
-		forumCommentsUnsub = subscribeForumPostComments(relays, postIds);
+		forumCommentsUnsub = subscribeForumPostComments(relays, postIds, { authors: generalMembers });
 		return () => {
 			if (forumCommentsUnsub) {
 				forumCommentsUnsub();
@@ -545,48 +549,66 @@
 	});
 
 	// liveQuery: NIP-1111 comments on forum posts → commenters per post
-	// Uses the same generalMembers filter as ForumPostDetail.allowedCommenters for consistency.
+	// Mirror ForumPostDetail.allowedCommenters exactly: null = no filter (relay-enforced or open community).
+	// Does NOT block on generalMembers === undefined — runs immediately and applies filter when available.
 	$effect(() => {
-		if (!browser || !forumPosts?.length || generalMembers === undefined) {
+		if (!browser || !forumPosts?.length) {
 			commentersByPostId = new Map();
 			return;
 		}
 		const postIds = forumPosts.map((p) => p.id).filter(Boolean);
 		if (postIds.length === 0) { commentersByPostId = new Map(); return; }
+		// Same filter as ForumPostDetail: generalMembers (null = no client-side filter; string[] = whitelist).
 		const allowedSet = generalMembers?.length ? new Set(generalMembers) : null;
 
 		const sub = liveQuery(async () => {
-			const [byE, bye] = await Promise.all([
-				queryEvents({ kinds: [1111], '#E': postIds, limit: 400 }),
-				queryEvents({ kinds: [1111], '#e': postIds, limit: 400 })
-			]);
-			const seen = new Set();
-			const merged = [];
-			for (const ev of [...byE, ...bye]) {
-				if (!seen.has(ev.id)) { seen.add(ev.id); merged.push(ev); }
-			}
-			// postId → { count: total all-depth comment count, rootPubkeys: unique root-level commenter pubkeys }
-			const byPostId = new Map();
-			const allPubkeys = new Set();
-			for (const ev of merged) {
+			// Only #E (uppercase root-marker) — matches ForumPostDetail's liveQuery.
+			// #e-only events are non-standard and also invisible in the detail view.
+			const evs = await queryEvents({ kinds: [1111], '#E': postIds, limit: 500 });
+
+			// Step 1: group allowed comments by post and resolve each comment's parentId.
+			/** @type {Map<string, Array<{ev: import('nostr-tools').NostrEvent, parentId: string|null}>>} */
+			const commentsByPost = new Map();
+			for (const ev of evs) {
 				if (allowedSet && !allowedSet.has(ev.pubkey)) continue;
-				// Find which post this comment belongs to (E/e tag pointing at one of our postIds)
-				const rootTag = ev.tags?.find((t) => (t[0] === 'E' || t[0] === 'e') && postIds.includes(t[1]));
+				const rootTag = ev.tags?.find((t) => t[0] === 'E' && postIds.includes(t[1]));
 				const postId = rootTag?.[1];
 				if (!postId) continue;
-				if (!byPostId.has(postId)) byPostId.set(postId, { count: 0, rootPubkeys: new Set() });
-				const entry = byPostId.get(postId);
-				// Total count includes all depths
-				entry.count++;
-				// Profile stack: only root-level comment authors (mirror parseComment parentId logic)
 				const eTags = ev.tags?.filter((t) => (t[0] === 'e' || t[0] === 'E') && t[1]) ?? [];
 				const replyTag = eTags.find((t) => t[3] === 'reply');
 				const parentId = replyTag?.[1] ?? eTags[eTags.length - 1]?.[1] ?? null;
-				if (postIds.includes(parentId)) {
-					entry.rootPubkeys.add(ev.pubkey);
-					allPubkeys.add(ev.pubkey);
-				}
+				if (!commentsByPost.has(postId)) commentsByPost.set(postId, []);
+				commentsByPost.get(postId).push({ ev, parentId });
 			}
+
+			// Step 2: per post, mirror ForumPostDetail._refreshComments iterative branch pruning:
+			// a comment is only displayable if its parent is the post itself or another displayable comment.
+			// This drops authorized comments that reply to hidden (unauthorized) parents.
+			const byPostId = new Map();
+			const allPubkeys = new Set();
+			for (const [postId, items] of commentsByPost) {
+				let displayable = items;
+				let changed = true;
+				while (changed) {
+					const visibleIds = new Set(displayable.map((c) => c.ev.id));
+					const next = displayable.filter(
+						(c) => !c.parentId || c.parentId === postId || visibleIds.has(c.parentId)
+					);
+					changed = next.length !== displayable.length;
+					displayable = next;
+				}
+				let count = 0;
+				const rootPubkeys = new Set();
+				for (const { ev, parentId } of displayable) {
+					count++;
+					if (parentId === postId) {
+						rootPubkeys.add(ev.pubkey);
+						allPubkeys.add(ev.pubkey);
+					}
+				}
+				if (count > 0) byPostId.set(postId, { count, rootPubkeys });
+			}
+
 			const profileEvs = allPubkeys.size > 0
 				? await queryEvents({ kinds: [EVENT_KINDS.PROFILE], authors: [...allPubkeys], limit: 200 })
 				: [];
@@ -1179,41 +1201,45 @@
 		const sections = comm?.sections ?? [];
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
 		membersListData = [];
-		(async () => {
-			// listAddress -> sectionNames[]
-			const listToSections = new Map();
-			for (const sec of sections) {
-				const addresses = sec.profileListAddresses ?? (sec.profileListAddress ? [sec.profileListAddress] : []);
-				const sectionName = sec.name || 'Section';
-				for (const listAddress of addresses) {
-					if (!listAddress) continue;
-					if (!listToSections.has(listAddress)) listToSections.set(listAddress, []);
-					listToSections.get(listAddress).push(sectionName);
-				}
+	(async () => {
+		// listAddress -> { names[], kindsSet }
+		const listToSectionInfo = new Map();
+		for (const sec of sections) {
+			const addresses = sec.profileListAddresses ?? (sec.profileListAddress ? [sec.profileListAddress] : []);
+			const sectionName = sec.name || 'Section';
+			const kinds = sec.kinds ?? [];
+			for (const listAddress of addresses) {
+				if (!listAddress) continue;
+				if (!listToSectionInfo.has(listAddress)) listToSectionInfo.set(listAddress, { names: [], kindsSet: new Set() });
+				const info = listToSectionInfo.get(listAddress);
+				info.names.push(sectionName);
+				kinds.forEach(k => info.kindsSet.add(k));
 			}
-			const list = [];
-			for (const [listAddress, sectionNames] of listToSections) {
-				const parts = listAddress.split(':');
-				const dTag = parts.length >= 3 ? parts.slice(2).join(':') : '';
-				let listEv = await queryEvent({
-					kinds: [EVENT_KINDS.PROFILE_LIST],
-					authors: [selectedCommunity.pubkey],
-					'#d': [dTag]
-				});
-				if (!listEv) {
-					listEv = await fetchProfileListFromRelays(relays, listAddress);
-					if (listEv) await putEvents([listEv]);
-				}
-				const parsed = listEv ? parseProfileList(listEv) : null;
-				list.push({
-					listAddress,
-					listEvent: listEv,
-					parsed: parsed ?? { name: 'List', members: [], form: null, dTag },
-					sectionName: sectionNames.join(', ')
-				});
+		}
+		const list = [];
+		for (const [listAddress, info] of listToSectionInfo) {
+			const parts = listAddress.split(':');
+			const dTag = parts.length >= 3 ? parts.slice(2).join(':') : '';
+			let listEv = await queryEvent({
+				kinds: [EVENT_KINDS.PROFILE_LIST],
+				authors: [selectedCommunity.pubkey],
+				'#d': [dTag]
+			});
+			if (!listEv) {
+				listEv = await fetchProfileListFromRelays(relays, listAddress);
+				if (listEv) await putEvents([listEv]);
 			}
-			membersListData = list;
-		})();
+			const parsed = listEv ? parseProfileList(listEv) : null;
+			list.push({
+				listAddress,
+				listEvent: listEv,
+				parsed: parsed ?? { name: 'List', members: [], form: null, dTag },
+				sectionName: info.names.join(', '),
+				sectionKinds: [...info.kindsSet]
+			});
+		}
+		membersListData = list;
+	})();
 	});
 
 	// When Crown admin modal opens, load form templates (kind 30168) by this community.
@@ -1478,17 +1504,23 @@
 				} catch { /* non-fatal */ }
 			}
 		}
-		const newParsed = parseProfileList(newEv);
-		if (listViewMoreModal?.listEvent?.id === listEvent.id) {
-			listViewMoreModal = { ...listViewMoreModal, listEvent: newEv, parsed: newParsed };
-		}
-		membersListData = membersListData.map((item) =>
-			item.listEvent?.id === listEvent.id ? { ...item, listEvent: newEv, parsed: newParsed } : item
-		);
-		adminProfileLists = adminProfileLists.map((entry) =>
-			entry.listEvent?.id === listEvent.id ? { ...entry, listEvent: newEv, parsed: newParsed, name: newParsed?.name ?? entry.name, image: newParsed?.image ?? null } : entry
-		);
-		listFormModal = null;
+	const newParsed = parseProfileList(newEv);
+	const editedDTag = listEvent.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+	const editedListAddress = `${EVENT_KINDS.PROFILE_LIST}:${listEvent.pubkey}:${editedDTag}`;
+	if (listViewMoreModal?.listEvent?.id === listEvent.id) {
+		listViewMoreModal = { ...listViewMoreModal, listEvent: newEv, parsed: newParsed };
+	}
+	membersListData = membersListData.map((item) =>
+		(item.listEvent?.id === listEvent.id || item.listAddress === editedListAddress)
+			? { ...item, listEvent: newEv, parsed: newParsed }
+			: item
+	);
+	adminProfileLists = adminProfileLists.map((entry) =>
+		(entry.listEvent?.id === listEvent.id || entry.listAddress === editedListAddress)
+			? { ...entry, listEvent: newEv, parsed: newParsed, name: newParsed?.name ?? entry.name, image: newParsed?.image ?? null }
+			: entry
+	);
+	listFormModal = null;
 	}
 
 	function openViewMoreModal(item) {
@@ -1560,53 +1592,61 @@
 
 	// When Join modal opens, load joinable lists (profile lists with form that user is not in)
 	$effect(() => {
-		if (!joinModalOpen || !selectedCommunity?.pubkey || !currentPubkey) return;
-		if (joinStep !== 'list') return;
-		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
-		const sections = comm?.sections ?? [];
-		// Per spec: check community's own declared relays first; fall back to write-safe relays.
-		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
-		let cancelled = false;
-		(async () => {
-		const list = [];
-		const seenAddresses = new Set();
-		const addrs = (sec) => sec.profileListAddresses ?? (sec.profileListAddress ? [sec.profileListAddress] : []);
-		for (const sec of sections) {
-			for (const listAddress of addrs(sec)) {
-				if (cancelled) return;
-				if (!listAddress || seenAddresses.has(listAddress)) continue;
-				seenAddresses.add(listAddress);
-				const { dTag = '' } = parseEventAddress(listAddress) ?? {};
-				let listEv = await queryEvent({
-					kinds: [EVENT_KINDS.PROFILE_LIST],
-					authors: [selectedCommunity.pubkey],
-					'#d': [dTag]
-				});
-				if (cancelled) return;
-				if (!listEv) {
-					listEv = await fetchProfileListFromRelays(relays, listAddress);
-					if (listEv) await putEvents([listEv]);
-				}
-				if (cancelled) return;
-				const parsed = listEv ? parseProfileList(listEv) : null;
-				if (!parsed?.form) continue;
-				if (parsed.members?.includes(currentPubkey)) continue;
-				// Pre-fetch & cache the form template so it's ready when the user taps.
-				try { await fetchFreshFormTemplate(parsed.form, relays); } catch { /* non-fatal */ }
-				if (cancelled) return;
-			list.push({
-				formAddress: parsed.form,
-				listName: parsed.name || sec.name || 'Members',
-				listAddress,
-				image: parsed.image ?? null,
-				sectionName: sec.name ?? '',
-				sectionKinds: sec.kinds ?? [],
-				members: parsed.members ?? []
-			});
-			}
+	if (!joinModalOpen || !selectedCommunity?.pubkey || !currentPubkey) return;
+	if (joinStep !== 'list') return;
+	const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
+	const sections = comm?.sections ?? [];
+	// Per spec: check community's own declared relays first; fall back to write-safe relays.
+	const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
+	let cancelled = false;
+	(async () => {
+	// Aggregate sectionNames + sectionKinds from ALL sections per list address
+	// (a list may be shared across multiple sections — same logic as membersListData).
+	const addrs = (sec) => sec.profileListAddresses ?? (sec.profileListAddress ? [sec.profileListAddress] : []);
+	const listToSectionInfo = new Map(); // listAddress -> { names[], kindsSet }
+	for (const sec of sections) {
+		for (const listAddress of addrs(sec)) {
+			if (!listAddress) continue;
+			if (!listToSectionInfo.has(listAddress)) listToSectionInfo.set(listAddress, { names: [], kindsSet: new Set() });
+			const info = listToSectionInfo.get(listAddress);
+			info.names.push(sec.name ?? '');
+			(sec.kinds ?? []).forEach((k) => info.kindsSet.add(k));
 		}
-		if (!cancelled) joinableLists = list;
-		})();
+	}
+	const list = [];
+	for (const [listAddress, sectionInfo] of listToSectionInfo) {
+		if (cancelled) return;
+		const { dTag = '' } = parseEventAddress(listAddress) ?? {};
+		let listEv = await queryEvent({
+			kinds: [EVENT_KINDS.PROFILE_LIST],
+			authors: [selectedCommunity.pubkey],
+			'#d': [dTag]
+		});
+		if (cancelled) return;
+		if (!listEv) {
+			listEv = await fetchProfileListFromRelays(relays, listAddress);
+			if (listEv) await putEvents([listEv]);
+		}
+		if (cancelled) return;
+		const parsed = listEv ? parseProfileList(listEv) : null;
+		if (!parsed?.form) continue;
+		if (parsed.members?.includes(currentPubkey)) continue;
+		// Pre-fetch & cache the form template so it's ready when the user taps.
+		try { await fetchFreshFormTemplate(parsed.form, relays); } catch { /* non-fatal */ }
+		if (cancelled) return;
+		list.push({
+			formAddress: parsed.form,
+			listName: parsed.name || sectionInfo.names[0] || '',
+			listDescription: parsed.content ?? '',
+			listAddress,
+			image: parsed.image ?? null,
+			sectionName: sectionInfo.names.join(', '),
+			sectionKinds: [...sectionInfo.kindsSet],
+			members: parsed.members ?? []
+		});
+	}
+	if (!cancelled) joinableLists = list;
+	})();
 		return () => { cancelled = true; };
 	});
 
@@ -1711,6 +1751,7 @@
 	}
 	function closeJoinModal() {
 		joinModalOpen = false;
+		joinContext = null;
 		joinStep = 'list';
 		selectedJoinList = null;
 		joinableLists = [];
@@ -2463,23 +2504,23 @@
 			</div>
 	{:else if openPostId}
 		<div class="panel-content panel-content-detail">
-			<ForumPostDetail
-				eventId={openPostId}
-				communityNpub={selectedCommunity.npub}
-				onBack={backToForum}
-				isMember={isMember}
-				onJoinRequired={() => (joinModalOpen = true)}
-			/>
+		<ForumPostDetail
+			eventId={openPostId}
+			communityNpub={selectedCommunity.npub}
+			onBack={backToForum}
+			isMember={isMember}
+			onJoinRequired={() => { joinContext = 'forum'; joinModalOpen = true; }}
+		/>
 		</div>
 	{:else if openTaskId}
 		<div class="panel-content panel-content-detail">
-			<TaskDetail
-				eventId={openTaskId}
-				communityNpub={selectedCommunity.npub}
-				onBack={backToForum}
-				isMember={isMember}
-				onJoinRequired={() => (joinModalOpen = true)}
-			/>
+		<TaskDetail
+			eventId={openTaskId}
+			communityNpub={selectedCommunity.npub}
+			onBack={backToForum}
+			isMember={isMember}
+			onJoinRequired={() => { joinContext = 'tasks'; joinModalOpen = true; }}
+		/>
 		</div>
 	{:else if openProjectId}
 		<div class="panel-content panel-content-detail">
@@ -2657,7 +2698,7 @@
 			communityName={selectedCommunity.displayName || selectedCommunity.name || ''}
 			selectedSection={selectedSection}
 			modalOpen={addPostModalOpen || addTaskModalOpen || addWikiModalOpen || projectModalOpen}
-			onJoin={() => (joinModalOpen = true)}
+			onJoin={() => { joinContext = selectedSection; joinModalOpen = true; }}
 			onComment={() => {}}
 			onZap={() => {}}
 			onAdd={() => {
@@ -2722,33 +2763,59 @@
 			{#if membersListData.length === 0}
 				<p class="community-info-profiles-empty">No profile lists found.</p>
 			{/if}
-			{#each membersListData as item}
-				{@const listMembers = item.parsed?.members ?? []}
-				<div class="info-list-panel">
-					<div class="info-list-panel-header">
-						<SingleBadge image={item.parsed?.image ?? null} name={item.parsed?.name ?? item.sectionName} sizePx={52} />
-						<div class="info-list-panel-meta">
-							<span class="info-list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
-							{#if item.parsed?.content}
-								<span class="info-list-panel-desc">{item.parsed.content}</span>
+		{#each membersListData as item}
+			{@const listMembers = item.parsed?.members ?? []}
+			{@const infoWriteTypes = contentTypesFromKinds(item.sectionKinds ?? [])}
+			<div class="info-list-panel">
+				<!-- Section 1: badge + name + description -->
+				<div class="list-panel-section">
+					<SingleBadge image={item.parsed?.image ?? null} name={item.parsed?.name ?? item.sectionName} sizePx={52} />
+					<div class="list-panel-meta">
+						<span class="list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
+						{#if item.parsed?.content}
+							<span class="list-panel-desc">{item.parsed.content}</span>
+						{/if}
+					</div>
+				</div>
+				{#if infoWriteTypes.length > 0 || item.sectionName}
+					<div class="list-panel-divider"></div>
+					<!-- Section 2: CAN WRITE -->
+					<div class="list-panel-section list-panel-section-write">
+						<p class="list-panel-write-label">CAN WRITE</p>
+						<div class="list-panel-type-pills">
+							{#if infoWriteTypes.length > 0}
+								{#each infoWriteTypes as ct}
+									<span class="list-panel-type-pill">
+										<img src={ct.emoji} alt="" class="list-panel-type-emoji" />
+										<span>{ct.label}</span>
+									</span>
+								{/each}
+							{:else if item.sectionName}
+								<span class="list-panel-type-pill">
+									<span>{item.sectionName}</span>
+								</span>
 							{/if}
 						</div>
 					</div>
-				{#if item.sectionName}
-					<div class="list-write-in-block">
-						<p class="list-write-in-label">CAN WRITE IN</p>
-						<div class="list-write-in-pills">
-							<span class="list-write-in-pill">{item.sectionName}</span>
-						</div>
-					</div>
 				{/if}
-				{#if listMembers.length > 0}
-					{@const infoStackProfiles = listMembers.slice(0, 3).map(pk => {
-						const p = profilesByPubkey.get(pk);
-						return { pubkey: pk, name: p?.name ?? p?.display_name ?? '', pictureUrl: p?.picture ?? '' };
-					})}
-					<ProfilePicStack profiles={infoStackProfiles} size="sm" text="{listMembers.length} Profiles" />
-				{/if}
+				<div class="list-panel-divider"></div>
+				<!-- Section 3: profile list rows + actions -->
+				<div class="list-panel-section list-panel-section-profiles">
+					{#if listMembers.length > 0}
+						<ul class="info-list-members-list">
+							{#each listMembers.slice(0, 5) as pk}
+								{@const p = profilesByPubkey.get(pk)}
+								<li class="info-list-member-row">
+									{#if p?.picture}
+										<img src={p.picture} alt="" class="info-list-member-avatar" />
+									{:else}
+										<div class="info-list-member-avatar info-list-member-avatar-placeholder"></div>
+									{/if}
+									<span class="info-list-member-name">{p?.name ?? p?.display_name ?? pk.slice(0, 8) + '…'}</span>
+								</li>
+							{/each}
+						</ul>
+					{/if}
 					<div class="info-list-actions">
 						<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
 						<div class="info-list-actions-right">
@@ -2763,6 +2830,7 @@
 							{/if}
 						</div>
 					</div>
+				</div>
 				</div>
 			{/each}
 		</div>
@@ -2993,35 +3061,39 @@
 				{#if allAdminProfileLists.length === 0}
 					<p class="community-info-profiles-empty">No profile lists yet.</p>
 				{/if}
-			{#each allAdminProfileLists as item}
-					{@const listDisplayName = item.parsed?.name ?? item.name ?? item.sectionName}
-					<div class="info-list-panel">
-						<div class="info-list-panel-header">
-							<SingleBadge image={item.parsed?.image ?? null} name={listDisplayName} sizePx={52} />
-							<div class="info-list-panel-meta">
-								<span class="info-list-panel-name">{listDisplayName}</span>
-								{#if item.parsed?.content}
-									<span class="info-list-panel-desc">{item.parsed.content}</span>
-								{/if}
-							</div>
+		{#each allAdminProfileLists as item}
+				{@const listDisplayName = item.parsed?.name ?? item.name ?? item.sectionName}
+				<div class="info-list-panel">
+					<!-- Section 1: badge + name + description -->
+					<div class="list-panel-section">
+						<SingleBadge image={item.parsed?.image ?? null} name={listDisplayName} sizePx={52} />
+						<div class="list-panel-meta">
+							<span class="list-panel-name">{listDisplayName}</span>
+							{#if item.parsed?.content}
+								<span class="list-panel-desc">{item.parsed.content}</span>
+							{/if}
 						</div>
-					{#if item.sectionName && item.sectionName !== '—'}
-						<div class="list-write-in-block">
-							<p class="list-write-in-label">CAN WRITE IN</p>
-							<div class="list-write-in-pills">
-								<span class="list-write-in-pill">{item.sectionName}</span>
-							</div>
+					</div>
+				{#if item.sectionName && item.sectionName !== '—'}
+					<div class="list-panel-divider"></div>
+					<!-- Section 2: CAN WRITE -->
+					<div class="list-panel-section list-panel-section-write">
+						<p class="list-panel-write-label">CAN WRITE</p>
+						<div class="list-panel-type-pills">
+							<span class="list-panel-type-pill"><span>{item.sectionName}</span></span>
 						</div>
-					{/if}
-						<div class="info-list-actions">
-								<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
-								<button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => openEditListModal(item)}>
-									<Pen variant="fill" size={13} color="hsl(var(--white66))" />
-									<span>Edit</span>
-								</button>
-							</div>
-						</div>
-					{/each}
+					</div>
+				{/if}
+					<div class="list-panel-divider"></div>
+					<div class="info-list-actions">
+						<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
+						<button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => openEditListModal(item)}>
+							<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+							<span>Edit</span>
+						</button>
+					</div>
+				</div>
+			{/each}
 					<div class="admin-section-add-row">
 						<button type="button" class="admin-section-add-btn" onclick={() => openListFormModal('add')} aria-label="Add profile list">
 							<Plus variant="outline" size={18} color="hsl(var(--white66))" />
@@ -3510,7 +3582,7 @@
 	onClose={closeJoinModal}
 	ariaLabel="Join community"
 	title={joinStep === 'list' ? `Join ${selectedCommunity?.displayName || selectedCommunity?.name || 'Community'}` : null}
-	description={joinStep === 'list' ? 'What list do you want to join?' : null}
+	description={joinStep === 'list' ? (joinContext && CONTENT_TYPE_BY_SECTION[joinContext] ? `To write ${CONTENT_TYPE_BY_SECTION[joinContext].label} you need to be part of one of these lists.` : 'What list do you want to join?') : null}
 	closeButtonMobile={true}
 	padContent={true}
 >
@@ -3524,37 +3596,62 @@
 			{#if joinableLists.length === 0}
 				<p class="text-sm" style="color: hsl(var(--white33));">Loading…</p>
 			{:else}
-				<div class="join-list-panels">
-					{#each joinableLists as item}
-						{@const stackProfiles = (item.members ?? []).slice(0, 3).map(pk => {
-							const p = profilesByPubkey.get(pk);
-							return { pubkey: pk, name: p?.name ?? p?.display_name ?? '', pictureUrl: p?.picture ?? '' };
-						})}
-						<button
-							type="button"
-							class="join-list-panel"
-							onclick={() => { selectedJoinList = item; joinStep = 'form'; fetchJoinForm(item.formAddress); }}
-						>
-							<div class="join-list-panel-header">
-								<SingleBadge image={item.image} name={item.listName} sizePx={52} />
-								<div class="join-list-panel-meta">
-									<span class="join-list-panel-name">{item.listName}</span>
-								</div>
+			<div class="join-list-panels">
+				{#each joinableLists as item}
+					{@const stackProfiles = (item.members ?? []).slice(0, 3).map(pk => {
+						const p = profilesByPubkey.get(pk);
+						return { pubkey: pk, name: p?.name ?? p?.display_name ?? '', pictureUrl: p?.picture ?? '' };
+					})}
+					{@const joinWriteTypes = contentTypesFromKinds(item.sectionKinds ?? [])}
+					<div class="join-list-panel">
+						<!-- Section 1: badge + name + description -->
+						<div class="list-panel-section">
+							<SingleBadge image={item.image} name={item.listName} sizePx={52} />
+							<div class="list-panel-meta">
+								<span class="list-panel-name">{item.listName}</span>
+								{#if item.listDescription}
+									<span class="list-panel-desc">{item.listDescription}</span>
+								{/if}
 							</div>
-						{#if item.sectionName}
-							<div class="list-write-in-block">
-								<p class="list-write-in-label">CAN WRITE IN</p>
-								<div class="list-write-in-pills">
-									<span class="list-write-in-pill">{item.sectionName}</span>
+						</div>
+						{#if joinWriteTypes.length > 0 || item.sectionName}
+							<div class="list-panel-divider"></div>
+							<!-- Section 2: CAN WRITE -->
+							<div class="list-panel-section list-panel-section-write">
+								<p class="list-panel-write-label">CAN WRITE</p>
+								<div class="list-panel-type-pills">
+									{#if joinWriteTypes.length > 0}
+										{#each joinWriteTypes as ct}
+											<span class="list-panel-type-pill">
+												<img src={ct.emoji} alt="" class="list-panel-type-emoji" />
+												<span>{ct.label}</span>
+											</span>
+										{/each}
+									{:else if item.sectionName}
+										<span class="list-panel-type-pill">
+											<span>{item.sectionName}</span>
+										</span>
+									{/if}
 								</div>
 							</div>
 						{/if}
-						{#if item.members?.length > 0}
-							<ProfilePicStack profiles={stackProfiles} size="sm" text="{item.members.length} Profiles" />
-						{/if}
-						</button>
-					{/each}
-				</div>
+						<div class="list-panel-divider"></div>
+						<!-- Section 3: profile stack + Join button -->
+						<div class="list-panel-section list-panel-section-actions">
+							{#if item.members?.length > 0}
+								<ProfilePicStack profiles={stackProfiles} size="sm" text="{item.members.length} Profiles" />
+							{:else}
+								<span></span>
+							{/if}
+							<button
+								type="button"
+								class="btn-primary-small"
+								onclick={() => { selectedJoinList = item; joinStep = 'form'; fetchJoinForm(item.formAddress); }}
+							>Join</button>
+						</div>
+					</div>
+				{/each}
+			</div>
 			{/if}
 		{:else if joinStep === 'form'}
 			<div class="join-form-header">
@@ -4359,30 +4456,52 @@
 		color: hsl(var(--muted-foreground));
 		margin: 0;
 	}
-	.info-list-panel {
-		padding: 1rem 1.125rem;
+	/* Shared 3-section list panel — used in community info modal + join modal */
+	.info-list-panel,
+	.join-list-panel {
 		background: hsl(var(--white8));
-		border: none;
 		border-radius: var(--radius-16);
+		overflow: hidden;
 		display: flex;
 		flex-direction: column;
-		gap: 0.625rem;
 	}
-	.info-list-panel-header {
+	.list-panel-section {
 		display: flex;
-		align-items: flex-start;
+		align-items: center;
 		gap: 0.875rem;
+		padding: 0.875rem 1rem;
 	}
-	.info-list-panel-meta {
+	.list-panel-section-write {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.4rem;
+		padding: 0.75rem 1rem;
+	}
+	.list-panel-section-actions {
+		justify-content: space-between;
+		padding: 0.75rem 1rem;
+	}
+	.list-panel-section-profiles {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0;
+		padding: 0;
+	}
+	.list-panel-divider {
+		width: 100%;
+		height: 1px;
+		background: hsl(var(--white11));
+		flex-shrink: 0;
+	}
+	.list-panel-meta {
 		flex: 1;
 		min-width: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 0.2rem;
 		justify-content: center;
-		padding-top: 2px;
 	}
-	.info-list-panel-name {
+	.list-panel-name {
 		font-weight: 600;
 		font-size: 0.9375rem;
 		color: hsl(var(--foreground));
@@ -4390,28 +4509,22 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.info-list-panel-desc {
+	.list-panel-desc {
 		font-size: 0.8125rem;
 		color: hsl(var(--muted-foreground));
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	/* Shared "CAN WRITE IN" block — used in community info modal + join modal */
-	.list-write-in-block {
-		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
-	}
-	.list-write-in-label {
+	.list-panel-write-label {
 		font-size: 0.625rem;
 		font-weight: 500;
 		text-transform: uppercase;
 		letter-spacing: 0.16em;
-		color: hsl(var(--white33));
+		color: hsl(var(--white66));
 		margin: 0;
 	}
-	.list-write-in-pills {
+	.list-panel-type-pills {
 		display: flex;
 		flex-direction: row;
 		flex-wrap: nowrap;
@@ -4420,19 +4533,55 @@
 		scrollbar-width: none;
 		-ms-overflow-style: none;
 	}
-	.list-write-in-pills::-webkit-scrollbar {
-		display: none;
-	}
-	.list-write-in-pill {
+	.list-panel-type-pills::-webkit-scrollbar { display: none; }
+	.list-panel-type-pill {
 		flex-shrink: 0;
 		display: inline-flex;
 		align-items: center;
+		gap: 0.3rem;
 		padding: 0.25rem 0.625rem;
-		background: hsl(var(--white8));
-		border-radius: 9999px;
+		background: hsl(var(--white11));
+		border-radius: 12px;
 		font-size: 0.8125rem;
 		font-weight: 500;
-		color: hsl(var(--white66));
+		color: hsl(var(--foreground));
+		white-space: nowrap;
+	}
+	.list-panel-type-emoji {
+		width: 16px;
+		height: 16px;
+		object-fit: contain;
+		flex-shrink: 0;
+	}
+	/* Community info modal: Section 3 profile list rows */
+	.info-list-members-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.info-list-member-row {
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+		padding: 0.5rem 1rem;
+	}
+	.info-list-member-avatar {
+		width: 28px;
+		height: 28px;
+		border-radius: 50%;
+		object-fit: cover;
+		flex-shrink: 0;
+	}
+	.info-list-member-avatar-placeholder {
+		background: hsl(var(--white11));
+	}
+	.info-list-member-name {
+		font-size: 0.875rem;
+		color: hsl(var(--foreground));
+		overflow: hidden;
+		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 	.info-list-actions {
@@ -4440,7 +4589,7 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.5rem;
-		margin-top: 0.125rem;
+		padding: 0.75rem 1rem;
 	}
 	.info-list-actions-right {
 		display: flex;
@@ -4856,6 +5005,11 @@
 		text-align: center;
 		margin-bottom: 1.25rem;
 	}
+	.join-form-header .join-modal-title {
+		font-size: 1.875rem;
+		font-weight: 700;
+		line-height: 1.15;
+	}
 	.join-eyebrow {
 		font-size: 0.6875rem;
 		font-weight: 500;
@@ -4875,41 +5029,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.625rem;
-	}
-	.join-list-panel {
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-		width: 100%;
-		padding: 1rem;
-		background: hsl(var(--white8));
-		border-radius: var(--radius-16);
-		border: none;
-		text-align: left;
-		cursor: pointer;
-	}
-	.join-list-panel-header {
-		display: flex;
-		align-items: center;
-		gap: 0.875rem;
-	}
-	.join-list-panel-meta {
-		display: flex;
-		flex-direction: column;
-		gap: 0.2rem;
-		min-width: 0;
-	}
-	.join-list-panel-name {
-		font-size: 1rem;
-		font-weight: 600;
-		color: hsl(var(--foreground));
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.join-list-panel-profiles {
-		display: flex;
-		align-items: center;
 	}
 	/* Form step */
 	.join-form {
