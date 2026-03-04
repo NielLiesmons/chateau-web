@@ -165,6 +165,22 @@ export function parseAppStack(event) {
 // =============================================================================
 // Utilities
 // =============================================================================
+
+/**
+ * Parse a NIP-33 event address string ("kind:pubkey:d-tag") into its parts.
+ * Returns null for malformed input.
+ */
+export function parseEventAddress(address) {
+	if (!address || typeof address !== 'string') return null;
+	const parts = address.split(':');
+	if (parts.length < 3) return null;
+	return {
+		kind: parseInt(parts[0], 10),
+		pubkey: parts[1],
+		dTag: parts.slice(2).join(':')
+	};
+}
+
 /**
  * Encode an app to its naddr
  */
@@ -311,6 +327,58 @@ export function parseFormTemplate(event) {
 		fields,
 		createdAt: event.created_at
 	};
+}
+
+/**
+ * Parse kind 30315 Project event
+ */
+export function parseProject(event) {
+    if (!event?.tags) return null;
+    const get = (name) => event.tags.find((t) => t[0] === name)?.[1];
+    const milestoneAddrs = event.tags.filter((t) => t[0] === 'a' && t[1]?.startsWith('30316:')).map((t) => t[1]);
+    const members = event.tags.filter((t) => t[0] === 'p' && t[1]).map((t) => ({ pubkey: t[1], role: t[2] ?? '' }));
+    const labels = event.tags.filter((t) => t[0] === 't' && t[1]).map((t) => t[1]);
+    const communityPubkey = get('h') ?? '';
+    return {
+        id: event.id,
+        pubkey: event.pubkey,
+        dTag: get('d') ?? '',
+        title: get('title') ?? '',
+        summary: get('summary') ?? '',
+        content: event.content || '',
+        due: get('due') ? parseInt(get('due')) : null,
+        milestoneAddrs,
+        members,
+        labels,
+        communityPubkey,
+        createdAt: event.created_at,
+        raw: event
+    };
+}
+
+/**
+ * Parse kind 30316 Milestone event
+ */
+export function parseMilestone(event) {
+    if (!event?.tags) return null;
+    const get = (name) => event.tags.find((t) => t[0] === name)?.[1];
+    const projectAddr = event.tags.find((t) => t[0] === 'a' && t[1]?.startsWith('30315:'))?.[1] ?? null;
+    const labels = event.tags.filter((t) => t[0] === 't' && t[1]).map((t) => t[1]);
+    const communityPubkey = get('h') ?? '';
+    return {
+        id: event.id,
+        pubkey: event.pubkey,
+        dTag: get('d') ?? '',
+        title: get('title') ?? '',
+        summary: get('summary') ?? '',
+        content: event.content || '',
+        due: get('due') ? parseInt(get('due')) : null,
+        projectAddr,
+        labels,
+        communityPubkey,
+        createdAt: event.created_at,
+        raw: event
+    };
 }
 
 /**

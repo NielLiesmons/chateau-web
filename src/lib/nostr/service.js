@@ -11,7 +11,8 @@
 import { SimplePool } from 'nostr-tools';
 import { DEFAULT_CATALOG_RELAYS, DEFAULT_SOCIAL_RELAYS, DEFAULT_COMMUNITY_RELAYS, PLATFORM_FILTER, EVENT_KINDS } from '$lib/config';
 import { APPS_POLL_LIMIT, STACKS_POLL_LIMIT } from '$lib/constants';
-import { putEvents, queryEvents } from './dexie';
+import { putEvents, queryEvents, queryEvent } from './dexie';
+import { parseEventAddress } from './models';
 
 // ============================================================================
 // Relay Pool
@@ -207,19 +208,33 @@ export async function fetchProfileListFromRelays(relayUrls, address) {
 }
 
 /**
- * Fetch form template (kind 30168) by address. Address format: 30168:pubkey:d
+ * Return a locally-cached form template (kind 30168) by address. Instant — no relay hop.
+ * Address format: "30168:pubkey:d-tag"
  */
-export async function fetchFormTemplateFromRelays(relayUrls, formAddress) {
-	const parts = formAddress.split(':');
-	if (parts.length < 3 || parts[0] !== '30168') return null;
-	const [, pubkey, dTag] = parts;
-	const events = await fetchFromRelays(relayUrls, {
+export async function getLocalFormTemplate(formAddress) {
+	const addr = parseEventAddress(formAddress);
+	if (!addr || addr.kind !== EVENT_KINDS.FORM_TEMPLATE) return null;
+	return queryEvent({
 		kinds: [EVENT_KINDS.FORM_TEMPLATE],
-		authors: [pubkey],
-		'#d': [dTag],
-		limit: 1
+		authors: [addr.pubkey],
+		'#d': [addr.dTag]
 	});
-	return events[0] ?? null;
+}
+
+/**
+ * Fetch the freshest form template (kind 30168) from relays and cache it.
+ * fetchFromRelays already writes events to Dexie, so callers don't need putEvents.
+ * Address format: "30168:pubkey:d-tag"
+ */
+export async function fetchFreshFormTemplate(formAddress, relayUrls, options = {}) {
+	const addr = parseEventAddress(formAddress);
+	if (!addr || addr.kind !== EVENT_KINDS.FORM_TEMPLATE) return null;
+	const events = await fetchFromRelays(
+		relayUrls,
+		{ kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [addr.pubkey], '#d': [addr.dTag], limit: 1 },
+		{ timeout: 3000, ...options }
+	);
+	return events?.[0] ?? null;
 }
 
 /**
@@ -244,6 +259,62 @@ export async function fetchCommunityWikis(relayUrls, communityPubkey, options = 
 		'#h': [communityPubkey],
 		limit: 100
 	}, options);
+}
+
+/**
+ * Fetch kind:30315 Project events for a community.
+ */
+export async function fetchCommunityProjects(relayUrls, communityPubkey, authorPubkeys = []) {
+	const filter = { kinds: [EVENT_KINDS.PROJECT], '#h': [communityPubkey], limit: 200 };
+	if (authorPubkeys.length) filter.authors = authorPubkeys;
+	return fetchFromRelays(relayUrls, filter);
+}
+
+/**
+ * Fetch kind:30316 Milestone events by their NIP-33 addresses or by project back-reference.
+ * Pass milestoneAddrs (e.g. ["30316:pubkey:slug"]) to fetch specific milestones.
+ */
+export async function fetchProjectMilestones(relayUrls, milestoneAddrs = [], projectAddr = null) {
+	const promises = [];
+	if (milestoneAddrs.length) {
+		// Build per-pubkey filters from addresses
+		const byPubkey = new Map();
+		for (const addr of milestoneAddrs) {
+			const [, pk, d] = addr.split(':');
+			if (!pk || !d) continue;
+			if (!byPubkey.has(pk)) byPubkey.set(pk, []);
+			byPubkey.get(pk).push(d);
+		}
+		for (const [pk, dTags] of byPubkey) {
+			promises.push(fetchFromRelays(relayUrls, { kinds: [EVENT_KINDS.MILESTONE], authors: [pk], '#d': dTags, limit: 200 }));
+		}
+	}
+	if (projectAddr) {
+		promises.push(fetchFromRelays(relayUrls, { kinds: [EVENT_KINDS.MILESTONE], '#a': [projectAddr], limit: 200 }));
+	}
+	const results = await Promise.all(promises);
+	const seen = new Set();
+	return results.flat().filter((e) => e?.id && !seen.has(e.id) && seen.add(e.id));
+}
+
+/**
+ * Subscribe to projects and milestones for a community (live updates).
+ */
+export function subscribeCommunityProjects(relayUrls, communityPubkey, authorPubkeys, onEvent) {
+	const filter = { kinds: [EVENT_KINDS.PROJECT, EVENT_KINDS.MILESTONE], '#h': [communityPubkey], limit: 200 };
+	if (authorPubkeys?.length) filter.authors = authorPubkeys;
+	const p = getPool();
+	const sub = p.subscribeMany(relayUrls, [filter], {
+		onevent(event) {
+			if (event?.id) {
+				bufferEvent(event);
+				onEvent?.(event);
+			}
+		},
+		oneose() {},
+		onclose() {}
+	});
+	return () => { try { sub.close(); } catch { /* noop */ } };
 }
 
 /**
@@ -307,33 +378,38 @@ export function subscribeForumPostComments(relayUrls, postIds, onEvent) {
 }
 
 /**
- * Subscribe to NIP-1111 (kind:1111) comments on addressable task events (#A tag).
- * Stores received events in the local Dexie cache so liveQueries react to them.
+ * Subscribe to NIP-1111 (kind:1111) comments on task events.
+ * Covers both addressable (#A/#a) and event-id (#E/#e) root references,
+ * matching all four variants used by TaskDetail.
  * @param {string[]} relayUrls
  * @param {string[]} taskAddrs - NIP-33 addresses e.g. "37060:pubkey:dtag"
+ * @param {string[]} [taskIds] - event IDs of the task events
  * @param {Function} [onEvent]
  * @returns {() => void} unsubscribe function
  */
-export function subscribeTaskComments(relayUrls, taskAddrs, onEvent) {
-	if (!Array.isArray(taskAddrs) || taskAddrs.length === 0) return () => {};
+export function subscribeTaskComments(relayUrls, taskAddrs, taskIds = [], onEvent) {
+	if ((!Array.isArray(taskAddrs) || taskAddrs.length === 0) &&
+		(!Array.isArray(taskIds) || taskIds.length === 0)) return () => {};
 	const p = getPool();
-	const sub = p.subscribeMany(
-		relayUrls,
-		[
-			{ kinds: [1111], '#A': taskAddrs, limit: 400 },
-			{ kinds: [1111], '#a': taskAddrs, limit: 400 }
-		],
-		{
-			onevent(event) {
-				if (event?.id) {
-					bufferEvent(event);
-					onEvent?.(event);
-				}
-			},
-			oneose() {},
-			onclose() {}
-		}
-	);
+	const filters = [];
+	if (taskAddrs.length) {
+		filters.push({ kinds: [1111], '#A': taskAddrs, limit: 400 });
+		filters.push({ kinds: [1111], '#a': taskAddrs, limit: 400 });
+	}
+	if (taskIds.length) {
+		filters.push({ kinds: [1111], '#E': taskIds, limit: 400 });
+		filters.push({ kinds: [1111], '#e': taskIds, limit: 400 });
+	}
+	const sub = p.subscribeMany(relayUrls, filters, {
+		onevent(event) {
+			if (event?.id) {
+				bufferEvent(event);
+				onEvent?.(event);
+			}
+		},
+		oneose() {},
+		onclose() {}
+	});
 	return () => {
 		try { sub.close(); } catch { /* noop */ }
 	};

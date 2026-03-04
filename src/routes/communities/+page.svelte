@@ -7,10 +7,11 @@
 	import { nip19 } from 'nostr-tools';
 	import { Plus, Search } from '$lib/components/icons';
 	import { liveQuery, queryEvents, queryEvent, putEvents } from '$lib/nostr';
-	import { parseCommunity, parseProfileList, parseFormTemplate, parseForumPost, parseProfile } from '$lib/nostr';
+	import { parseCommunity, parseProfileList, parseFormTemplate, parseForumPost, parseProfile, parseEventAddress } from '$lib/nostr';
 	import {
 		fetchProfileListFromRelays,
-		fetchFormTemplateFromRelays,
+		getLocalFormTemplate,
+		fetchFreshFormTemplate,
 		fetchCommunityForumPosts,
 		subscribeCommunityForumPosts,
 		subscribeForumPostComments,
@@ -18,7 +19,12 @@
 		fetchFromRelays,
 		fetchProfilesBatch,
 		publishToRelays,
-		fetchCommunityWikis
+		fetchCommunityWikis,
+		fetchCommunityProjects,
+		fetchProjectMilestones,
+		subscribeCommunityProjects,
+		parseProject,
+		parseMilestone
 	} from '$lib/nostr';
 	import GetStartedModal from '$lib/components/modals/GetStartedModal.svelte';
 	import SpinKeyModal from '$lib/components/modals/SpinKeyModal.svelte';
@@ -32,7 +38,7 @@
 	import CommunityBottomBar from '$lib/components/community/CommunityBottomBar.svelte';
 	import ForumPostDetail from '$lib/components/community/ForumPostDetail.svelte';
 	import TaskDetail from '$lib/components/community/TaskDetail.svelte';
-	import Modal from '$lib/components/Modal.svelte';
+	import Modal from '$lib/components/common/Modal.svelte';
 	import ForumPostModal from '$lib/components/modals/ForumPostModal.svelte';
 	import TaskModal from '$lib/components/modals/TaskModal.svelte';
 	import WikiModal from '$lib/components/modals/WikiModal.svelte';
@@ -40,14 +46,19 @@
 	import { Pen, Cross, Bell, ChevronRight, Crown } from '$lib/components/icons';
 	import BadgeStack from '$lib/components/common/BadgeStack.svelte';
 	import SingleBadge from '$lib/components/common/SingleBadge.svelte';
+	import ProfilePicStack from '$lib/components/common/ProfilePicStack.svelte';
 	import Selector from '$lib/components/common/Selector.svelte';
 	import TaskCard from '$lib/components/TaskCard.svelte';
 	import WikiCard from '$lib/components/WikiCard.svelte';
 	import WikiDetail from '$lib/components/community/WikiDetail.svelte';
+	import ProjectCard from '$lib/components/ProjectCard.svelte';
+	import ProjectDetail from '$lib/components/community/ProjectDetail.svelte';
+	import ProjectModal from '$lib/components/modals/ProjectModal.svelte';
 
 	const SECTION_PILLS = [
 		{ id: 'forum', label: 'Forum', kinds: [11] },
 		{ id: 'tasks', label: 'Tasks', kinds: [] },
+		{ id: 'projects', label: 'Projects', kinds: [30315, 30316] },
 		{ id: 'chat', label: 'Chat', kinds: [] },
 		{ id: 'apps', label: 'Apps', kinds: [] }
 	];
@@ -58,6 +69,7 @@
 		{ id: 'forum', name: 'Forum', kinds: [11], description: 'Forum posts' },
 		{ id: 'chat', name: 'Chat', kinds: [9], description: 'Chat messages' },
 		{ id: 'tasks', name: 'Tasks', kinds: [30400], description: 'Tasks' },
+		{ id: 'projects', name: 'Projects', kinds: [30315, 30316], description: 'Projects & milestones' },
 		{ id: 'apps', name: 'Apps', kinds: [32267], description: 'Apps' },
 		{ id: 'docs', name: 'Docs', kinds: [30101], description: 'Docs' },
 		{ id: 'wikis', name: 'Wikis', kinds: [30808], description: 'Wikis' },
@@ -68,6 +80,7 @@
 	const openPostId = $derived($page.url.searchParams.get('post') || '');
 	const openTaskId = $derived($page.url.searchParams.get('task') || '');
 	const openWikiSlug = $derived($page.url.searchParams.get('wiki') || '');
+	const openProjectId = $derived($page.url.searchParams.get('project') || '');
 	const currentPubkey = $derived(getCurrentPubkey());
 
 	let profileDropdownOpen = $state(false);
@@ -91,6 +104,13 @@
 	/** @type {import('nostr-tools').NostrEvent[]} */
 	let taskEvents = $state([]);
 	let wikiEvents = $state([]);
+	/** @type {import('nostr-tools').NostrEvent[]} */
+	let projectEvents = $state([]);
+	/** @type {Map<string, import('nostr-tools').NostrEvent[]>} milestones keyed by project id */
+	let milestonesByProjectId = $state(new Map());
+	/** @type {Map<string, string>} milestone addr → normalised status string */
+	let milestoneStatusMap = $state(new Map());
+	let projectModalOpen = $state(false);
 	/** @type {Map<string, import('nostr-tools').NostrEvent>} */
 	let taskStatusMap = $state(new Map());
 	let profileListEvent = $state(null);
@@ -595,7 +615,8 @@
 		return () => sub.unsubscribe();
 	});
 
-	// Subscribe + initial fetch for task comments so they land in Dexie before the liveQuery fires
+	// Subscribe + initial fetch for task comments so they land in Dexie before the liveQuery fires.
+	// Uses all four NIP-1111 tag variants: #A/#a (NIP-33 addr) and #E/#e (event ID).
 	let taskCommentsUnsub = null;
 	$effect(() => {
 		if (!browser || !selectedCommunity?.pubkey || !taskEvents?.length) {
@@ -606,22 +627,31 @@
 			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
 			return `${EVENT_KINDS.TASK}:${e.pubkey}:${d}`;
 		}).filter(Boolean);
-		if (taskAddrs.length === 0) return;
+		const taskIds = taskEvents.map((e) => e.id).filter(Boolean);
+		if (taskAddrs.length === 0 && taskIds.length === 0) return;
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
-		// Subscription for future/live events
-		taskCommentsUnsub = subscribeTaskComments(relays, taskAddrs);
+		// Subscription for future/live events (all four tag variants)
+		taskCommentsUnsub = subscribeTaskComments(relays, taskAddrs, taskIds);
 		// Explicit fetch so Dexie is populated immediately (subscription return is async)
-		Promise.all([
-			fetchFromRelays(relays, { kinds: [1111], '#A': taskAddrs, limit: 400 }),
-			fetchFromRelays(relays, { kinds: [1111], '#a': taskAddrs, limit: 400 })
-		]).then(([byA, bya]) => {
-			const evs = [...byA, ...bya];
+		const fetchFilters = [
+			...taskAddrs.length ? [
+				fetchFromRelays(relays, { kinds: [1111], '#A': taskAddrs, limit: 400 }),
+				fetchFromRelays(relays, { kinds: [1111], '#a': taskAddrs, limit: 400 })
+			] : [],
+			...taskIds.length ? [
+				fetchFromRelays(relays, { kinds: [1111], '#E': taskIds, limit: 400 }),
+				fetchFromRelays(relays, { kinds: [1111], '#e': taskIds, limit: 400 })
+			] : []
+		];
+		Promise.all(fetchFilters).then((results) => {
+			const evs = results.flat();
 			if (evs.length) putEvents(evs);
 		}).catch(() => {});
 		return () => { if (taskCommentsUnsub) { taskCommentsUnsub(); taskCommentsUnsub = null; } };
 	});
 
 	// liveQuery: NIP-1111 comments on tasks → commenters per task (shape: {pubkey,name,pictureUrl} for TaskCard)
+	// All four tag variants: #A/#a (NIP-33 addr) and #E/#e (event ID) — mirrors TaskDetail queries.
 	// Does NOT block on generalMembers — runs immediately and applies filter when available.
 	$effect(() => {
 		if (!browser || !taskEvents?.length) { commentersByTaskId = new Map(); return; }
@@ -629,42 +659,50 @@
 			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
 			return `${EVENT_KINDS.TASK}:${e.pubkey}:${d}`;
 		}).filter(Boolean);
-		if (taskAddrs.length === 0) { commentersByTaskId = new Map(); return; }
-		const addrToId = new Map(taskEvents.map((e) => {
-			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
-			return [`${EVENT_KINDS.TASK}:${e.pubkey}:${d}`, e.id];
-		}));
+		const taskIds = taskEvents.map((e) => e.id).filter(Boolean);
+		// addr → eventId and eventId → eventId (both keys resolve to the task's event ID)
+		const taskRefToId = new Map([
+			...taskEvents.map((e) => {
+				const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+				return [`${EVENT_KINDS.TASK}:${e.pubkey}:${d}`, e.id];
+			}),
+			...taskEvents.map((e) => [e.id, e.id])
+		]);
+		const taskRoots = new Set([...taskAddrs, ...taskIds]);
 		// Use generalMembers filter when resolved; null = no filter (also used while still loading)
 		const allowedSet = (generalMembers && generalMembers.length) ? new Set(generalMembers) : null;
 
 		const sub = liveQuery(async () => {
-			const [byA, bya] = await Promise.all([
-				queryEvents({ kinds: [1111], '#A': taskAddrs, limit: 400 }),
-				queryEvents({ kinds: [1111], '#a': taskAddrs, limit: 400 })
+			const results = await Promise.all([
+				taskAddrs.length ? queryEvents({ kinds: [1111], '#A': taskAddrs, limit: 400 }) : [],
+				taskAddrs.length ? queryEvents({ kinds: [1111], '#a': taskAddrs, limit: 400 }) : [],
+				taskIds.length ? queryEvents({ kinds: [1111], '#E': taskIds, limit: 400 }) : [],
+				taskIds.length ? queryEvents({ kinds: [1111], '#e': taskIds, limit: 400 }) : []
 			]);
 			const seen = new Set();
 			const merged = [];
-			for (const ev of [...byA, ...bya]) {
+			for (const ev of results.flat()) {
 				if (!seen.has(ev.id)) { seen.add(ev.id); merged.push(ev); }
 			}
 			const byTaskId = new Map();
 			const allPubkeys = new Set();
 			for (const ev of merged) {
 				if (allowedSet && !allowedSet.has(ev.pubkey)) continue;
-				// Find which task addr this comment belongs to (A/a tag pointing to a task addr)
-				const rootAddrTag = ev.tags?.find((t) => (t[0] === 'A' || t[0] === 'a') && taskAddrs.includes(t[1]));
-				const addr = rootAddrTag?.[1];
-				const tid = addr ? addrToId.get(addr) : null;
+				// Find the task this comment belongs to — check A/a/E/e tags for any known task root
+				const rootTag = ev.tags?.find((t) =>
+					['A','a','E','e'].includes(t[0]) && t[1] && taskRoots.has(t[1])
+				);
+				const tid = rootTag ? taskRefToId.get(rootTag[1]) : null;
 				if (!tid) continue;
 				if (!byTaskId.has(tid)) byTaskId.set(tid, { count: 0, rootPubkeys: new Set() });
 				const entry = byTaskId.get(tid);
 				// Total count all depths
 				entry.count++;
-				// Profile stack: only root-level comment authors
+				// Profile stack: only root-level comment authors (parentId is a task root)
 				const pTags = ev.tags?.filter((t) => ['e','E','a','A'].includes(t[0]) && t[1]) ?? [];
 				const replyTag = pTags.find((t) => t[3] === 'reply');
 				const parentId = replyTag?.[1] ?? pTags[pTags.length - 1]?.[1] ?? null;
-				if (taskAddrs.includes(parentId)) {
+				if (taskRoots.has(parentId)) {
 					entry.rootPubkeys.add(ev.pubkey);
 					allPubkeys.add(ev.pubkey);
 				}
@@ -782,6 +820,185 @@
 			.catch(() => {});
 		return () => sub.unsubscribe();
 	});
+
+	// liveQuery: project events (kind 30315) for the selected community
+	$effect(() => {
+		if (!browser || !selectedCommunity?.pubkey) { projectEvents = []; return; }
+		const communityPubkey = selectedCommunity.pubkey;
+		const sub = liveQuery(async () => {
+			return await queryEvents({ kinds: [EVENT_KINDS.PROJECT], '#h': [communityPubkey], limit: 200 });
+		}).subscribe({
+			next: (val) => { projectEvents = val || []; },
+			error: (e) => console.error('[Projects] liveQuery error', e)
+		});
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+		fetchCommunityProjects(relays, communityPubkey)
+			.then((evs) => { if (evs.length) putEvents(evs); })
+			.catch(() => {});
+		// Also subscribe for live updates
+		const unsub = subscribeCommunityProjects(relays, communityPubkey);
+		return () => { sub.unsubscribe(); unsub(); };
+	});
+
+	// liveQuery: milestone events (kind 30316) belonging to fetched projects
+	$effect(() => {
+		if (!browser || !projectEvents.length) { milestonesByProjectId = new Map(); return; }
+		const sub = liveQuery(async () => {
+			const allProjectAddrs = projectEvents.map((e) => {
+				const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+				return `${EVENT_KINDS.PROJECT}:${e.pubkey}:${d}`;
+			});
+			const evs = await queryEvents({ kinds: [EVENT_KINDS.MILESTONE], '#a': allProjectAddrs, limit: 500 });
+			const map = new Map();
+			for (const e of evs) {
+				const projAddr = e.tags?.find((t) => t[0] === 'a' && t[1]?.startsWith('30315:'))?.[1];
+				if (!projAddr) continue;
+				// Map to project event id
+				const projEv = projectEvents.find((pe) => {
+					const d = pe.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+					return `${EVENT_KINDS.PROJECT}:${pe.pubkey}:${d}` === projAddr;
+				});
+				if (!projEv) continue;
+				if (!map.has(projEv.id)) map.set(projEv.id, []);
+				map.get(projEv.id).push(e);
+			}
+			return map;
+		}).subscribe({
+			next: (val) => { milestonesByProjectId = val ?? new Map(); },
+			error: (e) => console.error('[Milestones] liveQuery error', e)
+		});
+		// Fetch milestones from relay
+		const relays = selectedCommunity?.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+		const allProjectAddrs = projectEvents.map((e) => {
+			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+			return `${EVENT_KINDS.PROJECT}:${e.pubkey}:${d}`;
+		});
+		if (allProjectAddrs.length && relays.length) {
+			Promise.all(allProjectAddrs.map((addr) => fetchProjectMilestones(relays, [], addr)))
+				.then((results) => { const evs = results.flat(); if (evs.length) putEvents(evs); })
+				.catch(() => {});
+		}
+		return () => sub.unsubscribe();
+	});
+
+	// liveQuery: latest status event per milestone address
+	$effect(() => {
+		if (!browser || !milestonesByProjectId.size) { milestoneStatusMap = new Map(); return; }
+		const allMs = [...milestonesByProjectId.values()].flat();
+		const addrs = allMs.map((e) => {
+			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+			return `${EVENT_KINDS.MILESTONE}:${e.pubkey}:${d}`;
+		});
+		if (!addrs.length) return;
+		const sub = liveQuery(async () => {
+			const evs = await queryEvents({ kinds: [EVENT_KINDS.STATUS], '#a': addrs, limit: 1000 });
+			const map = new Map();
+			for (const e of evs) {
+				const a = e.tags?.find((t) => t[0] === 'a')?.[1];
+				if (!a) continue;
+				const prev = map.get(a);
+				if (!prev || e.created_at > prev.created_at) map.set(a, e);
+			}
+			const STATUS_MAP = { 'in-progress': 'inProgress', 'in-review': 'inReview', open: 'open', backlog: 'backlog', closed: 'closed', canceled: 'canceled' };
+			const result = new Map();
+			for (const [addr, ev] of map) {
+				const raw = ev.tags?.find((t) => t[0] === 'status')?.[1] ?? 'open';
+				result.set(addr, STATUS_MAP[raw] ?? raw);
+			}
+			return result;
+		}).subscribe({
+			next: (val) => { milestoneStatusMap = val ?? new Map(); },
+			error: (e) => console.error('[MilestoneStatus] liveQuery error', e)
+		});
+		return () => sub.unsubscribe();
+	});
+
+	/** Helper: get parsed project info + milestone shapes for a project event */
+	function getProjectCardData(projectEvent) {
+		const parsed = parseProject(projectEvent);
+		if (!parsed) return null;
+		const mEvs = milestonesByProjectId.get(projectEvent.id) ?? [];
+		const milestones = mEvs.map((me) => {
+			const mp = parseMilestone(me);
+			if (!mp) return null;
+			const addr = `${EVENT_KINDS.MILESTONE}:${me.pubkey}:${mp.dTag}`;
+			const msStatus = milestoneStatusMap.get(addr) ?? 'open';
+			const msPct = msStatus === 'closed' ? 100 : msStatus === 'inProgress' ? 50 : msStatus === 'inReview' ? 75 : 0;
+			return { id: me.id, title: mp.title, percentage: msPct };
+		}).filter(Boolean);
+		const closedMs = milestones.filter((m) => m.percentage === 100).length;
+		const progress = milestones.length ? Math.round((closedMs / milestones.length) * 100) : 0;
+		return { parsed, milestones, progress };
+	}
+
+	function openProject(projectId) {
+		const url = new URL(window.location.href);
+		url.searchParams.set('project', projectId);
+		goto(url.toString(), { replaceState: false });
+	}
+
+	/**
+	 * @param {{ type: string, title: string, slug: string, text: string, emojiTags: any[], mentions: any[], labels: string[], status: string, projectAddr?: string, pendingMilestones?: { title: string }[], dTag?: string }} params
+	 */
+	async function handleProjectSubmit({ type, title, slug, text, emojiTags, mentions, labels, status, projectAddr, pendingMilestones, dTag }) {
+		if (!selectedCommunity?.pubkey || !currentPubkey) throw new Error('Not signed in');
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+		const now = Math.floor(Date.now() / 1000);
+		const finalDTag = dTag || `${slug}-${Date.now()}`;
+		const STATUS_MAP = { open: 'open', backlog: 'backlog', inProgress: 'in-progress', inReview: 'in-review', closed: 'closed' };
+		const kind = type === 'milestone' ? EVENT_KINDS.MILESTONE : EVENT_KINDS.PROJECT;
+
+		/** @type {string[][]} */
+		const tags = [
+			['d', finalDTag],
+			['title', title.trim()],
+			['h', selectedCommunity.pubkey]
+		];
+		if (type === 'milestone' && projectAddr) tags.push(['a', projectAddr]);
+		labels?.forEach((l) => tags.push(['t', l]));
+		emojiTags?.forEach((e) => tags.push(Array.isArray(e) ? e : ['emoji', e.shortcode, e.url]));
+
+		// For projects: publish pending milestone events first, then add their a-tags
+		const milestoneEvs = [];
+		if (type === 'project' && pendingMilestones?.length) {
+			const projAddr = `${EVENT_KINDS.PROJECT}:${currentPubkey}:${finalDTag}`;
+			for (const ms of pendingMilestones) {
+				const msDTag = ms.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) + '-' + Date.now();
+				const msEv = await signEvent({
+					kind: EVENT_KINDS.MILESTONE,
+					content: '',
+					tags: [
+						['d', msDTag],
+						['title', ms.title],
+						['h', selectedCommunity.pubkey],
+						['a', projAddr]
+					],
+					created_at: now
+				});
+				milestoneEvs.push({ ev: msEv, dTag: msDTag });
+				// Add back-reference in the project event
+				tags.push(['a', `${EVENT_KINDS.MILESTONE}:${currentPubkey}:${msDTag}`]);
+			}
+		}
+
+		const ev = await signEvent({ kind, content: text || '', tags, created_at: now });
+		await putEvents([ev]);
+		await publishToRelays(relays, ev);
+
+		// Publish status event for the main item
+		const addr = `${kind}:${currentPubkey}:${finalDTag}`;
+		const statusEv = await signEvent({ kind: EVENT_KINDS.STATUS, content: '', tags: [['a', addr], ['status', STATUS_MAP[status ?? 'open'] ?? 'open']], created_at: now });
+		await publishToRelays(relays, statusEv);
+
+		// Publish milestone events + their default 'open' status events
+		for (const { ev: msEv, dTag: msDTag } of milestoneEvs) {
+			await putEvents([msEv]);
+			await publishToRelays(relays, msEv);
+			const msAddr = `${EVENT_KINDS.MILESTONE}:${currentPubkey}:${msDTag}`;
+			const msStatusEv = await signEvent({ kind: EVENT_KINDS.STATUS, content: '', tags: [['a', msAddr], ['status', 'open']], created_at: now });
+			await publishToRelays(relays, msStatusEv);
+		}
+	}
 
 	/** @type {Record<string,string>} */
 	const SPEC_STATUS_TO_CAMEL = {
@@ -1043,26 +1260,45 @@
 		})();
 	});
 
-	// Admin: load join requests count in background
+	// Admin: reactively track join requests count via liveQuery so it updates
+	// whenever new form responses arrive in Dexie (same device or after relay fetch).
 	$effect(() => {
 		if (!browser || !selectedCommunity?.pubkey || !isCommunityAdmin) return;
-		(async () => {
+		const communityPubkey = selectedCommunity.pubkey;
+		const sub = liveQuery(async () => {
 			const evs = await queryEvents({
 				kinds: [EVENT_KINDS.FORM_RESPONSE],
-				'#p': [selectedCommunity.pubkey],
+				'#p': [communityPubkey],
 				limit: 200
 			});
-			joinRequestsCount = evs.length;
-		})();
+			return evs.length;
+		}).subscribe({
+			next: (count) => { joinRequestsCount = count ?? 0; },
+			error: (e) => console.error('[Admin] joinRequestsCount liveQuery error', e)
+		});
+		return () => sub.unsubscribe();
 	});
 
-	// When Join Requests modal opens, load requests and decrypt (admin only)
+	// When Join Requests modal opens: fetch from relay first (catches requests from
+	// other devices not yet in local Dexie), then load and decrypt all.
 	$effect(() => {
 		if (!browser || !joinRequestsModalOpen || !isCommunityAdmin || !selectedCommunity?.pubkey) return;
+		const communityPubkey = selectedCommunity.pubkey;
+		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
 		(async () => {
+			// Pull any unsynced requests from relay into Dexie first.
+			// This also triggers the liveQuery above to update the badge count.
+			try {
+				await fetchFromRelays(relays, {
+					kinds: [EVENT_KINDS.FORM_RESPONSE],
+					'#p': [communityPubkey],
+					limit: 200
+				}, { timeout: 5000 });
+			} catch { /* non-fatal — local results shown regardless */ }
+
 			const evs = await queryEvents({
 				kinds: [EVENT_KINDS.FORM_RESPONSE],
-				'#p': [selectedCommunity.pubkey],
+				'#p': [communityPubkey],
 				limit: 200
 			});
 			joinRequestsList = evs;
@@ -1324,108 +1560,96 @@
 
 	// When Join modal opens, load joinable lists (profile lists with form that user is not in)
 	$effect(() => {
-		if (!joinModalOpen || !selectedCommunity?.pubkey || !currentPubkey) {
-			if (!joinModalOpen) {
-				joinStep = 'list';
-				selectedJoinList = null;
-				joinableLists = [];
-			}
-			return;
-		}
+		if (!joinModalOpen || !selectedCommunity?.pubkey || !currentPubkey) return;
 		if (joinStep !== 'list') return;
 		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
 		const sections = comm?.sections ?? [];
 		// Per spec: check community's own declared relays first; fall back to write-safe relays.
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
+		let cancelled = false;
 		(async () => {
 		const list = [];
 		const seenAddresses = new Set();
 		const addrs = (sec) => sec.profileListAddresses ?? (sec.profileListAddress ? [sec.profileListAddress] : []);
 		for (const sec of sections) {
 			for (const listAddress of addrs(sec)) {
+				if (cancelled) return;
 				if (!listAddress || seenAddresses.has(listAddress)) continue;
 				seenAddresses.add(listAddress);
-				const parts = listAddress.split(':');
-				const dTag = parts.length >= 3 ? parts.slice(2).join(':') : '';
+				const { dTag = '' } = parseEventAddress(listAddress) ?? {};
 				let listEv = await queryEvent({
 					kinds: [EVENT_KINDS.PROFILE_LIST],
 					authors: [selectedCommunity.pubkey],
 					'#d': [dTag]
 				});
+				if (cancelled) return;
 				if (!listEv) {
 					listEv = await fetchProfileListFromRelays(relays, listAddress);
 					if (listEv) await putEvents([listEv]);
 				}
+				if (cancelled) return;
 				const parsed = listEv ? parseProfileList(listEv) : null;
 				if (!parsed?.form) continue;
 				if (parsed.members?.includes(currentPubkey)) continue;
-				// Pre-fetch & cache the form template now, while we're already connected to relays.
-				// This makes the form appear instantly when the user taps the list item.
-				const fParts = parsed.form.split(':');
-				const fPubkey = fParts[1];
-				const fD = fParts.length >= 3 ? fParts.slice(2).join(':') : '';
-				const cachedForm = await queryEvent({ kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [fPubkey], '#d': [fD] });
-				if (!cachedForm && fPubkey) {
-					try {
-						const forms = await fetchFromRelays(relays, { kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [fPubkey], limit: 100 });
-						if (forms.length) await putEvents(forms);
-					} catch { /* non-fatal */ }
-				}
-				list.push({
-					formAddress: parsed.form,
-					listName: parsed.name || sec.name || 'Members',
-					listAddress
-				});
+				// Pre-fetch & cache the form template so it's ready when the user taps.
+				try { await fetchFreshFormTemplate(parsed.form, relays); } catch { /* non-fatal */ }
+				if (cancelled) return;
+			list.push({
+				formAddress: parsed.form,
+				listName: parsed.name || sec.name || 'Members',
+				listAddress,
+				image: parsed.image ?? null,
+				sectionName: sec.name ?? '',
+				sectionKinds: sec.kinds ?? [],
+				members: parsed.members ?? []
+			});
 			}
 		}
-		joinableLists = list;
+		if (!cancelled) joinableLists = list;
 		})();
+		return () => { cancelled = true; };
 	});
 
 	/**
-	 * Fetch the form template for the selected join list.
-	 * Hard 2-second total deadline: if the form isn't found in time we still show
-	 * a usable plain-message join form — the user is NEVER stuck on "Loading form…".
+	 * Load the form template for the selected join list.
+	 * Shows local immediately, then updates with the freshest version from relay
+	 * (local cache may be stale — missing fields added after the last sync).
+	 *
+	 * IMPORTANT: joinFieldValues must be initialised for every field before the template
+	 * renders them with bind:value. Svelte 5 throws props_invalid_value if bind:value
+	 * receives undefined when the prop has a fallback, which breaks the entire runtime.
 	 */
 	async function fetchJoinForm(formAddressVal) {
 		joinFormTemplate = null;
 		joinParsedForm = null;
-		console.log('[fetchJoinForm] called with:', formAddressVal);
-		if (!formAddressVal || !selectedCommunity?.pubkey) return;
-		const parts = formAddressVal.split(':');
-		if (parts.length < 3 || parts[0] !== String(EVENT_KINDS.FORM_TEMPLATE)) return;
-		const formD = parts.slice(2).join(':');
-		const communityPubkey = selectedCommunity.pubkey;
-		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
-		console.log('[fetchJoinForm] formD:', formD, '| communityPubkey:', communityPubkey);
+		joinFieldValues = {};
+		if (!formAddressVal) return;
+		const relays = selectedCommunity?.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
 
-		function pickEvent(events) {
-			return events?.find((e) => (e.tags?.find((t) => t[0] === 'd')?.[1] ?? '') === formD) ?? null;
+		/** Apply a parsed form and ensure every field has a defined (non-undefined) value. */
+		function applyForm(parsed) {
+			joinParsedForm = parsed;
+			if (parsed?.fields?.length) {
+				const vals = {};
+				for (const f of parsed.fields) {
+					// Preserve any value the user already typed; fall back to field default then ''.
+					vals[f.id] = joinFieldValues[f.id] ?? f.defaultValue ?? '';
+				}
+				joinFieldValues = vals;
+			}
 		}
 
-		// Step 1: local DB
-		const localAll = await queryEvents({ kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [communityPubkey], limit: 100 });
-		console.log('[fetchJoinForm] localAll count:', localAll.length, '| d-tags:', localAll.map(e => e.tags?.find(t=>t[0]==='d')?.[1]));
-		const local = pickEvent(localAll);
-		console.log('[fetchJoinForm] local match:', local ? `found (d=${local.tags?.find(t=>t[0]==='d')?.[1]}, fields=${local.tags?.filter(t=>t[0]==='field').length})` : 'not found');
+		const local = await getLocalFormTemplate(formAddressVal);
 		if (local) {
 			joinFormTemplate = local;
-			joinParsedForm = parseFormTemplate(local);
-			return;
+			applyForm(parseFormTemplate(local));
 		}
 
-		// Step 2: relay fetch
 		try {
-			const fromRelay = await Promise.race([
-				fetchFromRelays(relays, { kinds: [EVENT_KINDS.FORM_TEMPLATE], authors: [communityPubkey], limit: 100 }, { timeout: 3000 }),
-				new Promise((resolve) => setTimeout(() => resolve([]), 3000))
-			]);
-			console.log('[fetchJoinForm] relay count:', fromRelay?.length, '| d-tags:', fromRelay?.map(e => e.tags?.find(t=>t[0]==='d')?.[1]));
-			if (fromRelay?.length) await putEvents(fromRelay);
-			const ev = pickEvent(fromRelay);
-			if (ev) {
-				joinFormTemplate = ev;
-				joinParsedForm = parseFormTemplate(ev);
+			const fresh = await fetchFreshFormTemplate(formAddressVal, relays);
+			if (fresh && (!local || fresh.created_at >= local.created_at)) {
+				joinFormTemplate = fresh;
+				applyForm(parseFormTemplate(fresh));
 			}
 		} catch (e) { console.error('[fetchJoinForm] relay error:', e); }
 	}
@@ -2243,12 +2467,24 @@
 				eventId={openPostId}
 				communityNpub={selectedCommunity.npub}
 				onBack={backToForum}
+				isMember={isMember}
+				onJoinRequired={() => (joinModalOpen = true)}
 			/>
 		</div>
 	{:else if openTaskId}
 		<div class="panel-content panel-content-detail">
 			<TaskDetail
 				eventId={openTaskId}
+				communityNpub={selectedCommunity.npub}
+				onBack={backToForum}
+				isMember={isMember}
+				onJoinRequired={() => (joinModalOpen = true)}
+			/>
+		</div>
+	{:else if openProjectId}
+		<div class="panel-content panel-content-detail">
+			<ProjectDetail
+				eventId={openProjectId}
 				communityNpub={selectedCommunity.npub}
 				onBack={backToForum}
 			/>
@@ -2360,35 +2596,57 @@
 						{/each}
 					{/if}
 				</div>
-				{:else if selectedSection === 'wikis'}
-				<div class="wiki-list">
-					{#if wikiEvents.length === 0}
-						<EmptyState message="No wiki articles yet" minHeight={600} />
-					{:else}
-						{#each wikiEvents.slice().sort((a, b) => b.created_at - a.created_at) as wiki}
-						{@const wTitle = wiki.tags?.find((t) => t[0] === 'title')?.[1] ?? 'Untitled'}
-						{@const wSummary = wiki.tags?.find((t) => t[0] === 'summary')?.[1] ?? ''}
-						{@const wSlug = wiki.tags?.find((t) => t[0] === 'd')?.[1] ?? wiki.id}
-						{@const wLabels = wiki.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
-						{@const wAuthor = profilesByPubkey.get(wiki.pubkey)}
-						{@const wAuthorContent = wAuthor?.content ? (() => { try { return JSON.parse(wAuthor.content); } catch { return {}; } })() : {}}
-						<WikiCard
-							title={wTitle}
-							summary={wSummary}
-							slug={wSlug}
-							labels={wLabels}
-							author={{ name: wAuthorContent.display_name ?? wAuthorContent.name, picture: wAuthorContent.picture, pubkey: wiki.pubkey }}
-							createdAt={wiki.created_at}
-							onClick={() => openWiki(wSlug)}
-						/>
-						{/each}
+			{:else if selectedSection === 'projects'}
+			<div class="projects-list">
+				{#if projectEvents.length === 0}
+					<EmptyState message="No projects yet" minHeight={600} />
+				{:else}
+					{#each projectEvents.slice().sort((a, b) => b.created_at - a.created_at) as projEv}
+					{@const pData = getProjectCardData(projEv)}
+					{@const pAuthor = profilesByPubkey.get(projEv.pubkey)}
+					{@const pAuthorContent = pAuthor?.content ? (() => { try { return JSON.parse(pAuthor.content); } catch { return {}; } })() : {}}
+					{#if pData}
+				<ProjectCard
+					title={pData.parsed.title}
+					percentage={pData.progress}
+					milestones={pData.milestones}
+						author={{ pubkey: projEv.pubkey, name: pAuthorContent.display_name ?? pAuthorContent.name, pictureUrl: pAuthorContent.picture }}
+						due={pData.parsed.due}
+						onClick={() => openProject(projEv.id)}
+					/>
 					{/if}
-				</div>
-			{:else}
-					<EmptyState message="{sectionPills.find((p) => p.id === selectedSection)?.label ?? selectedSection} coming soon" minHeight={200} />
+					{/each}
 				{/if}
 			</div>
-	{#if selectedCommunity && !openPostId && !openTaskId && !openWikiSlug}
+			{:else if selectedSection === 'wikis'}
+			<div class="wiki-list">
+				{#if wikiEvents.length === 0}
+					<EmptyState message="No wiki articles yet" minHeight={600} />
+				{:else}
+					{#each wikiEvents.slice().sort((a, b) => b.created_at - a.created_at) as wiki}
+					{@const wTitle = wiki.tags?.find((t) => t[0] === 'title')?.[1] ?? 'Untitled'}
+					{@const wSummary = wiki.tags?.find((t) => t[0] === 'summary')?.[1] ?? ''}
+					{@const wSlug = wiki.tags?.find((t) => t[0] === 'd')?.[1] ?? wiki.id}
+					{@const wLabels = wiki.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
+					{@const wAuthor = profilesByPubkey.get(wiki.pubkey)}
+					{@const wAuthorContent = wAuthor?.content ? (() => { try { return JSON.parse(wAuthor.content); } catch { return {}; } })() : {}}
+					<WikiCard
+						title={wTitle}
+						summary={wSummary}
+						slug={wSlug}
+						labels={wLabels}
+						author={{ name: wAuthorContent.display_name ?? wAuthorContent.name, picture: wAuthorContent.picture, pubkey: wiki.pubkey }}
+						createdAt={wiki.created_at}
+						onClick={() => openWiki(wSlug)}
+					/>
+					{/each}
+				{/if}
+			</div>
+		{:else}
+				<EmptyState message="{sectionPills.find((p) => p.id === selectedSection)?.label ?? selectedSection} coming soon" minHeight={200} />
+			{/if}
+			</div>
+	{#if selectedCommunity && !openPostId && !openTaskId && !openWikiSlug && !openProjectId}
 		<CommunityBottomBar
 			isMember={isMember}
 			hasForm={hasForm}
@@ -2398,17 +2656,22 @@
 		showAdminSave={false}
 			communityName={selectedCommunity.displayName || selectedCommunity.name || ''}
 			selectedSection={selectedSection}
-			modalOpen={addPostModalOpen || addTaskModalOpen || addWikiModalOpen}
+			modalOpen={addPostModalOpen || addTaskModalOpen || addWikiModalOpen || projectModalOpen}
 			onJoin={() => (joinModalOpen = true)}
 			onComment={() => {}}
 			onZap={() => {}}
-			onAdd={() => { if (selectedSection === 'tasks') addTaskModalOpen = true; else if (selectedSection === 'wikis') addWikiModalOpen = true; else openCreatePost(); }}
+			onAdd={() => {
+				if (selectedSection === 'tasks') addTaskModalOpen = true;
+				else if (selectedSection === 'wikis') addWikiModalOpen = true;
+				else if (selectedSection === 'projects') { projectModalOpen = true; }
+				else openCreatePost();
+			}}
 			onSearch={() => { /* TODO: section search */ }}
 			/>
 		{/if}
 		{/if}
 		<!-- Modals and overlays scoped to right page (inside viewport containing block) -->
-	<Modal open={communityInfoModalOpen} onClose={() => { communityInfoModalOpen = false; communityEditModalOpen = false; communityInfoShowDetails = false; }} ariaLabel="Community info">
+	<Modal open={communityInfoModalOpen} onClose={() => { communityInfoModalOpen = false; communityEditModalOpen = false; communityInfoShowDetails = false; }} ariaLabel="Community info" padContent={true}>
 {#if communityInfoModalOpen && selectedCommunity}
 	{@const commTags = selectedCommunity.raw?.tags ?? []}
 	{@const blossomUrls = commTags.filter((t) => t[0] === 'blossom').map((t) => t[1]).filter(Boolean)}
@@ -2471,19 +2734,21 @@
 							{/if}
 						</div>
 					</div>
-					<p class="info-list-panel-sections">Can write in: {item.sectionName}</p>
-					{#if listMembers.length > 0}
-						<ul class="info-list-members">
-							{#each listMembers.slice(0, 5) as pubkey}
-								{@const profile = profilesByPubkey.get(pubkey)}
-								{@const displayName = profile?.display_name ?? profile?.name ?? (profile?.content ? (() => { try { const c = JSON.parse(profile.content || '{}'); return c.display_name ?? c.name ?? null; } catch { return null; } })() : null) ?? (pubkey.slice(0, 12) + '…')}
-								<li class="info-list-member-row">
-									<ProfilePic pubkey={pubkey} size="sm" />
-									<span class="info-list-member-name">{displayName}</span>
-								</li>
-							{/each}
-						</ul>
-					{/if}
+				{#if item.sectionName}
+					<div class="list-write-in-block">
+						<p class="list-write-in-label">CAN WRITE IN</p>
+						<div class="list-write-in-pills">
+							<span class="list-write-in-pill">{item.sectionName}</span>
+						</div>
+					</div>
+				{/if}
+				{#if listMembers.length > 0}
+					{@const infoStackProfiles = listMembers.slice(0, 3).map(pk => {
+						const p = profilesByPubkey.get(pk);
+						return { pubkey: pk, name: p?.name ?? p?.display_name ?? '', pictureUrl: p?.picture ?? '' };
+					})}
+					<ProfilePicStack profiles={infoStackProfiles} size="sm" text="{listMembers.length} Profiles" />
+				{/if}
 					<div class="info-list-actions">
 						<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
 						<div class="info-list-actions-right">
@@ -2503,7 +2768,7 @@
 		</div>
 	</div>
 		{#if communityEditModalOpen}
-			<Modal open={true} onClose={() => { communityEditModalOpen = false; communityEditTarget = null; communityEditError = ''; }} ariaLabel="Edit community" zIndex={51}>
+			<Modal open={true} onClose={() => { communityEditModalOpen = false; communityEditTarget = null; communityEditError = ''; }} ariaLabel="Edit community" zIndex={51} padContent={true}>
 				{#if communityEditTarget === 'picture'}
 					<h2 class="join-modal-title">Edit picture</h2>
 					<form class="join-form" onsubmit={(e) => { e.preventDefault(); saveCommunityEditPicture(); }}>
@@ -2650,7 +2915,7 @@
 	{/if}
 </Modal>
 
-<Modal open={adminCrownModalOpen} onClose={() => { adminCrownModalOpen = false; adminSaveError = ''; }} ariaLabel="Admin settings" fillHeight={true}>
+<Modal open={adminCrownModalOpen} onClose={() => { adminCrownModalOpen = false; adminSaveError = ''; }} ariaLabel="Admin settings" fillHeight={true} padContent={true}>
 	{#if adminCrownModalOpen}
 		<div class="crown-modal-layout">
 		<div class="crown-modal-head">
@@ -2740,9 +3005,14 @@
 								{/if}
 							</div>
 						</div>
-						{#if item.sectionName && item.sectionName !== '—'}
-							<p class="info-list-panel-sections">Can write in: {item.sectionName}</p>
-						{/if}
+					{#if item.sectionName && item.sectionName !== '—'}
+						<div class="list-write-in-block">
+							<p class="list-write-in-label">CAN WRITE IN</p>
+							<div class="list-write-in-pills">
+								<span class="list-write-in-pill">{item.sectionName}</span>
+							</div>
+						</div>
+					{/if}
 						<div class="info-list-actions">
 								<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
 								<button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => openEditListModal(item)}>
@@ -2912,7 +3182,7 @@
 	{/if}
 </Modal>
 
-<Modal open={joinRequestsModalOpen} onClose={() => (joinRequestsModalOpen = false)} ariaLabel="Join requests">
+<Modal open={joinRequestsModalOpen} onClose={() => (joinRequestsModalOpen = false)} ariaLabel="Join requests" padContent={true}>
 	{#if joinRequestsModalOpen}
 		<h2 class="join-modal-title">Join requests</h2>
 		{#if joinRequestsList.length === 0}
@@ -2927,9 +3197,17 @@
 						<div class="request-meta">
 							<span class="request-pubkey">{req.pubkey.slice(0, 12)}…</span>
 							<span class="request-date">{formatDate(req.created_at)}</span>
-							{#if joinRequestsDecrypted.get(req.id)}
-								<p class="request-message">{joinRequestsDecrypted.get(req.id)}</p>
+						{#if joinRequestsDecrypted.get(req.id)}
+							{@const raw = joinRequestsDecrypted.get(req.id)}
+							{@const parsed = (() => { try { return JSON.parse(raw); } catch { return null; } })()}
+							{#if Array.isArray(parsed)}
+								{#each parsed.filter(t => t[0] === 'response' && t[1]) as entry}
+									<p class="request-field"><span class="request-field-label">{entry[1]}:</span> {entry[2] ?? ''}</p>
+								{/each}
+							{:else}
+								<p class="request-message">{raw}</p>
 							{/if}
+						{/if}
 						</div>
 						{#if !alreadyMember}
 							<button
@@ -2951,7 +3229,7 @@
 </Modal>
 
 {#key listViewMoreModal?.listAddress ?? 'closed'}
-<Modal open={!!listViewMoreModal} onClose={() => { listViewMoreModal = null; listViewMoreAddInput = ''; listViewMoreAddError = ''; }} ariaLabel="List members" maxWidth="max-w-md">
+<Modal open={!!listViewMoreModal} onClose={() => { listViewMoreModal = null; listViewMoreAddInput = ''; listViewMoreAddError = ''; }} ariaLabel="List members" maxWidth="max-w-md" padContent={true}>
 	{#if listViewMoreModal}
 		{@const listEvent = listViewMoreModal.listEvent}
 		{@const parsed = listViewMoreModal.parsed ?? parseProfileList(listEvent)}
@@ -2997,7 +3275,7 @@
 {/key}
 
 {#key listFormModal ? (listFormModal.mode === 'edit' ? listFormModal.listAddress : 'add') : 'closed'}
-<Modal open={!!listFormModal} onClose={() => { listFormModal = null; listFormError = ''; }} ariaLabel="List form" maxWidth="max-w-md">
+<Modal open={!!listFormModal} onClose={() => { listFormModal = null; listFormError = ''; }} ariaLabel="List form" maxWidth="max-w-md" padContent={true}>
 	{#if listFormModal}
 		<div class="list-form-modal-content">
 			<h2 class="join-modal-title">{listFormModal.mode === 'edit' ? 'Edit list' : 'Add list'}</h2>
@@ -3084,7 +3362,7 @@
 {/key}
 
 {#key adminListPickerPresetId ?? 'closed'}
-<Modal open={adminListPickerPresetId != null} onClose={() => (adminListPickerPresetId = null)} ariaLabel="Choose lists for section" maxWidth="max-w-md">
+<Modal open={adminListPickerPresetId != null} onClose={() => (adminListPickerPresetId = null)} ariaLabel="Choose lists for section" maxWidth="max-w-md" padContent={true}>
 	{#if adminListPickerPresetId}
 		{@const presetId = adminListPickerPresetId}
 		{@const preset = ADMIN_SECTION_PRESETS.find((p) => p.id === presetId)}
@@ -3118,7 +3396,7 @@
 {/key}
 
 {#key adminSectionModalPresetId ?? 'closed'}
-<Modal open={adminSectionModalPresetId != null} onClose={() => (adminSectionModalPresetId = null)} ariaLabel="Section details" maxWidth="max-w-md">
+<Modal open={adminSectionModalPresetId != null} onClose={() => (adminSectionModalPresetId = null)} ariaLabel="Section details" maxWidth="max-w-md" padContent={true}>
 	{#if adminSectionModalPresetId}
 		{@const presetId = adminSectionModalPresetId}
 		{@const preset = ADMIN_SECTION_PRESETS.find((p) => p.id === presetId)}
@@ -3156,7 +3434,7 @@
 {/key}
 
 {#key adminAddSectionOpen ? 'open' : 'closed'}
-<Modal open={adminAddSectionOpen} onClose={() => (adminAddSectionOpen = false)} ariaLabel="Add content section" maxWidth="max-w-md">
+<Modal open={adminAddSectionOpen} onClose={() => (adminAddSectionOpen = false)} ariaLabel="Add content section" maxWidth="max-w-md" padContent={true}>
 	{#if adminAddSectionOpen}
 		<h2 class="join-modal-title">Add content section</h2>
 		<p class="list-picker-desc">Enable a section from presets. Only disabled sections are listed.</p>
@@ -3205,6 +3483,14 @@
 	onclose={closeCreateWiki}
 />
 
+<ProjectModal
+	bind:isOpen={projectModalOpen}
+	communityName={selectedCommunity?.name ?? ''}
+	getCurrentPubkey={getCurrentPubkey}
+	onsubmit={handleProjectSubmit}
+	onclose={() => { projectModalOpen = false; }}
+/>
+
 <GetStartedModal
 	bind:open={getStartedModalOpen}
 	onstart={handleGetStartedStart}
@@ -3219,44 +3505,64 @@
 />
 <OnboardingBuildingModal bind:open={onboardingBuildingModalOpen} zIndex={56} />
 
-<Modal open={joinModalOpen} onClose={closeJoinModal} ariaLabel="Join community" closeButtonMobile={true}>
+<Modal
+	open={joinModalOpen}
+	onClose={closeJoinModal}
+	ariaLabel="Join community"
+	title={joinStep === 'list' ? `Join ${selectedCommunity?.displayName || selectedCommunity?.name || 'Community'}` : null}
+	description={joinStep === 'list' ? 'What list do you want to join?' : null}
+	closeButtonMobile={true}
+	padContent={true}
+>
 	{#if joinModalOpen}
-		<h2 class="join-modal-title">Join</h2>
 		{#if !currentPubkey}
 			<p class="text-sm text-muted-foreground">Add a profile to request access.</p>
 			<div class="join-modal-actions">
 				<button type="button" class="btn-secondary-small" onclick={closeJoinModal}>Close</button>
 			</div>
 		{:else if joinStep === 'list'}
-			<p class="text-sm text-muted-foreground">Choose a list to request access to:</p>
 			{#if joinableLists.length === 0}
-				<p class="text-sm text-muted-foreground">Loading…</p>
-				<p class="text-xs text-muted-foreground">If nothing appears, you may already be in all lists with join forms.</p>
+				<p class="text-sm" style="color: hsl(var(--white33));">Loading…</p>
 			{:else}
-				<ul class="join-list-options">
+				<div class="join-list-panels">
 					{#each joinableLists as item}
-						<li>
-							<button
-								type="button"
-								class="btn-secondary-large btn-secondary-modal join-list-btn"
-								onclick={() => { selectedJoinList = item; joinStep = 'form'; fetchJoinForm(item.formAddress); }}
-							>
-								{item.listName}
-							</button>
-						</li>
+						{@const stackProfiles = (item.members ?? []).slice(0, 3).map(pk => {
+							const p = profilesByPubkey.get(pk);
+							return { pubkey: pk, name: p?.name ?? p?.display_name ?? '', pictureUrl: p?.picture ?? '' };
+						})}
+						<button
+							type="button"
+							class="join-list-panel"
+							onclick={() => { selectedJoinList = item; joinStep = 'form'; fetchJoinForm(item.formAddress); }}
+						>
+							<div class="join-list-panel-header">
+								<SingleBadge image={item.image} name={item.listName} sizePx={52} />
+								<div class="join-list-panel-meta">
+									<span class="join-list-panel-name">{item.listName}</span>
+								</div>
+							</div>
+						{#if item.sectionName}
+							<div class="list-write-in-block">
+								<p class="list-write-in-label">CAN WRITE IN</p>
+								<div class="list-write-in-pills">
+									<span class="list-write-in-pill">{item.sectionName}</span>
+								</div>
+							</div>
+						{/if}
+						{#if item.members?.length > 0}
+							<ProfilePicStack profiles={stackProfiles} size="sm" text="{item.members.length} Profiles" />
+						{/if}
+						</button>
 					{/each}
-				</ul>
+				</div>
 			{/if}
-			<div class="join-modal-actions">
-				<button type="button" class="btn-secondary-small" onclick={closeJoinModal}>Cancel</button>
-			</div>
 		{:else if joinStep === 'form'}
+			<div class="join-form-header">
+				<p class="join-eyebrow">JOIN FORM</p>
 				{#if joinParsedForm?.name}
-					<p class="join-form-subtitle">{joinParsedForm.name}</p>
+					<h2 class="join-modal-title">{joinParsedForm.name}</h2>
 				{/if}
-				{#if joinParsedForm?.description}
-					<p class="join-form-desc">{joinParsedForm.description}</p>
-				{/if}
+			</div>
 				<form class="join-form" onsubmit={(e) => { e.preventDefault(); submitJoinForm(); }}>
 					{#if joinParsedForm?.fields?.length}
 						{#each joinParsedForm.fields as field (field.id)}
@@ -3328,13 +3634,9 @@
 					{#if joinError}
 						<p class="text-sm text-red-500">{joinError}</p>
 					{/if}
-					<div class="join-modal-actions">
-						<button type="button" class="btn-secondary-small" onclick={() => { joinStep = 'list'; selectedJoinList = null; joinFormTemplate = null; joinParsedForm = null; joinError = ''; }} disabled={joinSubmitting}>Back</button>
-						<button type="button" class="btn-secondary-small" onclick={closeJoinModal} disabled={joinSubmitting}>Cancel</button>
-						<button type="submit" class="btn-primary-small" disabled={joinSubmitting}>
-							{joinSubmitting ? 'Submitting…' : 'Submit request'}
-						</button>
-					</div>
+					<button type="submit" class="btn-primary-large w-full" disabled={joinSubmitting}>
+						{joinSubmitting ? 'Submitting…' : 'Join'}
+					</button>
 				</form>
 		{:else if joinStep === 'done'}
 			<div class="join-done-wrap">
@@ -3646,6 +3948,7 @@
 		min-width: 0;
 		font-size: 1rem;
 		font-weight: 600;
+		line-height: 1.2;
 		margin: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -3923,9 +4226,16 @@
 	.tab-row.pills-row-under {
 		display: flex;
 		gap: 8px;
-		flex-wrap: wrap;
-		padding: 12px 0 0;
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		padding: 12px 16px 0;
+		margin-left: -16px;
+		margin-right: -16px;
 		border: none;
+		scrollbar-width: none;
+	}
+	.tab-row.pills-row-under::-webkit-scrollbar {
+		display: none;
 	}
 	.tab-row.pills-row-under :global(.btn-primary-small),
 	.tab-row.pills-row-under :global(.btn-secondary-small) {
@@ -3952,6 +4262,7 @@
 	.community-info-row-tap {
 		display: flex;
 		align-items: center;
+		align-self: center;
 		gap: 12px;
 		flex: 1;
 		min-width: 0;
@@ -4086,29 +4397,42 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.info-list-panel-sections {
-		font-size: 0.8125rem;
-		color: hsl(var(--muted-foreground));
-		margin: 0;
-	}
-	.info-list-members {
-		list-style: none;
-		margin: 0;
-		padding: 0;
+	/* Shared "CAN WRITE IN" block — used in community info modal + join modal */
+	.list-write-in-block {
 		display: flex;
 		flex-direction: column;
-		gap: 0.25rem;
+		gap: 0.35rem;
 	}
-	.info-list-member-row {
+	.list-write-in-label {
+		font-size: 0.625rem;
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.16em;
+		color: hsl(var(--white33));
+		margin: 0;
+	}
+	.list-write-in-pills {
 		display: flex;
-		align-items: center;
-		gap: 0.5rem;
+		flex-direction: row;
+		flex-wrap: nowrap;
+		gap: 0.375rem;
+		overflow-x: auto;
+		scrollbar-width: none;
+		-ms-overflow-style: none;
 	}
-	.info-list-member-name {
-		font-size: 0.875rem;
-		color: hsl(var(--foreground));
-		overflow: hidden;
-		text-overflow: ellipsis;
+	.list-write-in-pills::-webkit-scrollbar {
+		display: none;
+	}
+	.list-write-in-pill {
+		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
+		padding: 0.25rem 0.625rem;
+		background: hsl(var(--white8));
+		border-radius: 9999px;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		color: hsl(var(--white66));
 		white-space: nowrap;
 	}
 	.info-list-actions {
@@ -4384,6 +4708,16 @@
 		font-size: 0.875rem;
 		color: hsl(var(--muted-foreground));
 	}
+	.request-field {
+		margin: 0.2rem 0 0;
+		font-size: 0.875rem;
+		color: hsl(var(--white66));
+	}
+	.request-field-label {
+		font-size: 0.75rem;
+		color: hsl(var(--muted-foreground));
+		text-transform: capitalize;
+	}
 	.list-modal-add-wrap {
 		display: flex;
 		gap: 0.5rem;
@@ -4488,8 +4822,16 @@
 	}
 	.panel-content:has(.forum-list),
 	.panel-content:has(.tasks-list),
+	.panel-content:has(.projects-list),
 	.panel-content:has(.wiki-list) {
+		padding: 0 0 100px;
+	}
+
+	.projects-list {
+		display: flex;
+		flex-direction: column;
 		padding: 0;
+		gap: 0;
 	}
 	/* No top padding: title sits 16px below fixed header via ForumPostDetail .content-scroll padding-top */
 	.panel-content-detail {
@@ -4509,31 +4851,71 @@
 		gap: 8px;
 		padding: 12px 16px;
 	}
+	/* Eyebrow label (form step only — centered) */
+	.join-form-header {
+		text-align: center;
+		margin-bottom: 1.25rem;
+	}
+	.join-eyebrow {
+		font-size: 0.6875rem;
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.18em;
+		color: hsl(var(--white33));
+		margin: 0 0 0.4rem;
+	}
 	.join-modal-title {
-		margin: 0 0 0.5rem;
+		margin: 0;
 		font-size: 1.25rem;
 		font-weight: 600;
+		line-height: 1.3;
 	}
-	.join-list-options {
-		list-style: none;
-		padding: 0;
-		margin: 0.75rem 0;
+	/* List step — info-style panels */
+	.join-list-panels {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: 0.625rem;
 	}
-	.join-list-options li {
-		margin: 0;
-	}
-	.join-list-btn {
-		width: 100%;
-		justify-content: center;
-	}
-	.join-form {
+	.join-list-panel {
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
-		margin-top: 0.5rem;
+		width: 100%;
+		padding: 1rem;
+		background: hsl(var(--white8));
+		border-radius: var(--radius-16);
+		border: none;
+		text-align: left;
+		cursor: pointer;
+	}
+	.join-list-panel-header {
+		display: flex;
+		align-items: center;
+		gap: 0.875rem;
+	}
+	.join-list-panel-meta {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		min-width: 0;
+	}
+	.join-list-panel-name {
+		font-size: 1rem;
+		font-weight: 600;
+		color: hsl(var(--foreground));
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.join-list-panel-profiles {
+		display: flex;
+		align-items: center;
+	}
+	/* Form step */
+	.join-form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.875rem;
 	}
 	.join-modal-actions {
 		display: flex;
@@ -4595,10 +4977,12 @@
 			flex-direction: column;
 			height: 100vh;
 		}
-		.mobile-community-back {
-			display: flex;
-			align-items: center;
-			flex-shrink: 0;
-		}
+	.mobile-community-back {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		align-self: center;
+	}
 	}
 </style>

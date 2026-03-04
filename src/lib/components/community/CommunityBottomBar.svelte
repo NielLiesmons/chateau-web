@@ -13,6 +13,7 @@ import { Reply } from '$lib/components/icons';
 const SECTION_CTA = {
 	forum: 'Post',
 	tasks: 'Task',
+	projects: 'Project',
 	chat: 'Message',
 	apps: 'App',
 	docs: 'Doc',
@@ -75,8 +76,8 @@ const searchLabel = $derived(SECTION_SEARCH_LABEL[selectedSection] ?? 'Search');
 					<Search variant="outline" size={18} strokeWidth={1.4} color="hsl(var(--white33))" />
 					<span>Search Member</span>
 				</button>
-		{:else if showFeedBar && isMember}
-			<button type="button" class="post-btn post-btn-feed" onclick={onAdd} aria-label="New {ctaLabel}">
+		{:else if showFeedBar}
+			<button type="button" class="post-btn post-btn-feed" onclick={isMember ? onAdd : onJoin} aria-label="New {ctaLabel}">
 				<Plus variant="outline" size={16} strokeWidth={2.8} color="hsl(var(--whiteEnforced))" />
 				<span>{ctaLabel}</span>
 			</button>

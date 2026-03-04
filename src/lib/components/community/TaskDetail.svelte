@@ -41,7 +41,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import { goto } from '$app/navigation';
 
-	let { eventId = '', communityNpub = '', onBack = () => {} } = $props();
+	let { eventId = '', communityNpub = '', onBack = () => {}, isMember = true, onJoinRequired = () => {} } = $props();
 
 	let statusMenuOpen = $state(false);
 	let priorityMenuOpen = $state(false);
@@ -1034,6 +1034,8 @@
 				{zapTarget}
 				otherZaps={[]}
 				isSignedIn={getIsSignedIn()}
+				{isMember}
+				{onJoinRequired}
 				onGetStarted={() => goto('/')}
 				{searchProfiles}
 				{searchEmojis}

@@ -14,7 +14,7 @@
 import { fade, fly } from "svelte/transition";
 import { cubicOut } from "svelte/easing";
 import { browser } from "$app/environment";
-let { open = $bindable(false), onClose = undefined, ariaLabel = "Modal dialog", ariaLabelledby = null, align = "center", zIndex = 50, maxWidth = "max-w-lg", wide = false, class: className = "", maxHeight = 80, fillHeight = false, closeOnBackdropClick = true, closeOnEscape = true, noBackdrop = false, title = "", description = "", closeButtonMobile = false, children, footer = undefined, } = $props();
+let { open = $bindable(false), onClose = undefined, ariaLabel = "Modal dialog", ariaLabelledby = null, align = "center", zIndex = 50, maxWidth = "max-w-lg", wide = false, class: className = "", maxHeight = 80, fillHeight = false, closeOnBackdropClick = true, closeOnEscape = true, noBackdrop = false, title = "", description = "", closeButtonMobile = false, padContent = false, children, footer = undefined, } = $props();
 function requestClose() { if (onClose) { onClose(); } else { open = false; } }
 let modalElement = $state(null);
 let _isBottomAligned = $state(false);
@@ -144,7 +144,13 @@ function handleResize() {
             {/if}
           </div>
         {/if}
-        {@render children?.()}
+        {#if padContent}
+          <div class="modal-children-padded">
+            {@render children?.()}
+          </div>
+        {:else}
+          {@render children?.()}
+        {/if}
       </div>
       {#if closeButtonMobile}
         <div class="modal-mobile-close-wrap">
@@ -193,7 +199,7 @@ function handleResize() {
   .modal-center {
     margin: 1rem;
     border-radius: var(--radius-32);
-    max-height: calc(100vh - 2rem);
+    max-height: min(calc(100vh - 2rem), var(--modal-max-height));
     background: hsl(var(--gray66));
     border: 0.33px solid hsl(var(--white8));
   }
@@ -241,6 +247,24 @@ function handleResize() {
   @media (min-width: 768px) {
     .modal-wide {
       max-width: 560px;
+    }
+  }
+
+  .modal-children-padded {
+    padding: 16px;
+  }
+
+  /* When directly after a title block, title already provides top spacing */
+  .modal-title-block + .modal-children-padded {
+    padding-top: 8px;
+  }
+
+  @media (min-width: 768px) {
+    .modal-children-padded {
+      padding: 20px;
+    }
+    .modal-title-block + .modal-children-padded {
+      padding-top: 8px;
     }
   }
 

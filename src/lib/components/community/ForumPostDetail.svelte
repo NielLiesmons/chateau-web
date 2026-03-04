@@ -31,7 +31,7 @@
 	import { createSearchEmojisFunction } from '$lib/services/emoji-search.js';
 	import { goto } from '$app/navigation';
 
-	let { eventId = '', communityNpub = '', onBack = () => {} } = $props();
+	let { eventId = '', communityNpub = '', onBack = () => {}, isMember = true, onJoinRequired = () => {} } = $props();
 
 	let post = $state(null);
 	let rawPostEvent = $state(null);
@@ -683,6 +683,8 @@
 				{zapTarget}
 				otherZaps={[]}
 				isSignedIn={getIsSignedIn()}
+				{isMember}
+				{onJoinRequired}
 				onGetStarted={() => goto('/')}
 				{searchProfiles}
 				{searchEmojis}

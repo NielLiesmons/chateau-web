@@ -8,6 +8,9 @@
   
   export let state = "open"; // "open" | "closed" | "inProgress" | "inReview"
   export let size = 24;
+
+  // 2.8px for big boxes, 1.4px for small ones
+  $: checkStrokeWidth = size >= 20 ? 2.8 : 1.4;
 </script>
 
 <div
@@ -24,7 +27,7 @@
     <Check
       variant="outline"
       color="white"
-      strokeWidth={2.4}
+      strokeWidth={checkStrokeWidth}
       size={size * 0.5}
     />
   {:else if state === "inProgress"}

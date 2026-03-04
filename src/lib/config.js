@@ -55,7 +55,9 @@ export const EVENT_KINDS = {
     LABEL: 1985,
     TASK: 37060,
     STATUS: 1983,
-    WIKI: 30818
+    WIKI: 30818,
+    PROJECT: 30315,
+    MILESTONE: 30316
 };
 // Platform filter — only Android arm64 is supported for now.
 // Spread into every APP / RELEASE relay filter so the relay only returns matching events.

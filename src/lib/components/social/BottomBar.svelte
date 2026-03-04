@@ -8,7 +8,7 @@ import { Zap, Reply, Options } from '$lib/components/icons';
 import InputButton from '$lib/components/common/InputButton.svelte';
 import ShortTextInput from '$lib/components/common/ShortTextInput.svelte';
 import ZapSliderModal from '$lib/components/modals/ZapSliderModal.svelte';
-let { appName: _appName = '', publisherName = '', contentType: _contentType = 'app', className = '', zapTarget = null, otherZaps = [], isSignedIn = true, onGetStarted, searchProfiles = async () => [], searchEmojis = async () => [], oncommentSubmit, onzapReceived, onoptions } = $props();
+let { appName: _appName = '', publisherName = '', contentType: _contentType = 'app', className = '', zapTarget = null, otherZaps = [], isSignedIn = true, isMember = true, onGetStarted, onJoinRequired = () => {}, searchProfiles = async () => [], searchEmojis = async () => [], oncommentSubmit, onzapReceived, onoptions } = $props();
 let zapModalOpen = $state(false);
 let commentExpanded = $state(false);
 let commentInput = $state(null);
@@ -98,11 +98,11 @@ $effect(() => {
 						<Zap variant="fill" size={18} color="hsl(var(--whiteEnforced))" />
 						<span>Zap</span>
 					</button>
-					<InputButton className="comment-btn" placeholder="Comment" onclick={handleComment}>
-						{#snippet icon()}
-							<Reply variant="outline" size={18} strokeWidth={1.4} color="hsl(var(--white33))" />
-						{/snippet}
-					</InputButton>
+				<InputButton className="comment-btn" placeholder="Comment" onclick={isMember ? handleComment : onJoinRequired}>
+					{#snippet icon()}
+						<Reply variant="outline" size={18} strokeWidth={1.4} color="hsl(var(--white33))" />
+					{/snippet}
+				</InputButton>
 					<button
 						type="button"
 						class="btn-secondary-large btn-secondary-dark options-button"

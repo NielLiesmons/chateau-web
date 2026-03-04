@@ -30,7 +30,8 @@ export {
 	publishComment,
 	// Community (Chateau)
 	fetchProfileListFromRelays,
-	fetchFormTemplateFromRelays,
+	getLocalFormTemplate,
+	fetchFreshFormTemplate,
 	fetchCommunityForumPosts,
 	subscribeCommunityForumPosts,
 	subscribeForumPostComments,
@@ -38,7 +39,10 @@ export {
 	fetchLabelEvents,
 	publishToRelays,
 	fetchCommunityWikis,
-	fetchEventsNoStore
+	fetchEventsNoStore,
+	fetchCommunityProjects,
+	fetchProjectMilestones,
+	subscribeCommunityProjects
 } from './service';
 
 // Models (event parsing)
@@ -51,10 +55,13 @@ export {
 	encodeAppNaddr,
 	encodeStackNaddr,
 	decodeNaddr,
+	parseEventAddress,
 	parseCommunity,
 	parseProfileList,
 	parseFormTemplate,
-	parseForumPost
+	parseForumPost,
+	parseProject,
+	parseMilestone
 } from './models';
 
 // Zap utilities
