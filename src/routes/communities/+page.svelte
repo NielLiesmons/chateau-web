@@ -504,9 +504,10 @@
 	});
 
 	let forumCommentsUnsub = null;
-	// Subscribe to NIP-1111 kind:1111 comments on current forum posts so they are stored and commenters show.
-	// Waits for generalMembers to resolve so the authors filter matches ForumPostDetail.allowedCommenters exactly:
-	// null = no client-side filter (relay-enforced or open community); string[] = General-section member list.
+	// Subscribe + initial fetch for forum post comments so they land in Dexie before the liveQuery fires.
+	// Mirrors the task comments pattern: explicit fetchFromRelays populates Dexie immediately on first load
+	// so the profile stack is visible without having to open a post first.
+	// Waits for generalMembers to resolve so the authors filter matches ForumPostDetail.allowedCommenters exactly.
 	$effect(() => {
 		if (!browser || !selectedCommunity?.pubkey || !forumPosts?.length || generalMembers === undefined) {
 			if (forumCommentsUnsub) {
@@ -518,7 +519,11 @@
 		const postIds = forumPosts.map((p) => p.id).filter(Boolean);
 		if (postIds.length === 0) return;
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
+		// Live subscription for new comments arriving after load.
 		forumCommentsUnsub = subscribeForumPostComments(relays, postIds, { authors: generalMembers });
+		// Explicit one-shot fetch so Dexie is populated immediately (WebSocket subscription alone is too slow).
+		const authorsFilter = generalMembers?.length ? { authors: generalMembers } : {};
+		fetchFromRelays(relays, { kinds: [1111], '#E': postIds, limit: 500, ...authorsFilter }).catch(() => {});
 		return () => {
 			if (forumCommentsUnsub) {
 				forumCommentsUnsub();
