@@ -1,68 +1,68 @@
 <script>
-// @ts-nocheck
-/**
- * ProjectCard — feed card for a kind:30315 Project event.
- *
- * Layout mirrors ForumPost:
- *   Left column  : ProjectBox (24px hexagon) + vertical connector line
- *   Right column : Row 1 — title + due chip
- *                  Row 2 — summary (3-line clamp)
- *                  Row 3 — one btn-secondary-small per milestone
- *   Bottom row   : L-shape connector → ProfilePicStack of project members
- */
-import ProjectBox from '$lib/components/common/ProjectBox.svelte';
-import MilestoneBox from '$lib/components/common/MilestoneBox.svelte';
-import ProfilePicStack from '$lib/components/common/ProfilePicStack.svelte';
+	// @ts-nocheck
+	/**
+	 * ProjectCard — feed card for a kind:30315 Project event.
+	 *
+	 * Layout mirrors ForumPost:
+	 *   Left column  : ProjectBox (32px hexagon) + vertical connector line
+	 *   Right column : Row 1 — title + due chip
+	 *                  Row 2 — summary (3-line clamp)
+	 *                  Row 3 — one btn-secondary-small per milestone
+	 *   Bottom row   : L-shape connector → ProfilePicStack of project members
+	 */
+	import ProjectBox from '$lib/components/common/ProjectBox.svelte';
+	import MilestoneBox from '$lib/components/common/MilestoneBox.svelte';
+	import ProfilePicStack from '$lib/components/common/ProfilePicStack.svelte';
 
-let {
-	title = '',
-	summary = '',
-	/** 0-100 overall project completion */
-	percentage = 0,
-	/** @type {{ id: string; title: string; percentage: number }[]} */
-	milestones = [],
-	/** @type {{ pubkey: string; name?: string; pictureUrl?: string }|null} */
-	author = null,
-	/** @type {{ pubkey: string; name?: string; pictureUrl?: string }[]} */
-	members = [],
-	/** Unix timestamp or null */
-	due = null,
-	/** @type {() => void} */
-	onClick = () => {},
-} = $props();
+	let {
+		title = '',
+		summary = '',
+		/** 0-100 overall project completion */
+		percentage = 0,
+		/** @type {{ id: string; title: string; percentage: number }[]} */
+		milestones = [],
+		/** @type {{ pubkey: string; name?: string; pictureUrl?: string }|null} */
+		author = null,
+		/** @type {{ pubkey: string; name?: string; pictureUrl?: string }[]} */
+		members = [],
+		/** Unix timestamp or null */
+		due = null,
+		/** @type {() => void} */
+		onClick = () => {}
+	} = $props();
 
-/** Unique team profiles: author first, then other members, capped at 4 */
-const stackProfiles = $derived((() => {
-	const seen = new Set();
-	/** @type {{ pubkey: string; name?: string; pictureUrl?: string }[]} */
-	const merged = [];
-	for (const p of [author, ...members]) {
-		if (p && !seen.has(p.pubkey)) {
-			seen.add(p.pubkey);
-			merged.push(p);
-		}
+	/** Unique team profiles: author first, then other members, capped at 4 */
+	const stackProfiles = $derived(
+		(() => {
+			const seen = new Set();
+			/** @type {{ pubkey: string; name?: string; pictureUrl?: string }[]} */
+			const merged = [];
+			for (const p of [author, ...members]) {
+				if (p && !seen.has(p.pubkey)) {
+					seen.add(p.pubkey);
+					merged.push(p);
+				}
+			}
+			return merged.slice(0, 4);
+		})()
+	);
+
+	const stackText = $derived(author?.name || (author ? author.pubkey.slice(0, 8) + '…' : ''));
+
+	const hasBottomRow = $derived(stackProfiles.length > 0);
+
+	/** Format Unix timestamp as relative or short date */
+	function formatDue(/** @type {number} */ ts) {
+		if (!ts) return '';
+		const date = new Date(ts * 1000);
+		const now = new Date();
+		const diffDays = Math.floor((date.getTime() - now.getTime()) / 86400000);
+		if (diffDays < 0) return `${Math.abs(diffDays)}d ago`;
+		if (diffDays === 0) return 'Today';
+		if (diffDays < 7) return `${diffDays}d`;
+		if (diffDays < 30) return `${Math.floor(diffDays / 7)}w`;
+		return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	}
-	return merged.slice(0, 4);
-})());
-
-const stackText = $derived(
-	author?.name || (author ? author.pubkey.slice(0, 8) + '…' : '')
-);
-
-const hasBottomRow = $derived(stackProfiles.length > 0);
-
-/** Format Unix timestamp as relative or short date */
-function formatDue(/** @type {number} */ ts) {
-	if (!ts) return '';
-	const date = new Date(ts * 1000);
-	const now = new Date();
-	const diffDays = Math.floor((date.getTime() - now.getTime()) / 86400000);
-	if (diffDays < 0) return `${Math.abs(diffDays)}d ago`;
-	if (diffDays === 0) return 'Today';
-	if (diffDays < 7) return `${diffDays}d`;
-	if (diffDays < 30) return `${Math.floor(diffDays / 7)}w`;
-	return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role a11y_no_noninteractive_tabindex -->
@@ -77,7 +77,7 @@ function formatDue(/** @type {number} */ ts) {
 		<!-- Left column: ProjectBox + vertical connector line -->
 		<div class="left-column">
 			<div class="box-wrap">
-				<ProjectBox {percentage} size={24} />
+				<ProjectBox {percentage} size={28} />
 			</div>
 			{#if hasBottomRow}
 				<div class="connector-vertical-only"></div>
@@ -105,11 +105,7 @@ function formatDue(/** @type {number} */ ts) {
 			{#if milestones.length > 0}
 				<div class="row milestones-row">
 					{#each milestones.slice(0, 5) as ms}
-						<button
-							class="ms-btn"
-							type="button"
-							onclick={(e) => e.stopPropagation()}
-						>
+						<button class="ms-btn" type="button" onclick={(e) => e.stopPropagation()}>
 							<MilestoneBox percentage={ms.percentage} size={13} />
 							{ms.title}
 						</button>
@@ -136,12 +132,7 @@ function formatDue(/** @type {number} */ ts) {
 				</div>
 			</div>
 			<div class="repliers-row">
-				<ProfilePicStack
-					profiles={stackProfiles}
-					text={stackText}
-					size="sm"
-					onclick={onClick}
-				/>
+				<ProfilePicStack profiles={stackProfiles} text={stackText} size="sm" onclick={onClick} />
 			</div>
 		</div>
 	{/if}
@@ -194,7 +185,7 @@ function formatDue(/** @type {number} */ ts) {
 		flex: 1;
 		min-height: 8px;
 		background: hsl(var(--white16));
-		margin-top: 2px;
+		margin-top: -1px;
 	}
 
 	/* Right column */
@@ -217,20 +208,22 @@ function formatDue(/** @type {number} */ ts) {
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
-		padding: 0 0 0 12px;
+		padding: 2px 0 0 12px;
 		min-height: 24px;
 	}
 
 	.project-title {
 		flex: 1;
 		min-width: 0;
-		font-size: 0.9375rem;
-		font-weight: 500;
+		font-size: 1.1875rem;
+		font-weight: 600;
+		line-height: 1.3;
 		color: hsl(var(--white));
-		line-height: 1.35;
-		white-space: nowrap;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
 		overflow: hidden;
-		text-overflow: ellipsis;
 	}
 
 	.due-chip {
@@ -267,7 +260,7 @@ function formatDue(/** @type {number} */ ts) {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		padding: 2px 0 4px 12px;
+		padding: 2px 0 2px 12px;
 		flex-wrap: wrap;
 	}
 
@@ -275,16 +268,15 @@ function formatDue(/** @type {number} */ ts) {
 	.ms-btn {
 		display: inline-flex;
 		align-items: center;
-		gap: 5px;
-		height: 28px;
-		padding: 0 10px 0 8px;
-		background: hsl(var(--gray66));
+		gap: 7px;
+		padding: 0;
+		background: none;
 		border: none;
-		border-radius: 8px;
+		border-radius: 0;
 		flex-shrink: 0;
 		font-size: 12px;
 		font-weight: 500;
-		color: hsl(var(--white66));
+		color: hsl(var(--white33));
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;

@@ -346,6 +346,7 @@ export function parseProject(event) {
         title: get('title') ?? '',
         summary: get('summary') ?? '',
         content: event.content || '',
+        start: get('start') ? parseInt(get('start')) : null,
         due: get('due') ? parseInt(get('due')) : null,
         milestoneAddrs,
         members,

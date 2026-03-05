@@ -967,7 +967,7 @@
 	/**
 	 * @param {{ type: string, title: string, slug: string, text: string, emojiTags: any[], mentions: any[], labels: string[], status: string, projectAddr?: string, pendingMilestones?: { title: string }[], dTag?: string }} params
 	 */
-	async function handleProjectSubmit({ type, title, slug, summary = '', text, emojiTags, mentions, labels, status, projectAddr, pendingMilestones, dTag }) {
+	async function handleProjectSubmit({ type, title, slug, summary = '', text, emojiTags, mentions, labels, status, priority = 'none', startDate = '', dueDate = '', projectAddr, pendingMilestones, dTag }) {
 		if (!selectedCommunity?.pubkey || !currentPubkey) throw new Error('Not signed in');
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
 		const now = Math.floor(Date.now() / 1000);
@@ -981,8 +981,17 @@
 			['title', title.trim()],
 			['h', selectedCommunity.pubkey]
 		];
-		if (type === 'project' && summary?.trim()) tags.push(['summary', summary.trim()]);
-		if (type === 'milestone' && projectAddr) tags.push(['a', projectAddr]);
+		if (type === 'project' && summary?.trim())                 tags.push(['summary', summary.trim()]);
+		if (type === 'project' && priority && priority !== 'none') tags.push(['priority', priority]);
+		if (type === 'project' && startDate) {
+			const ts = Math.floor(new Date(startDate + 'T00:00:00').getTime() / 1000);
+			if (!isNaN(ts)) tags.push(['start', String(ts)]);
+		}
+		if (type === 'project' && dueDate) {
+			const ts = Math.floor(new Date(dueDate + 'T00:00:00').getTime() / 1000);
+			if (!isNaN(ts)) tags.push(['due', String(ts)]);
+		}
+		if (type === 'milestone' && projectAddr)               tags.push(['a', projectAddr]);
 		labels?.forEach((l) => tags.push(['t', l]));
 		emojiTags?.forEach((e) => tags.push(Array.isArray(e) ? e : ['emoji', e.shortcode, e.url]));
 
@@ -992,18 +1001,25 @@
 			const projAddr = `${EVENT_KINDS.PROJECT}:${currentPubkey}:${finalDTag}`;
 			for (const ms of pendingMilestones) {
 				const msDTag = ms.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) + '-' + Date.now();
+				/** @type {string[][]} */
+				const msTags = [
+					['d', msDTag],
+					['title', ms.title],
+					['h', selectedCommunity.pubkey],
+					['a', projAddr]
+				];
+				// Due date: stored as YYYY-MM-DD, convert to Unix timestamp
+				if (ms.due) {
+					const dueTs = Math.floor(new Date(ms.due).getTime() / 1000);
+					if (!isNaN(dueTs)) msTags.push(['due', String(dueTs)]);
+				}
 				const msEv = await signEvent({
 					kind: EVENT_KINDS.MILESTONE,
-					content: '',
-					tags: [
-						['d', msDTag],
-						['title', ms.title],
-						['h', selectedCommunity.pubkey],
-						['a', projAddr]
-					],
+					content: ms.content ?? '',
+					tags: msTags,
 					created_at: now
 				});
-				milestoneEvs.push({ ev: msEv, dTag: msDTag });
+				milestoneEvs.push({ ev: msEv, dTag: msDTag, msStatus: ms.status ?? 'open' });
 				// Add back-reference in the project event
 				tags.push(['a', `${EVENT_KINDS.MILESTONE}:${currentPubkey}:${msDTag}`]);
 			}
@@ -1018,12 +1034,13 @@
 		const statusEv = await signEvent({ kind: EVENT_KINDS.STATUS, content: '', tags: [['a', addr], ['status', STATUS_MAP[status ?? 'open'] ?? 'open']], created_at: now });
 		await publishToRelays(relays, statusEv);
 
-		// Publish milestone events + their default 'open' status events
-		for (const { ev: msEv, dTag: msDTag } of milestoneEvs) {
+		// Publish milestone events + their status events
+		for (const { ev: msEv, dTag: msDTag, msStatus } of milestoneEvs) {
 			await putEvents([msEv]);
 			await publishToRelays(relays, msEv);
 			const msAddr = `${EVENT_KINDS.MILESTONE}:${currentPubkey}:${msDTag}`;
-			const msStatusEv = await signEvent({ kind: EVENT_KINDS.STATUS, content: '', tags: [['a', msAddr], ['status', 'open']], created_at: now });
+			const msStatusSpec = STATUS_MAP[msStatus] ?? 'open';
+			const msStatusEv = await signEvent({ kind: EVENT_KINDS.STATUS, content: '', tags: [['a', msAddr], ['status', msStatusSpec]], created_at: now });
 			await publishToRelays(relays, msStatusEv);
 		}
 	}

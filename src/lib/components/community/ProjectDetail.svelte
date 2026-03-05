@@ -27,7 +27,9 @@ import SocialTabs from '$lib/components/social/SocialTabs.svelte';
 import BottomBar from '$lib/components/social/BottomBar.svelte';
 import ProjectBox from '$lib/components/common/ProjectBox.svelte';
 import MilestoneBox from '$lib/components/common/MilestoneBox.svelte';
+import PriorityBox from '$lib/components/common/PriorityBox.svelte';
 import ProfilePicStack from '$lib/components/common/ProfilePicStack.svelte';
+import SkeletonLoader from '$lib/components/common/SkeletonLoader.svelte';
 import ProjectModal from '$lib/components/modals/ProjectModal.svelte';
 import { Pen } from '$lib/components/icons';
 import { getCurrentPubkey, getIsSignedIn, signEvent } from '$lib/stores/auth.svelte.js';
@@ -50,8 +52,11 @@ let descriptionExpanded = $state(false);
 let isTruncated         = $state(false);
 
 // ── Milestones ────────────────────────────────────────────────────────────
-let milestones        = $state([]);
-let milestoneStatusMap = $state(new Map());
+let milestones            = $state([]);
+let milestoneStatusMap    = $state(new Map());
+let milestoneIssueCounts  = $state(new Map());
+let milestonesLoading     = $state(false);
+let showMilestoneSkeleton = $state(false);
 
 // ── Project progress (derived from closed milestones) ───────────────────
 let projectPercentage = $state(0);
@@ -112,12 +117,15 @@ const zapTarget = $derived(
 const editInitialData = $derived(
 	projectParsed
 		? {
-				title: projectParsed.title ?? '',
-				slug:  projectParsed.dTag  ?? '',
-				summary: projectParsed.summary ?? '',
-				text:  projectEvent?.content ?? '',
-				labels: projectParsed.labels ?? [],
-				status: 'open'
+				title:     projectParsed.title   ?? '',
+				slug:      projectParsed.dTag    ?? '',
+				summary:   projectParsed.summary ?? '',
+				text:      projectEvent?.content ?? '',
+				labels:    projectParsed.labels  ?? [],
+				status:    'open',
+				priority:  projectPriority,
+				startDate: projectParsed.start ? new Date(projectParsed.start * 1000).toISOString().slice(0, 10) : '',
+				dueDate:   projectParsed.due   ? new Date(projectParsed.due   * 1000).toISOString().slice(0, 10) : ''
 			}
 		: null
 );
@@ -217,9 +225,17 @@ $effect(() => {
 	})();
 });
 
-// ── Load milestones ───────────────────────────────────────────────────────
+// ── Load milestones (with 100ms skeleton gate) ────────────────────────────
 $effect(() => {
-	if (!projectParsed?.milestoneAddrs?.length && !projectEvent) return;
+	if (!projectParsed) return;
+	if (!projectParsed.milestoneAddrs?.length) {
+		milestonesLoading = false;
+		showMilestoneSkeleton = false;
+		return;
+	}
+	milestonesLoading = true;
+	showMilestoneSkeleton = false;
+	const timer = setTimeout(() => { if (milestonesLoading) showMilestoneSkeleton = true; }, 100);
 	(async () => {
 		const projectAddr = projectEvent
 			? `${EVENT_KINDS.PROJECT}:${projectEvent.pubkey}:${projectParsed?.dTag}`
@@ -231,7 +247,24 @@ $effect(() => {
 		);
 		if (evs.length) await putEvents(evs);
 		milestones = evs.map((e) => parseMilestone(e)).filter(Boolean);
+		milestonesLoading = false;
+		showMilestoneSkeleton = false;
+		clearTimeout(timer);
+
+		// Count tasks targeting each milestone
+		if (milestones.length) {
+			const counts = new Map();
+			await Promise.all(
+				milestones.map(async (m) => {
+					const addr = `${EVENT_KINDS.MILESTONE}:${m.pubkey}:${m.dTag}`;
+					const taskEvs = await queryEvents({ kinds: [EVENT_KINDS.TASK], '#a': [addr], limit: 200 });
+					counts.set(addr, taskEvs.length);
+				})
+			);
+			milestoneIssueCounts = counts;
+		}
 	})();
+	return () => clearTimeout(timer);
 });
 
 // ── Live milestone statuses ───────────────────────────────────────────────
@@ -289,16 +322,27 @@ function getMsAddr(m) {
 }
 
 // ── Edit submit ───────────────────────────────────────────────────────────
-async function handleEditSubmit({ title: newTitle, slug: newSlug, summary: newSummary = '', text, emojiTags = [], mentions = [], labels = [], status, pendingMilestones = [], dTag: submittedDTag = '' }) {
+async function handleEditSubmit({ title: newTitle, slug: newSlug, summary: newSummary = '', text, emojiTags = [], mentions = [], labels = [], status, priority = 'none', startDate = '', dueDate = '', pendingMilestones = [], dTag: submittedDTag = '' }) {
 	const currentPubkey = getCurrentPubkey();
 	if (!currentPubkey) throw new Error('Not signed in');
 	const finalDTag = submittedDTag || projectParsed?.dTag || newSlug;
 
 	/** @type {string[][]} */
 	const tags = [['d', finalDTag], ['title', newTitle.trim()]];
-	if (communityPubkeyState) tags.push(['h', communityPubkeyState]);
-	if (newSummary?.trim())   tags.push(['summary', newSummary.trim()]);
-	if (projectParsed?.due)   tags.push(['due', String(projectParsed.due)]);
+	if (communityPubkeyState)            tags.push(['h', communityPubkeyState]);
+	if (newSummary?.trim())              tags.push(['summary', newSummary.trim()]);
+	if (priority && priority !== 'none') tags.push(['priority', priority]);
+	// Dates: prefer new values from modal, fallback to existing parsed values
+	const finalStart = startDate || (projectParsed?.start ? new Date(projectParsed.start * 1000).toISOString().slice(0, 10) : '');
+	const finalDue   = dueDate   || (projectParsed?.due   ? new Date(projectParsed.due   * 1000).toISOString().slice(0, 10) : '');
+	if (finalStart) {
+		const ts = Math.floor(new Date(finalStart + 'T00:00:00').getTime() / 1000);
+		if (!isNaN(ts)) tags.push(['start', String(ts)]);
+	}
+	if (finalDue) {
+		const ts = Math.floor(new Date(finalDue + 'T00:00:00').getTime() / 1000);
+		if (!isNaN(ts)) tags.push(['due', String(ts)]);
+	}
 	// Keep existing milestone references
 	(projectParsed?.milestoneAddrs ?? []).forEach((a) => tags.push(['a', a]));
 	labels.forEach((l)  => tags.push(['t', l]));
@@ -316,6 +360,40 @@ async function handleEditSubmit({ title: newTitle, slug: newSlug, summary: newSu
 	projectEvent  = ev;
 	projectParsed = parseProject(ev);
 }
+
+// ── Project status event (kind:1983) ─────────────────────────────────────
+let projectStatusValue = $state('Open');
+
+$effect(() => {
+	if (!projectParsed || !projectEvent) return;
+	(async () => {
+		const addr = `${EVENT_KINDS.PROJECT}:${projectEvent.pubkey}:${projectParsed.dTag}`;
+		const evs = await queryEvents({ kinds: [EVENT_KINDS.STATUS], '#a': [addr], limit: 50 });
+		if (evs.length) {
+			const best = evs.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+			const raw = best.tags?.find((t) => t[0] === 'status')?.[1] ?? 'open';
+			const map = { open: 'Open', backlog: 'Backlog', 'in-progress': 'In Progress', 'in-review': 'In Review', closed: 'Closed' };
+			projectStatusValue = map[raw] ?? raw;
+		}
+	})();
+});
+
+// ── Project priority (from event tags) ───────────────────────────────────
+const projectPriority = $derived(
+	projectEvent?.tags?.find((t) => t[0] === 'priority')?.[1] ?? 'none'
+);
+
+const PRIORITY_LABELS = { none: 'None', low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent' };
+
+// ── Non-milestone targets (a-tags that aren't 30316/30315) ───────────────
+const projectTargets = $derived(
+	(projectEvent?.tags ?? [])
+		.filter((t) => t[0] === 'a' && t[1] && !t[1].startsWith('30316:') && !t[1].startsWith('30315:'))
+		.map((t) => {
+			const parts = t[1].split(':');
+			return parts.length >= 3 ? parts.slice(2).join(':').replace(/-/g, ' ') : t[1].slice(0, 14);
+		})
+);
 
 // ── Meta panel overflow scroll ────────────────────────────────────────────
 let panelOverflows = $state(false);
@@ -363,7 +441,6 @@ const allTeamProfiles = $derived([
 
 				<!-- Title row -->
 				<div class="title-row">
-					<ProjectBox percentage={projectPercentage} size={28} />
 					<h1 class="project-title">{title}</h1>
 					{#if isOwnProject && getIsSignedIn()}
 						<button
@@ -378,124 +455,147 @@ const allTeamProfiles = $derived([
 					{/if}
 				</div>
 
-				<!-- Summary panel -->
-				{#if summary}
-					<div class="project-summary-panel">
-						<p class="project-summary">{summary}</p>
-					</div>
-				{/if}
+			<!-- Summary panel -->
+			{#if summary}
+				<div class="project-summary-panel">
+					<p class="project-summary">{summary}</p>
+				</div>
+			{/if}
 
-				<!-- Meta panel: progress / due / members / milestones count -->
+			<!-- Description body (inline, above meta panel) -->
+			{#if bodyTokens.length > 0}
+				<div class="body-wrap">
+					<div class="description-container" class:expanded={descriptionExpanded}>
+						<div class="project-body" use:checkTruncation>
+							<MarkdownBody tokens={bodyTokens} />
+						</div>
+						{#if isTruncated && !descriptionExpanded}
+							<div class="description-fade" aria-hidden="true"></div>
+							<button
+								type="button"
+								class="read-more-btn"
+								onclick={() => (descriptionExpanded = true)}
+							>
+								Read more
+							</button>
+						{/if}
+						{#if descriptionExpanded}
+							<button
+								type="button"
+								class="show-less-btn"
+								onclick={() => (descriptionExpanded = false)}
+							>
+								Show less
+							</button>
+						{/if}
+					</div>
+				</div>
+			{/if}
+
+			<!-- Meta panel: STATUS / PERIOD / TARGETS -->
 				<div class="meta-scroll-wrap" class:panel-overflows={panelOverflows} use:observeOverflow>
 					<div class="meta-panel">
-						<div class="meta-cols">
+					<div class="meta-cols">
 
-							<!-- Progress -->
-							<div class="meta-col">
-								<span class="meta-label">PROGRESS</span>
-								<div class="meta-line">
-									<ProjectBox percentage={projectPercentage} size={16} />
-									<span class="meta-val">{projectPercentage}%</span>
-								</div>
+						<!-- STATUS + PRIORITY -->
+						<div class="meta-col">
+							<span class="meta-label">STATUS</span>
+							<div class="meta-line">
+								<ProjectBox percentage={projectPercentage} size={16} />
+								<span class="meta-val">{projectStatusValue}</span>
 							</div>
-
-							<!-- Due date -->
-							<div class="meta-col">
-								<span class="meta-label">DUE</span>
-								<div class="meta-line">
-									<span class="meta-val" class:meta-empty={!projectParsed.due}>
-										{projectParsed.due ? formatDue(projectParsed.due) : 'No due date'}
-									</span>
-								</div>
+							<div class="meta-line meta-priority-line">
+								<PriorityBox priority={projectPriority} size={16} />
+								<span class="meta-val">{PRIORITY_LABELS[projectPriority] ?? 'None'}</span>
 							</div>
+						</div>
 
-							<!-- Milestones -->
-							<div class="meta-col">
-								<span class="meta-label">MILESTONES</span>
-								<div class="meta-line">
-									<span class="meta-val" class:meta-empty={!milestones.length}>
-										{milestones.length
-											? `${milestones.filter((m) => milestoneStatusMap.get(getMsAddr(m)) === 'closed').length} / ${milestones.length} done`
-											: 'None'}
-									</span>
-								</div>
+						<!-- PERIOD -->
+						<div class="meta-col">
+							<span class="meta-label">PERIOD</span>
+							<div class="meta-line">
+								<span class="meta-sublabel">From</span>
+								<span class="meta-val" class:meta-empty={!projectParsed.start && !projectParsed.createdAt}>
+									{projectParsed.start ? formatDue(projectParsed.start) : (projectParsed.createdAt ? formatDue(projectParsed.createdAt) : '—')}</span>
 							</div>
-
-							<!-- Members -->
-							<div class="meta-col">
-								<span class="meta-label">TEAM</span>
-								<div class="meta-line">
-									{#if allTeamProfiles.length > 0}
-										<ProfilePicStack
-											profiles={allTeamProfiles}
-											text={authorProfile?.displayName ?? authorProfile?.name ?? ''}
-											size="xs"
-										/>
-									{:else}
-										<span class="meta-val meta-empty">No members</span>
-									{/if}
-								</div>
+							<div class="meta-line">
+								<span class="meta-sublabel">To</span>
+								<span class="meta-val" class:meta-empty={!projectParsed.due}>
+									{projectParsed.due ? formatDue(projectParsed.due) : 'No date'}
+								</span>
 							</div>
+						</div>
 
+						<!-- TARGETS -->
+						<div class="meta-col">
+							<span class="meta-label">TARGETS</span>
+							{#if projectTargets.length > 0}
+								{#each projectTargets.slice(0, 2) as tgt}
+									<div class="meta-line">
+										<span class="meta-val meta-mono">{tgt}</span>
+									</div>
+								{/each}
+							{:else}
+								<span class="meta-val meta-empty">None</span>
+							{/if}
+						</div>
+
+					</div>
+					</div>
+				</div>
+
+			<!-- Milestones skeleton -->
+			{#if milestonesLoading && showMilestoneSkeleton}
+				<div class="milestones-panel">
+					<div class="milestones-panel-header">
+						<span class="ms-panel-label">MILESTONES</span>
+					</div>
+					<div class="ms-item ms-last">
+						<div class="ms-main-row">
+							<div class="ms-skel-diamond">
+								<SkeletonLoader />
+							</div>
+							<span class="ms-skel-loading-text">Loading…</span>
 						</div>
 					</div>
 				</div>
 
-				<!-- Markdown body -->
-				{#if bodyTokens.length > 0}
-					<div class="body-wrap">
-						<div class="description-container" class:expanded={descriptionExpanded}>
-							<div class="project-body" use:checkTruncation>
-								<MarkdownBody tokens={bodyTokens} />
-							</div>
-							{#if isTruncated && !descriptionExpanded}
-								<div class="description-fade" aria-hidden="true"></div>
-								<button
-									type="button"
-									class="read-more-btn"
-									onclick={() => (descriptionExpanded = true)}
-								>
-									Read more
-								</button>
-							{/if}
-							{#if descriptionExpanded}
-								<button
-									type="button"
-									class="show-less-btn"
-									onclick={() => (descriptionExpanded = false)}
-								>
-									Show less
-								</button>
-							{/if}
-						</div>
+			<!-- Milestones panel -->
+			{:else if milestones.length > 0}
+				<div class="milestones-panel">
+					<div class="milestones-panel-header">
+						<span class="ms-panel-label">MILESTONES</span>
 					</div>
-				{/if}
-
-				<!-- Milestones list -->
-				{#if milestones.length > 0}
-					<div class="milestones-section">
-						<h2 class="section-heading">Milestones</h2>
-						<div class="milestones-list">
-							{#each milestones as ms}
-								{@const addr    = getMsAddr(ms)}
-								{@const msStatus = milestoneStatusMap.get(addr) ?? 'open'}
-								{@const msPct   = msStatus === 'closed' ? 100 : msStatus === 'inProgress' ? 50 : msStatus === 'inReview' ? 75 : 0}
-								<div class="milestone-row">
-									<MilestoneBox percentage={msPct} size={20} />
-									<div class="ms-info">
-										<span class="ms-title">{ms.title}</span>
-										{#if ms.summary}
-											<span class="ms-summary">{ms.summary}</span>
-										{/if}
-									</div>
+					{#each milestones as ms, i}
+						{@const addr       = getMsAddr(ms)}
+						{@const msStatus   = milestoneStatusMap.get(addr) ?? 'open'}
+						{@const msPct      = msStatus === 'closed' ? 100 : msStatus === 'inProgress' ? 50 : msStatus === 'inReview' ? 75 : 0}
+						{@const issueCount = milestoneIssueCounts.get(addr) ?? 0}
+						<div class="ms-item" class:ms-last={i === milestones.length - 1}>
+							<div class="ms-main-row">
+								<MilestoneBox percentage={msPct} size={20} />
+								<span class="ms-title">{ms.title}</span>
+								<div class="ms-chips">
 									{#if ms.due}
-										<span class="ms-due">{formatDue(ms.due)}</span>
+										<span class="ms-chip">{formatDue(ms.due)}</span>
+									{/if}
+									{#if issueCount > 0}
+										<span class="ms-chip">{issueCount} {issueCount === 1 ? 'issue' : 'issues'}</span>
+									{/if}
+									{#if msPct > 0}
+										<span class="ms-chip ms-chip-pct">{msPct}%</span>
 									{/if}
 								</div>
-							{/each}
+							</div>
+							{#if ms.summary}
+								<div class="ms-desc-row">
+									<span class="ms-summary">{ms.summary}</span>
+								</div>
+							{/if}
 						</div>
-					</div>
-				{/if}
+					{/each}
+				</div>
+			{/if}
 
 				<!-- Social tabs -->
 				<div class="social-tabs-wrap">
@@ -697,10 +797,22 @@ const allTeamProfiles = $derived([
 		text-overflow: ellipsis;
 	}
 
-	.meta-empty { color: hsl(var(--white16)); }
+	.meta-empty  { color: hsl(var(--white16)); }
+	.meta-mono   { font-family: var(--font-mono); font-size: 0.8125rem; }
+	.meta-priority-line { gap: 5px; }
+
+	.meta-sublabel {
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: hsl(var(--white33));
+		white-space: nowrap;
+		flex-shrink: 0;
+	}
 
 	/* ── Markdown body ── */
-	.body-wrap { margin-bottom: 4px; }
+	.body-wrap {
+		margin-bottom: 14px;
+	}
 
 	.description-container {
 		position: relative;
@@ -772,45 +884,50 @@ const allTeamProfiles = $derived([
 	.show-less-btn:hover { transform: scale(1.025); }
 	.show-less-btn:active { transform: scale(0.98); }
 
-	/* ── Milestones list ── */
-	.milestones-section {
-		padding: 16px 0 0;
-		border-top: 1px solid hsl(var(--white11));
-		margin-top: 8px;
+	/* ── Milestones panel ── */
+	.milestones-panel {
+		background: hsl(var(--gray33));
+		border-radius: 12px;
+		padding: 0 14px;
+		margin-bottom: 14px;
 	}
 
-	.section-heading {
+	.milestones-panel-header {
+		display: flex;
+		align-items: center;
+		padding: 10px 0 6px;
+	}
+
+	.ms-panel-label {
 		font-size: 0.625rem;
 		font-weight: 600;
-		text-transform: uppercase;
 		letter-spacing: 0.08em;
+		text-transform: uppercase;
 		color: hsl(var(--white33));
-		margin: 0 0 10px;
 	}
 
-	.milestones-list {
+	/* ── Milestone item (2-row block) ── */
+	.ms-item {
+		padding: 10px 0;
+		border-bottom: 1px solid hsl(var(--white8));
 		display: flex;
 		flex-direction: column;
-		gap: 0;
+		gap: 4px;
 	}
 
-	.milestone-row {
+	.ms-item.ms-last {
+		border-bottom: none;
+	}
+
+	.ms-main-row {
 		display: flex;
 		align-items: center;
 		gap: 10px;
-		padding: 10px 0;
-		border-bottom: 1px solid hsl(var(--white8));
-	}
-
-	.ms-info {
-		flex: 1;
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
 	}
 
 	.ms-title {
+		flex: 1;
+		min-width: 0;
 		font-size: 0.9375rem;
 		font-weight: 500;
 		color: hsl(var(--white));
@@ -819,21 +936,49 @@ const allTeamProfiles = $derived([
 		text-overflow: ellipsis;
 	}
 
-	.ms-summary {
-		font-size: 0.8125rem;
-		color: hsl(var(--white33));
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+	.ms-chips {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		flex-shrink: 0;
 	}
 
-	.ms-due {
+	.ms-chip {
 		font-size: 0.6875rem;
 		color: hsl(var(--white33));
-		flex-shrink: 0;
 		background: hsl(var(--white8));
 		border-radius: 9999px;
 		padding: 2px 8px;
+		white-space: nowrap;
+	}
+
+	.ms-chip-pct {
+		color: hsl(var(--white66));
+	}
+
+	.ms-desc-row {
+		padding-left: 30px;
+	}
+
+	.ms-summary {
+		font-size: 0.8125rem;
+		color: hsl(var(--white33));
+		line-height: 1.4;
+	}
+
+	/* ── Milestone skeleton ── */
+	.ms-skel-diamond {
+		width: 20px;
+		height: 20px;
+		flex-shrink: 0;
+		overflow: hidden;
+		clip-path: polygon(50% 5%, 95% 50%, 50% 95%, 5% 50%);
+	}
+
+	.ms-skel-loading-text {
+		font-size: 0.9375rem;
+		font-weight: 500;
+		color: hsl(var(--white33));
 	}
 
 	/* ── Social tabs ── */

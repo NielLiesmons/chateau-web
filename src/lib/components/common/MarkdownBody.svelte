@@ -202,12 +202,18 @@ let { tokens = [] } = $props();
 	/* ── Tables ─────────────────────────────────────────────────────────── */
 	.table-wrap {
 		border-radius: 12px;
-		overflow: hidden;
+		/* overflow-x:auto triggers horizontal scroll when the table is wider
+		   than the container; setting any overflow value still clips children
+		   to the border-radius, so corners are preserved. */
+		overflow-x: auto;
 		border: 1px solid hsl(var(--white16));
 		margin: 1em 0;
 	}
 	table {
-		width: 100%;
+		/* min-width:100% fills the container for narrow tables; natural
+		   column sizing takes over for wide ones so cells are never crushed. */
+		min-width: 100%;
+		width: max-content;
 		border-collapse: collapse;
 		margin: 0;
 		font-size: 0.875rem;

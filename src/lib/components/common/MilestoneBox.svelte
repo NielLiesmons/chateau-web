@@ -25,7 +25,8 @@ const pct       = $derived(Math.max(0, Math.min(100, percentage)));
 const isDone    = $derived(pct >= 100);
 const hasArc    = $derived(pct > 0 && pct < 100);
 const dashOff   = $derived(PERIMETER * (1 - pct / 100));
-const sw        = 1.4;
+/* Normalize to ~1.5 physical pixels at any render size (viewBox is always 24×24) */
+const sw        = $derived(1.5 * 24 / size);
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->

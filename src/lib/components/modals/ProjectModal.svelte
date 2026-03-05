@@ -27,6 +27,7 @@ import EmojiPickerModal from '$lib/components/modals/EmojiPickerModal.svelte';
 import ForumPostLabelsModal from '$lib/components/modals/ForumPostLabelsModal.svelte';
 import ProjectBox from '$lib/components/common/ProjectBox.svelte';
 import MilestoneBox from '$lib/components/common/MilestoneBox.svelte';
+import PriorityBox from '$lib/components/common/PriorityBox.svelte';
 import { Camera, EmojiFill, Plus } from '$lib/components/icons';
 import { Calendar } from 'lucide-svelte';
 import { createSearchEmojisFunction } from '$lib/services/emoji-search';
@@ -45,13 +46,25 @@ const STATUS_OPTIONS = [
 
 const STATUS_PCT = { open: 0, closed: 100 };
 
+const PRIORITY_OPTIONS = [
+	{ value: 'none',   label: 'None'   },
+	{ value: 'low',    label: 'Low'    },
+	{ value: 'medium', label: 'Medium' },
+	{ value: 'high',   label: 'High'   },
+	{ value: 'urgent', label: 'Urgent' },
+];
+
+/** Milestone status cycle: open → in-progress → in-review → closed → open */
+const MS_STATUS_CYCLE = ['open', 'in-progress', 'in-review', 'closed'];
+const MS_STATUS_PCT   = { 'open': 0, 'in-progress': 40, 'in-review': 75, 'closed': 100 };
+
 let {
 	isOpen = $bindable(false),
 	communityName: _communityName = '',
 	getCurrentPubkey = () => null,
 	searchProfiles: searchProfilesProp = null,
 	searchEmojis: searchEmojisProp = null,
-	/** @type {{ title?: string, slug?: string, summary?: string, text?: string, labels?: string[], status?: string }|null} */
+	/** @type {{ title?: string, slug?: string, summary?: string, text?: string, labels?: string[], status?: string, priority?: string }|null} */
 	initialData = null,
 	onsubmit,
 	onclose
@@ -62,6 +75,9 @@ const searchEmojis   = $derived(searchEmojisProp   ?? createSearchEmojisFunction
 
 let projectStatus      = $state('open');
 let statusMenuOpen     = $state(false);
+/** @type {'none' | 'low' | 'medium' | 'high' | 'urgent'} */
+let projectPriority    = $state('none');
+let priorityMenuOpen   = $state(false);
 let titleValue         = $state('');
 let summaryValue       = $state('');
 /** @type {import('$lib/components/common/ShortTextInput.svelte').default|null} */
@@ -77,17 +93,29 @@ let milestoneSheetOpen = $state(false);
 /** @type {string[]} */
 let selectedLabels = $state([]);
 
-/** @type {{ title: string }[]} */
+/**
+ * @type {{ title: string; due?: string; status?: string; content?: string }[]}
+ * `due` is stored as YYYY-MM-DD string; converted to Unix timestamp on submit.
+ * `status` cycles: 'open' | 'in-progress' | 'in-review' | 'closed'
+ */
 let pendingMilestones = $state([]);
 
 /** New-milestone add row input inside the sub-sheet */
 let newMsTitle = $state('');
+/** Which milestone row has its content area expanded (index or null) */
+let expandedMsIdx = $state(/** @type {number|null} */ (null));
 /** @type {HTMLInputElement|null} */
 let newMsInput = $state(null);
+/** ISO date string for the project start date (YYYY-MM-DD) */
+let startDate = $state('');
+/** @type {HTMLInputElement|null} */
+let startDateInput = $state(null);
 /** ISO date string for the project due date (YYYY-MM-DD) */
 let dueDate = $state('');
 /** @type {HTMLInputElement|null} */
 let dueDateInput = $state(null);
+/** Whether the From→To date picker dropdown is open */
+let datePickerOpen = $state(false);
 
 const statusPct = $derived(STATUS_PCT[projectStatus] ?? 0);
 
@@ -97,8 +125,31 @@ function handleKeydown(/** @type {KeyboardEvent} */ e) {
 	if (e.key === 'Escape') {
 		if (milestoneSheetOpen) { milestoneSheetOpen = false; return; }
 		if (statusMenuOpen)     { statusMenuOpen = false;     return; }
+		if (priorityMenuOpen)   { priorityMenuOpen = false;   return; }
+		if (datePickerOpen)     { datePickerOpen = false;     return; }
 		close();
 	}
+}
+
+function togglePriorityMenu() { priorityMenuOpen = !priorityMenuOpen; }
+function selectPriority(/** @type {string} */ val) {
+	projectPriority = /** @type {any} */ (val);
+	priorityMenuOpen = false;
+}
+
+/** Format YYYY-MM-DD to short "Mar 5" label */
+function fmtDate(iso) {
+	if (!iso) return '';
+	const d = new Date(iso + 'T00:00:00');
+	return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/** Cycle milestone status to next state in the ring */
+function cycleMilestoneStatus(idx) {
+	const cur = pendingMilestones[idx].status ?? 'open';
+	const curIdx = MS_STATUS_CYCLE.indexOf(cur);
+	const next = MS_STATUS_CYCLE[(curIdx + 1) % MS_STATUS_CYCLE.length];
+	pendingMilestones = pendingMilestones.map((ms, i) => i === idx ? { ...ms, status: next } : ms);
 }
 
 function handleEmojiSelect(emoji) {
@@ -108,7 +159,7 @@ function handleEmojiSelect(emoji) {
 
 function addMilestone() {
 	if (!newMsTitle.trim()) return;
-	pendingMilestones = [...pendingMilestones, { title: newMsTitle.trim() }];
+	pendingMilestones = [...pendingMilestones, { title: newMsTitle.trim(), status: 'open' }];
 	newMsTitle = '';
 	setTimeout(() => newMsInput?.focus(), 20);
 }
@@ -134,6 +185,9 @@ async function handlePublish() {
 			mentions: serialized.mentions ?? [],
 			labels: selectedLabels,
 			status: projectStatus,
+			priority: projectPriority,
+			startDate: startDate || '',
+			dueDate: dueDate || '',
 			pendingMilestones,
 			dTag: initialData?.slug ?? ''
 		});
@@ -151,10 +205,14 @@ function resetForm() {
 	titleValue         = '';
 	summaryValue       = '';
 	projectStatus      = 'open';
+	projectPriority    = 'none';
 	selectedLabels     = [];
 	pendingMilestones  = [];
 	newMsTitle         = '';
+	startDate          = '';
 	dueDate            = '';
+	datePickerOpen     = false;
+	expandedMsIdx      = null;
 	error              = '';
 	contentInput?.clear?.();
 }
@@ -162,10 +220,13 @@ function resetForm() {
 $effect(() => {
 	if (isOpen) {
 		if (initialData) {
-			titleValue     = initialData.title   ?? '';
-			summaryValue   = initialData.summary ?? '';
-			projectStatus  = initialData.status  ?? 'open';
-			selectedLabels = initialData.labels  ?? [];
+			titleValue       = initialData.title     ?? '';
+			summaryValue     = initialData.summary   ?? '';
+			projectStatus    = initialData.status    ?? 'open';
+			projectPriority  = /** @type {any} */ (initialData.priority  ?? 'none');
+			startDate        = initialData.startDate ?? '';
+			dueDate          = initialData.dueDate   ?? '';
+			selectedLabels   = initialData.labels    ?? [];
 			const t = setTimeout(() => {
 				if (initialData.text) contentInput?.setTextContent?.(initialData.text);
 				titleInput?.focus();
@@ -178,6 +239,8 @@ $effect(() => {
 	} else {
 		resetForm();
 		statusMenuOpen     = false;
+		priorityMenuOpen   = false;
+		datePickerOpen     = false;
 		milestoneSheetOpen = false;
 		emojiPickerOpen    = false;
 		labelsModalOpen    = false;
@@ -243,35 +306,57 @@ $effect(() => {
 						{/if}
 					</div>
 
-					<input
-						type="text"
-						class="task-title-input"
-						placeholder="Project title"
-						bind:value={titleValue}
-						bind:this={titleInput}
-						disabled={submitting}
-						aria-label="Project title"
-						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); contentInput?.focus?.(); } }}
-					/>
+				<input
+					type="text"
+					class="task-title-input"
+					placeholder="Project title"
+					bind:value={titleValue}
+					bind:this={titleInput}
+					disabled={submitting}
+					aria-label="Project title"
+					onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); contentInput?.focus?.(); } }}
+				/>
 
-					<!-- Due-date picker (hidden native input, triggered by calendar button) -->
-					<input
-						type="date"
-						class="due-date-native"
-						bind:value={dueDate}
-						bind:this={dueDateInput}
-						aria-label="Due date"
-					/>
+				<!-- Priority: dropdown menu like the status menu -->
+				<div class="priority-wrapper">
 					<button
 						type="button"
-						class="calendar-btn"
-						class:has-date={!!dueDate}
-						onclick={() => dueDateInput?.showPicker?.()}
-						aria-label={dueDate ? `Due ${dueDate}` : 'Set due date'}
+						class="priority-btn"
+						onclick={togglePriorityMenu}
+						aria-label="Set project priority: {projectPriority}"
+						aria-haspopup="listbox"
+						aria-expanded={priorityMenuOpen}
 					>
-						<Calendar size={16} color={dueDate ? 'hsl(var(--white66))' : 'hsl(var(--white33))'} strokeWidth={1.8} />
+						<PriorityBox priority={projectPriority} size={22} />
 					</button>
+
+					{#if priorityMenuOpen}
+						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+						<div class="status-menu-backdrop" onclick={() => (priorityMenuOpen = false)} role="presentation"></div>
+						<div
+							class="status-menu priority-menu"
+							role="listbox"
+							aria-label="Project priority"
+							transition:fly={{ y: -6, duration: 150, easing: cubicOut }}
+						>
+							{#each PRIORITY_OPTIONS as opt (opt.value)}
+								<button
+									type="button"
+									class="status-option"
+									class:active={projectPriority === opt.value}
+									role="option"
+									aria-selected={projectPriority === opt.value}
+									onclick={() => selectPriority(opt.value)}
+								>
+									<PriorityBox priority={opt.value} size={18} />
+									<span class="status-label">{opt.label}</span>
+								</button>
+							{/each}
+						</div>
+					{/if}
 				</div>
+
+			</div>
 
 				<div class="post-form-divider"></div>
 
@@ -316,29 +401,7 @@ $effect(() => {
 							<Plus variant="outline" color="hsl(var(--white33))" size={16} strokeWidth={2.8} />
 						</button>
 
-						<!-- Milestone trigger: plain rounded rectangle, no pointy tip -->
-						<button
-							type="button"
-							class="ms-trigger"
-							class:has-milestones={pendingMilestones.length > 0}
-							onclick={() => { milestoneSheetOpen = true; }}
-							aria-label={pendingMilestones.length === 0 ? 'Add milestones' : 'Edit milestones'}
-						>
-							{#if pendingMilestones.length === 0}
-								<!-- Rounded diamond + plus icon -->
-								<svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-									<path d="M 8.85,1.85 L 14.15,7.15 Q 15,8 14.15,8.85 L 8.85,14.15 Q 8,15 7.15,14.15 L 1.85,8.85 Q 1,8 1.85,7.15 L 7.15,1.85 Q 8,1 8.85,1.85 Z" stroke="hsl(var(--white33))" stroke-width="1.4" fill="none" />
-									<path d="M 8,5.5 L 8,10.5 M 5.5,8 L 10.5,8" stroke="hsl(var(--white33))" stroke-width="1.3" stroke-linecap="round" />
-								</svg>
-								<span class="ms-trigger-text">Milestone</span>
-							{:else}
-								<MilestoneBox percentage={0} size={13} />
-								<span class="ms-trigger-count">{pendingMilestones.length}</span>
-								<span class="ms-trigger-text">Milestone{pendingMilestones.length === 1 ? '' : 's'}</span>
-							{/if}
-						</button>
-
-						<!-- Labels trigger -->
+					<!-- Labels trigger -->
 						<button
 							type="button"
 							class="labels-trigger"
@@ -378,22 +441,94 @@ $effect(() => {
 
 				<div class="post-form-divider"></div>
 
-				<!-- Section 4: Target | Publish -->
-				<div class="task-bottom-row">
-					<button type="button" class="target-btn" onclick={() => {}} aria-label="Set target">
-						<Plus variant="outline" size={13} strokeWidth={2.8} color="hsl(var(--white33))" />
-						<span class="target-text">Target</span>
-					</button>
+			<!-- Section 4: Target | Milestones | Period | Publish -->
+			<div class="task-bottom-row">
+				<button type="button" class="target-btn" onclick={() => {}} aria-label="Set target">
+					<Plus variant="outline" size={13} strokeWidth={2.8} color="hsl(var(--white33))" />
+					<span class="target-text">Target</span>
+				</button>
+
+				<!-- Milestones button -->
+				<button
+					type="button"
+					class="target-btn ms-bottom-btn"
+					class:has-milestones={pendingMilestones.length > 0}
+					onclick={() => { milestoneSheetOpen = true; }}
+					aria-label={pendingMilestones.length === 0 ? 'Add milestones' : 'Edit milestones'}
+				>
+					{#if pendingMilestones.length === 0}
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+							<path d="M 8.85,1.85 L 14.15,7.15 Q 15,8 14.15,8.85 L 8.85,14.15 Q 8,15 7.15,14.15 L 1.85,8.85 Q 1,8 1.85,7.15 L 7.15,1.85 Q 8,1 8.85,1.85 Z" stroke="hsl(var(--white33))" stroke-width="1.4" fill="none" />
+							<path d="M 8,5.5 L 8,10.5 M 5.5,8 L 10.5,8" stroke="hsl(var(--white33))" stroke-width="1.3" stroke-linecap="round" />
+						</svg>
+						<span class="target-text">Milestones</span>
+					{:else}
+						<MilestoneBox percentage={0} size={13} />
+						<span class="target-text ms-count-text">{pendingMilestones.length} Milestone{pendingMilestones.length === 1 ? '' : 's'}</span>
+					{/if}
+				</button>
+
+				<!-- From → To date range button -->
+				<div class="period-wrapper">
+					<!-- Hidden native inputs -->
+					<input type="date" class="due-date-native" bind:value={startDate} bind:this={startDateInput} aria-label="Start date" />
+					<input type="date" class="due-date-native" bind:value={dueDate}   bind:this={dueDateInput}   aria-label="Due date"   />
 
 					<button
 						type="button"
-						class="publish-btn"
-						onclick={handlePublish}
-						disabled={!titleValue.trim() || submitting}
+						class="target-btn period-btn"
+						class:has-dates={!!(startDate || dueDate)}
+						onclick={() => { datePickerOpen = !datePickerOpen; }}
+						aria-label="Set project period"
 					>
-						{submitting ? 'Publishing…' : 'Publish'}
+						<Calendar size={13} color={startDate || dueDate ? 'hsl(var(--white66))' : 'hsl(var(--white33))'} strokeWidth={1.8} />
+						{#if startDate || dueDate}
+							<span class="target-text period-text">
+								{startDate ? fmtDate(startDate) : '…'} → {dueDate ? fmtDate(dueDate) : '…'}
+							</span>
+						{:else}
+							<span class="target-text">Period</span>
+						{/if}
 					</button>
+
+					{#if datePickerOpen}
+						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+						<div class="status-menu-backdrop" onclick={() => (datePickerOpen = false)} role="presentation"></div>
+						<div
+							class="period-dropdown"
+							transition:fly={{ y: 6, duration: 150, easing: cubicOut }}
+						>
+							<div class="period-row">
+								<span class="period-label">From</span>
+								<input
+									type="date"
+									class="period-input"
+									bind:value={startDate}
+									aria-label="Start date"
+								/>
+							</div>
+							<div class="period-row">
+								<span class="period-label">To</span>
+								<input
+									type="date"
+									class="period-input"
+									bind:value={dueDate}
+									aria-label="Due date"
+								/>
+							</div>
+						</div>
+					{/if}
 				</div>
+
+				<button
+					type="button"
+					class="publish-btn"
+					onclick={handlePublish}
+					disabled={!titleValue.trim() || submitting}
+				>
+					{submitting ? 'Publishing…' : 'Publish'}
+				</button>
+			</div>
 			</div>
 
 			{#if error}
@@ -425,27 +560,74 @@ $effect(() => {
 		<div class="ms-sheet-inner">
 			<div class="ms-form-box">
 
-				<!-- Existing milestone rows -->
-				{#each pendingMilestones as ms, i}
-					<div class="ms-edit-row">
-						<MilestoneBox percentage={0} size={20} />
-						<input
-							type="text"
-							class="ms-edit-input"
-							bind:value={pendingMilestones[i].title}
-							placeholder="Milestone title"
-							aria-label="Milestone title"
-							onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); newMsInput?.focus(); } }}
-						/>
-						<button
-							type="button"
-							class="ms-remove-btn"
-							onclick={() => removeMilestone(i)}
-							aria-label="Remove milestone"
-						>×</button>
-					</div>
-					<div class="ms-row-divider"></div>
-				{/each}
+			<!-- Existing milestone rows -->
+			{#each pendingMilestones as ms, i}
+				{@const msPct = MS_STATUS_PCT[ms.status ?? 'open'] ?? 0}
+				{@const isExpanded = expandedMsIdx === i}
+				<div class="ms-edit-row">
+					<button
+						type="button"
+						class="ms-status-btn"
+						onclick={() => cycleMilestoneStatus(i)}
+						aria-label="Cycle milestone status: {ms.status ?? 'open'}"
+						title="Status: {ms.status ?? 'open'} — click to cycle"
+					>
+						<MilestoneBox percentage={msPct} size={20} />
+					</button>
+					<input
+						type="text"
+						class="ms-edit-input"
+						bind:value={pendingMilestones[i].title}
+						placeholder="Milestone title"
+						aria-label="Milestone title"
+						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); newMsInput?.focus(); } }}
+					/>
+					<!-- Hidden native date input -->
+					<input
+						type="date"
+						id="ms-due-{i}"
+						class="due-date-native"
+						bind:value={pendingMilestones[i].due}
+						aria-label="Milestone due date"
+					/>
+					<button
+						type="button"
+						class="calendar-btn ms-cal-btn"
+						class:has-date={!!ms.due}
+						onclick={() => document.getElementById(`ms-due-${i}`)?.showPicker?.()}
+						aria-label={ms.due ? `Due ${ms.due}` : 'Set milestone due date'}
+					>
+						<Calendar size={14} color={ms.due ? 'hsl(var(--white66))' : 'hsl(var(--white33))'} strokeWidth={1.8} />
+					</button>
+					<button
+						type="button"
+						class="ms-expand-btn"
+						class:is-expanded={isExpanded}
+						onclick={() => { expandedMsIdx = isExpanded ? null : i; }}
+						aria-label={isExpanded ? 'Collapse milestone details' : 'Expand milestone details'}
+					>
+						<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+							<path d="M2 4L6 8L10 4" stroke="hsl(var(--white33))" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+						</svg>
+					</button>
+					<button
+						type="button"
+						class="ms-remove-btn"
+						onclick={() => removeMilestone(i)}
+						aria-label="Remove milestone"
+					>×</button>
+				</div>
+				{#if isExpanded}
+					<textarea
+						class="ms-content-input"
+						bind:value={pendingMilestones[i].content}
+						placeholder="Milestone description, goals, acceptance criteria…"
+						aria-label="Milestone description"
+						rows="3"
+					></textarea>
+				{/if}
+				<div class="ms-row-divider"></div>
+			{/each}
 
 				<!-- Add-new row -->
 				<div class="ms-edit-row ms-add-row">
@@ -751,39 +933,6 @@ $effect(() => {
 .calendar-btn:hover              { background: hsl(var(--white8)); }
 .calendar-btn:active             { transform: scale(0.9); }
 
-/* ── Milestone trigger – plain rounded rectangle ── */
-.ms-trigger {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	height: 32px;
-	padding: 0 10px;
-	background: hsl(var(--white8));
-	border: none;
-	border-radius: 8px;
-	cursor: pointer;
-	flex-shrink: 0;
-	white-space: nowrap;
-	transition: background 0.15s ease, opacity 0.15s ease;
-}
-
-.ms-trigger.has-milestones { background: hsl(var(--white16)); }
-.ms-trigger:active          { opacity: 0.75; }
-
-.ms-trigger-text {
-	font-size: 15px;
-	font-weight: 500;
-	color: hsl(var(--white33));
-	transition: color 0.15s ease;
-}
-
-.ms-trigger.has-milestones .ms-trigger-text { color: hsl(var(--white)); }
-
-.ms-trigger-count {
-	font-size: 15px;
-	font-weight: 600;
-	color: hsl(var(--white66));
-}
 
 /* ── Labels trigger ── */
 .labels-trigger {
@@ -837,7 +986,7 @@ $effect(() => {
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	padding: 10px 12px;
+	padding: 5px 12px;
 	overflow-x: auto;
 	scrollbar-width: none;
 	-webkit-overflow-scrolling: touch;
@@ -932,6 +1081,70 @@ $effect(() => {
 
 .publish-btn:disabled              { opacity: 0.5; cursor: not-allowed; }
 .publish-btn:active:not(:disabled) { transform: scale(0.97); }
+
+/* Milestone button in bottom row */
+.ms-bottom-btn.has-milestones .target-text { color: hsl(var(--white66)); }
+
+.ms-count-text { color: hsl(var(--white66)); }
+
+/* Period (date range) button + dropdown */
+.period-wrapper {
+	position: relative;
+	flex-shrink: 0;
+}
+
+.period-btn.has-dates .target-text { color: hsl(var(--white66)); }
+.period-text { white-space: nowrap; }
+
+.period-dropdown {
+	position: absolute;
+	bottom: calc(100% + 8px);
+	left: 0;
+	background: hsl(var(--black33));
+	border: 0.33px solid hsl(var(--white16));
+	border-radius: 12px;
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	z-index: 10;
+	min-width: 200px;
+	backdrop-filter: blur(24px);
+	-webkit-backdrop-filter: blur(24px);
+}
+
+.period-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.period-label {
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	color: hsl(var(--white33));
+	width: 28px;
+	flex-shrink: 0;
+}
+
+.period-input {
+	flex: 1;
+	min-width: 0;
+	background: hsl(var(--white8));
+	border: none;
+	border-radius: 6px;
+	padding: 5px 8px;
+	font-size: 13px;
+	font-weight: 500;
+	color: hsl(var(--white));
+	font-family: 'Inter', sans-serif;
+	cursor: pointer;
+	outline: none;
+	color-scheme: dark;
+}
+.period-input:focus { outline: 1px solid hsl(var(--blurpleColor) / 0.5); }
 
 /* ── Error ── */
 .error-text {
@@ -1090,4 +1303,88 @@ $effect(() => {
 }
 
 .ms-done-btn:active { transform: scale(0.97); }
+
+/* ── Priority button (title row, right of status) ── */
+.priority-btn {
+	background: none;
+	border: none;
+	padding: 2px;
+	cursor: pointer;
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.priority-btn:hover  { opacity: 0.8; }
+.priority-btn:active { transform: scale(0.9); }
+
+.priority-wrapper {
+	position: relative;
+	flex-shrink: 0;
+}
+
+.priority-menu {
+	top: calc(100% + 8px);
+	bottom: auto;
+	left: auto;
+	right: 0;
+}
+.priority-menu .status-option.active .status-label { font-weight: 500; }
+
+/* ── Milestone sub-sheet: status cycling button ── */
+.ms-status-btn {
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	transition: opacity 0.15s, transform 0.15s;
+}
+.ms-status-btn:hover  { opacity: 0.8; }
+.ms-status-btn:active { transform: scale(0.88); }
+
+/* ── Milestone calendar button (inline, smaller) ── */
+.ms-cal-btn {
+	width: 24px;
+	height: 24px;
+	padding: 0;
+}
+
+/* ── Milestone expand toggle ── */
+.ms-expand-btn {
+	background: none;
+	border: none;
+	padding: 2px;
+	cursor: pointer;
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: transform 0.2s ease, opacity 0.15s;
+	opacity: 0.6;
+}
+.ms-expand-btn:hover   { opacity: 1; }
+.ms-expand-btn.is-expanded { transform: rotate(180deg); opacity: 1; }
+
+/* ── Milestone content textarea (expands below the row) ── */
+.ms-content-input {
+	width: 100%;
+	min-height: 64px;
+	padding: 8px 12px 10px 42px;
+	background: transparent;
+	border: none;
+	outline: none;
+	resize: vertical;
+	color: hsl(var(--white));
+	font-family: 'Inter', sans-serif;
+	font-size: 14px;
+	font-weight: 400;
+	line-height: 1.5;
+	caret-color: hsl(var(--blurpleColor));
+	box-sizing: border-box;
+}
+.ms-content-input::placeholder { color: hsl(var(--white33)); }
 </style>
