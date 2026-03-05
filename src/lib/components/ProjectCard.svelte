@@ -3,9 +3,12 @@
 /**
  * ProjectCard — feed card for a kind:30315 Project event.
  *
- * Row 1: ProjectBox (24px hexagon, status + progress) | title | due-date chip
- * Row 2: L-shape connector → row of MilestoneBox chips (one per milestone, 16px diamonds)
- *         + ProfilePicStack of project members
+ * Layout mirrors ForumPost:
+ *   Left column  : ProjectBox (24px hexagon) + vertical connector line
+ *   Right column : Row 1 — title + due chip
+ *                  Row 2 — summary (3-line clamp)
+ *                  Row 3 — one btn-secondary-small per milestone
+ *   Bottom row   : L-shape connector → ProfilePicStack of project members
  */
 import ProjectBox from '$lib/components/common/ProjectBox.svelte';
 import MilestoneBox from '$lib/components/common/MilestoneBox.svelte';
@@ -13,6 +16,7 @@ import ProfilePicStack from '$lib/components/common/ProfilePicStack.svelte';
 
 let {
 	title = '',
+	summary = '',
 	/** 0-100 overall project completion */
 	percentage = 0,
 	/** @type {{ id: string; title: string; percentage: number }[]} */
@@ -45,14 +49,14 @@ const stackText = $derived(
 	author?.name || (author ? author.pubkey.slice(0, 8) + '…' : '')
 );
 
-const hasBottomRow = $derived(milestones.length > 0 || stackProfiles.length > 0);
+const hasBottomRow = $derived(stackProfiles.length > 0);
 
 /** Format Unix timestamp as relative or short date */
 function formatDue(/** @type {number} */ ts) {
 	if (!ts) return '';
 	const date = new Date(ts * 1000);
 	const now = new Date();
-	const diffDays = Math.floor((date - now) / 86400000);
+	const diffDays = Math.floor((date.getTime() - now.getTime()) / 86400000);
 	if (diffDays < 0) return `${Math.abs(diffDays)}d ago`;
 	if (diffDays === 0) return 'Today';
 	if (diffDays < 7) return `${diffDays}d`;
@@ -69,53 +73,75 @@ function formatDue(/** @type {number} */ ts) {
 	onclick={onClick}
 	onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), onClick())}
 >
-	<!-- Row 1: hexagon status | title | due chip -->
-	<div class="row-main">
-		<div class="box-col">
-			<ProjectBox {percentage} size={24} />
+	<div class="top-section">
+		<!-- Left column: ProjectBox + vertical connector line -->
+		<div class="left-column">
+			<div class="box-wrap">
+				<ProjectBox {percentage} size={24} />
+			</div>
+			{#if hasBottomRow}
+				<div class="connector-vertical-only"></div>
+			{/if}
 		</div>
-		<span class="project-title">{title}</span>
-		{#if due}
-			<span class="due-chip">{formatDue(due)}</span>
-		{/if}
-	</div>
 
-	<!-- Row 2: L-shape + milestone diamonds + team stack -->
-	{#if hasBottomRow}
-		<div class="row-bottom">
-			<div class="connector-col">
-				<svg viewBox="0 0 22 22" width="22" height="22" fill="none" aria-hidden="true">
-					<path
-						d="M1 0 L1 9 Q1 21 10 21 L22 21"
-						stroke="hsl(var(--white16))"
-						stroke-width="1.5"
-						fill="none"
-					/>
-				</svg>
+		<!-- Right column: title → summary → milestone buttons -->
+		<div class="right-column">
+			<!-- Row 1: title + due chip -->
+			<div class="row row-title">
+				<span class="project-title">{title}</span>
+				{#if due}
+					<span class="due-chip">{formatDue(due)}</span>
+				{/if}
 			</div>
 
-			<div class="bottom-items">
-				<!-- Milestone diamond strip -->
-				{#if milestones.length > 0}
-					<div class="milestones-strip">
-						{#each milestones.slice(0, 6) as m}
-							<MilestoneBox percentage={m.percentage} size={16} />
-						{/each}
-						{#if milestones.length > 6}
-							<span class="ms-overflow">+{milestones.length - 6}</span>
-						{/if}
-					</div>
-				{/if}
+			<!-- Row 2: summary -->
+			{#if summary}
+				<div class="row summary-row">
+					<p class="project-summary">{summary}</p>
+				</div>
+			{/if}
 
-				<!-- Team profile stack -->
-				{#if stackProfiles.length > 0}
-					<ProfilePicStack
-						profiles={stackProfiles}
-						text={stackText}
-						size="xs"
-						onclick={onClick}
-					/>
-				{/if}
+			<!-- Row 3: one btn per milestone -->
+			{#if milestones.length > 0}
+				<div class="row milestones-row">
+					{#each milestones.slice(0, 5) as ms}
+						<button
+							class="ms-btn"
+							type="button"
+							onclick={(e) => e.stopPropagation()}
+						>
+							<MilestoneBox percentage={ms.percentage} size={13} />
+							{ms.title}
+						</button>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	</div>
+
+	<!-- Bottom row: L-shape connector + profile stack -->
+	{#if hasBottomRow}
+		<div class="reply-row">
+			<div class="connector-column">
+				<div class="connector-vertical"></div>
+				<div class="connector-corner">
+					<svg viewBox="0 0 27 16" fill="none" aria-hidden="true">
+						<path
+							d="M1 0 L1 0 Q1 15 16 15 L27 15"
+							stroke="hsl(var(--white16))"
+							stroke-width="1.5"
+							fill="none"
+						/>
+					</svg>
+				</div>
+			</div>
+			<div class="repliers-row">
+				<ProfilePicStack
+					profiles={stackProfiles}
+					text={stackText}
+					size="sm"
+					onclick={onClick}
+				/>
 			</div>
 		</div>
 	{/if}
@@ -125,12 +151,13 @@ function formatDue(/** @type {number} */ ts) {
 	.project-card {
 		display: flex;
 		flex-direction: column;
-		gap: 0;
-		padding: 14px 16px;
-		border-bottom: 1.4px solid hsl(var(--white11));
 		background: transparent;
+		border: none;
 		border-radius: 0;
+		border-bottom: 1.4px solid hsl(var(--white11));
 		cursor: pointer;
+		overflow: visible;
+		padding: 14px 16px;
 		outline: none;
 	}
 
@@ -138,19 +165,60 @@ function formatDue(/** @type {number} */ ts) {
 		background: hsl(var(--white4));
 	}
 
-	.row-main {
+	/* ── Top section ── */
+
+	.top-section {
 		display: flex;
-		align-items: center;
-		gap: 12px;
-		min-height: 24px;
+		align-items: stretch;
+		gap: 0;
 	}
 
-	.box-col {
-		width: 24px;
+	/* Left column — ProjectBox at top, vertical line fills the rest */
+	.left-column {
+		width: 32px;
+		flex-shrink: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+	}
+
+	.box-wrap {
 		flex-shrink: 0;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+	}
+
+	.connector-vertical-only {
+		width: 1.5px;
+		flex: 1;
+		min-height: 8px;
+		background: hsl(var(--white16));
+		margin-top: 2px;
+	}
+
+	/* Right column */
+	.right-column {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		padding: 0;
+	}
+
+	.row {
+		margin: 0;
+	}
+
+	/* Row 1: title + due chip */
+	.row-title {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		padding: 0 0 0 12px;
+		min-height: 24px;
 	}
 
 	.project-title {
@@ -176,39 +244,97 @@ function formatDue(/** @type {number} */ ts) {
 		white-space: nowrap;
 	}
 
-	.row-bottom {
-		display: flex;
-		align-items: flex-start;
-		margin-left: 12px;
-		width: calc(100% - 12px);
+	/* Row 2: summary */
+	.summary-row {
+		padding: 0 0 0 12px;
+		margin-top: 2px;
 	}
 
-	.connector-col {
-		width: 22px;
-		flex-shrink: 0;
-		display: flex;
-		align-items: flex-start;
+	.project-summary {
+		font-size: 0.9375rem;
+		line-height: 1.45;
+		margin: 0;
+		color: hsl(var(--white66));
+		display: -webkit-box;
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
 	}
 
-	.bottom-items {
+	/* Row 3: one milestone button per milestone */
+	.milestones-row {
 		display: flex;
 		align-items: center;
-		gap: 10px;
+		gap: 6px;
+		padding: 2px 0 4px 12px;
+		flex-wrap: wrap;
+	}
+
+	/* Milestone chip */
+	.ms-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		height: 28px;
+		padding: 0 10px 0 8px;
+		background: hsl(var(--gray66));
+		border: none;
+		border-radius: 8px;
+		flex-shrink: 0;
+		font-size: 12px;
+		font-weight: 500;
+		color: hsl(var(--white66));
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 160px;
+		pointer-events: none;
+		cursor: default;
+	}
+
+	/* ── Bottom row: L-shape connector + profile stack ── */
+
+	.reply-row {
+		display: flex;
+		align-items: flex-end;
+		margin-left: 16px;
+		width: calc(100% - 16px);
+	}
+
+	.connector-column {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		width: 27px;
+		flex-shrink: 0;
+		padding-bottom: 14px;
+	}
+
+	.connector-vertical {
+		width: 1.5px;
+		height: 12px;
+		background: hsl(var(--white16));
+		margin-left: 0;
+	}
+
+	.connector-corner {
+		width: 27px;
+		height: 16px;
+		flex-shrink: 0;
+	}
+
+	.connector-corner svg {
+		width: 100%;
+		height: 100%;
+		display: block;
+	}
+
+	.repliers-row {
+		display: flex;
+		align-items: center;
+		padding-top: 4px;
 		flex: 1;
 		min-width: 0;
-		padding-top: 7px;
-	}
-
-	.milestones-strip {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		flex-shrink: 0;
-	}
-
-	.ms-overflow {
-		font-size: 0.6875rem;
-		color: hsl(var(--white33));
-		padding-left: 2px;
 	}
 </style>

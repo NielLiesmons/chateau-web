@@ -8,13 +8,15 @@ import { Zap, Reply, Options } from '$lib/components/icons';
 import InputButton from '$lib/components/common/InputButton.svelte';
 import ShortTextInput from '$lib/components/common/ShortTextInput.svelte';
 import ZapSliderModal from '$lib/components/modals/ZapSliderModal.svelte';
-let { appName: _appName = '', publisherName = '', contentType: _contentType = 'app', className = '', zapTarget = null, otherZaps = [], isSignedIn = true, isMember = true, onGetStarted, onJoinRequired = () => {}, searchProfiles = async () => [], searchEmojis = async () => [], oncommentSubmit, onzapReceived, onoptions } = $props();
+import ActionsModal from '$lib/components/modals/ActionsModal.svelte';
+let { appName: _appName = '', publisherName = '', contentType = 'post', className = '', zapTarget = null, otherZaps = [], isSignedIn = true, isMember = true, onGetStarted, onJoinRequired = () => {}, searchProfiles = async () => [], searchEmojis = async () => [], oncommentSubmit, onzapReceived, onoptions } = $props();
+let actionsModalOpen = $state(false);
 let zapModalOpen = $state(false);
 let commentExpanded = $state(false);
 let commentInput = $state(null);
 let submitting = $state(false);
-/** Bar slides out only when zap modal is open (comment morphs in place) */
-const barSlidesOut = $derived(zapModalOpen);
+/** Bar slides out when zap or actions modal is open (comment morphs in place) */
+const barSlidesOut = $derived(zapModalOpen || actionsModalOpen);
 function handleZap() {
     zapModalOpen = true;
 }
@@ -103,13 +105,13 @@ $effect(() => {
 						<Reply variant="outline" size={18} strokeWidth={1.4} color="hsl(var(--white33))" />
 					{/snippet}
 				</InputButton>
-					<button
-						type="button"
-						class="btn-secondary-large btn-secondary-dark options-button"
-						onclick={onoptions}
-					>
-						<Options variant="fill" size={20} color="hsl(var(--white33))" />
-					</button>
+				<button
+					type="button"
+					class="btn-secondary-large btn-secondary-dark options-button"
+					onclick={() => { actionsModalOpen = true; }}
+				>
+					<Options variant="fill" size={20} color="hsl(var(--white33))" />
+				</button>
 				{:else}
 					<a href="/" class="bottom-bar-logo-link" aria-label="Zapstore home">
 						<svg width="19" height="32" viewBox="0 0 19 32" fill="none" xmlns="http://www.w3.org/2000/svg" class="h-6 lg:h-7 w-auto flex-shrink-0">
@@ -142,6 +144,11 @@ $effect(() => {
 	{searchEmojis}
 	onclose={handleZapClose}
 	onzapReceived={handleZapReceived}
+/>
+
+<ActionsModal
+	bind:isOpen={actionsModalOpen}
+	{contentType}
 />
 
 <style>

@@ -967,7 +967,7 @@
 	/**
 	 * @param {{ type: string, title: string, slug: string, text: string, emojiTags: any[], mentions: any[], labels: string[], status: string, projectAddr?: string, pendingMilestones?: { title: string }[], dTag?: string }} params
 	 */
-	async function handleProjectSubmit({ type, title, slug, text, emojiTags, mentions, labels, status, projectAddr, pendingMilestones, dTag }) {
+	async function handleProjectSubmit({ type, title, slug, summary = '', text, emojiTags, mentions, labels, status, projectAddr, pendingMilestones, dTag }) {
 		if (!selectedCommunity?.pubkey || !currentPubkey) throw new Error('Not signed in');
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
 		const now = Math.floor(Date.now() / 1000);
@@ -981,6 +981,7 @@
 			['title', title.trim()],
 			['h', selectedCommunity.pubkey]
 		];
+		if (type === 'project' && summary?.trim()) tags.push(['summary', summary.trim()]);
 		if (type === 'milestone' && projectAddr) tags.push(['a', projectAddr]);
 		labels?.forEach((l) => tags.push(['t', l]));
 		emojiTags?.forEach((e) => tags.push(Array.isArray(e) ? e : ['emoji', e.shortcode, e.url]));
@@ -2654,6 +2655,7 @@
 					{#if pData}
 				<ProjectCard
 					title={pData.parsed.title}
+					summary={pData.parsed.summary}
 					percentage={pData.progress}
 					milestones={pData.milestones}
 						author={{ pubkey: projEv.pubkey, name: pAuthorContent.display_name ?? pAuthorContent.name, pictureUrl: pAuthorContent.picture }}

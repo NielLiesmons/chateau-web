@@ -77,7 +77,7 @@ function handleProfileAdded() {
     </div>
 
     <!-- Title -->
-    <h2 class="text-display text-4xl text-foreground text-center mb-4">
+    <h2 class="modal-title text-display text-4xl text-foreground text-center mb-4">
       Chateau
     </h2>
     <p class="description">
@@ -130,6 +130,10 @@ function handleProfileAdded() {
 <AddProfileModal bind:open={addProfileModalOpen} onconnected={handleProfileAdded} />
 
 <style>
+  .modal-title {
+    font-size: 1.875rem;
+  }
+
   .modal-content {
     display: flex;
     flex-direction: column;

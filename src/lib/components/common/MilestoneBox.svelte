@@ -25,7 +25,7 @@ const pct       = $derived(Math.max(0, Math.min(100, percentage)));
 const isDone    = $derived(pct >= 100);
 const hasArc    = $derived(pct > 0 && pct < 100);
 const dashOff   = $derived(PERIMETER * (1 - pct / 100));
-const sw        = $derived(size >= 20 ? 1.5 : 1);
+const sw        = 1.4;
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -43,7 +43,7 @@ const sw        = $derived(size >= 20 ? 1.5 : 1);
   <!-- Background fill -->
   <path
     d={PATH}
-    fill={isDone ? 'hsl(var(--blurpleColor))' : hasArc ? 'hsl(var(--black33))' : 'transparent'}
+    fill={isDone ? 'hsl(var(--blurpleColor))' : 'hsl(var(--black33))'}
     stroke="none"
   />
 

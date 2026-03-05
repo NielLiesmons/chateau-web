@@ -51,7 +51,7 @@ let {
 	getCurrentPubkey = () => null,
 	searchProfiles: searchProfilesProp = null,
 	searchEmojis: searchEmojisProp = null,
-	/** @type {{ title?: string, slug?: string, text?: string, labels?: string[], status?: string }|null} */
+	/** @type {{ title?: string, slug?: string, summary?: string, text?: string, labels?: string[], status?: string }|null} */
 	initialData = null,
 	onsubmit,
 	onclose
@@ -63,6 +63,7 @@ const searchEmojis   = $derived(searchEmojisProp   ?? createSearchEmojisFunction
 let projectStatus      = $state('open');
 let statusMenuOpen     = $state(false);
 let titleValue         = $state('');
+let summaryValue       = $state('');
 /** @type {import('$lib/components/common/ShortTextInput.svelte').default|null} */
 let contentInput       = $state(null);
 /** @type {HTMLInputElement|null} */
@@ -127,6 +128,7 @@ async function handlePublish() {
 			type: 'project',
 			title: titleValue.trim(),
 			slug,
+			summary: summaryValue.trim(),
 			text: serialized.text ?? '',
 			emojiTags: serialized.emojiTags ?? [],
 			mentions: serialized.mentions ?? [],
@@ -147,6 +149,7 @@ async function handlePublish() {
 
 function resetForm() {
 	titleValue         = '';
+	summaryValue       = '';
 	projectStatus      = 'open';
 	selectedLabels     = [];
 	pendingMilestones  = [];
@@ -159,9 +162,10 @@ function resetForm() {
 $effect(() => {
 	if (isOpen) {
 		if (initialData) {
-			titleValue     = initialData.title  ?? '';
-			projectStatus  = initialData.status ?? 'open';
-			selectedLabels = initialData.labels ?? [];
+			titleValue     = initialData.title   ?? '';
+			summaryValue   = initialData.summary ?? '';
+			projectStatus  = initialData.status  ?? 'open';
+			selectedLabels = initialData.labels  ?? [];
 			const t = setTimeout(() => {
 				if (initialData.text) contentInput?.setTextContent?.(initialData.text);
 				titleInput?.focus();
@@ -268,6 +272,18 @@ $effect(() => {
 						<Calendar size={16} color={dueDate ? 'hsl(var(--white66))' : 'hsl(var(--white33))'} strokeWidth={1.8} />
 					</button>
 				</div>
+
+				<div class="post-form-divider"></div>
+
+				<!-- Section 1b: Summary -->
+				<input
+					type="text"
+					class="project-summary-input"
+					placeholder="Short summary (optional)"
+					bind:value={summaryValue}
+					disabled={submitting}
+					aria-label="Project summary"
+				/>
 
 				<div class="post-form-divider"></div>
 
@@ -686,6 +702,29 @@ $effect(() => {
 }
 
 .action-btn:active { transform: scale(0.97); }
+
+/* ── Summary input ── */
+.project-summary-input {
+	width: 100%;
+	padding: 8px 12px;
+	background: transparent;
+	border: none;
+	outline: none;
+	color: hsl(var(--white66));
+	font-family: 'Inter', sans-serif;
+	font-size: 14px;
+	font-weight: 400;
+	box-sizing: border-box;
+	flex-shrink: 0;
+}
+
+.project-summary-input::placeholder {
+	color: hsl(var(--white33));
+}
+
+.project-summary-input:disabled {
+	opacity: 0.6;
+}
 
 /* ── Calendar button (in title row) ── */
 .due-date-native {

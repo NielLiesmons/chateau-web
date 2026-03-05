@@ -22,8 +22,13 @@ let {
   onclick = null
 } = $props();
 
-const PERIMETER = 66;
-const PATH = 'M 12,1 L 21.53,6.5 L 21.53,17.5 L 12,23 L 2.47,17.5 L 2.47,6.5 L 12,1';
+/* Large sizes (32px+) use a slightly bigger hex (R=11.5) to fill more of the viewBox */
+const PATH = $derived(
+  size >= 32
+    ? 'M 12,0.5 L 21.96,6.25 L 21.96,17.75 L 12,23.5 L 2.04,17.75 L 2.04,6.25 L 12,0.5'
+    : 'M 12,1 L 21.53,6.5 L 21.53,17.5 L 12,23 L 2.47,17.5 L 2.47,6.5 L 12,1'
+);
+const PERIMETER = $derived(size >= 32 ? 69 : 66);
 
 const pct      = $derived(Math.max(0, Math.min(100, percentage)));
 const isDone   = $derived(pct >= 100);
