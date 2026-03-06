@@ -9,6 +9,7 @@
 	import { liveQuery, queryEvents, queryEvent, putEvents } from '$lib/nostr';
 	import { parseCommunity, parseProfileList, parseFormTemplate, parseForumPost, parseProfile, parseEventAddress } from '$lib/nostr';
 	import {
+		fetchEventsNoStore,
 		fetchProfileListFromRelays,
 		getLocalFormTemplate,
 		fetchFreshFormTemplate,
@@ -1263,11 +1264,20 @@
 				authors: [listPubkey],
 				'#d': [dTag]
 			});
-			// Always background-fetch to catch updates published from other devices.
-			fetchProfileListFromRelays(relays, listAddress).then(async (relayEv) => {
-				if (!relayEv) return;
-				await putEvents([relayEv]);
-				if (!listEv || relayEv.created_at >= listEv.created_at) {
+			// Background-check the relay for a newer version WITHOUT writing to
+			// Dexie unconditionally — fetchEventsNoStore skips the internal putEvents
+			// so it won't trigger liveQuery subscribers (zap counts, label counts, etc.)
+			// in unrelated components. We only write if the relay has something newer.
+			fetchEventsNoStore(relays, {
+				kinds: [EVENT_KINDS.PROFILE_LIST],
+				authors: [listPubkey],
+				'#d': [dTag],
+				limit: 1
+			}).then(async (results) => {
+				if (!results.length) return;
+				const relayEv = results[0];
+				if (!listEv || relayEv.created_at > listEv.created_at) {
+					await putEvents([relayEv]);
 					const freshParsed = parseProfileList(relayEv);
 					membersListData = membersListData.map((item) =>
 						item.listAddress === listAddress
