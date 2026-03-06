@@ -230,7 +230,7 @@
 				rawTaskEvent = raw;
 				task = raw;
 
-				// Load status event — check Dexie first, then fetch from relays in background
+				// Load status event — check Dexie first (fast path)
 				const dTag = raw.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
 				const addr = `${EVENT_KINDS.TASK}:${raw.pubkey}:${dTag}`;
 				const statusEvs = await queryEvents({
@@ -241,7 +241,18 @@
 				if (statusEvs.length > 0) {
 					statusEvent = statusEvs.reduce((a, b) => (b.created_at > a.created_at ? b : a));
 				}
-				// Always fetch from relays so the deployed version (empty Dexie) gets status too
+
+				// Load author + community info in parallel — must happen BEFORE the relay
+				// status fetch so communityDef.relays is available and we query the right relay.
+				const [profileEv, communityEv, communityProfileEv] = await Promise.all([
+					queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [raw.pubkey], limit: 1 }),
+					queryEvent({ kinds: [EVENT_KINDS.COMMUNITY], authors: [communityPubkey], limit: 1 }),
+					queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [communityPubkey], limit: 1 })
+				]);
+				authorProfile = profileEv ? parseProfile(profileEv) : null;
+				if (communityEv) communityDef = parseCommunity(communityEv);
+
+				// Now fetch status from relays using the correct community relays
 				const relaysForStatus = communityDef?.relays?.length
 					? communityDef.relays
 					: DEFAULT_COMMUNITY_RELAYS;
@@ -256,14 +267,6 @@
 					})
 					.catch(() => {});
 
-				// Load author + community info in parallel
-				const [profileEv, communityEv, communityProfileEv] = await Promise.all([
-					queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [raw.pubkey], limit: 1 }),
-					queryEvent({ kinds: [EVENT_KINDS.COMMUNITY], authors: [communityPubkey], limit: 1 }),
-					queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [communityPubkey], limit: 1 })
-				]);
-				authorProfile = profileEv ? parseProfile(profileEv) : null;
-				if (communityEv) communityDef = parseCommunity(communityEv);
 				if (communityEv?.content) {
 					try {
 						const c = JSON.parse(communityEv.content);
@@ -670,6 +673,9 @@
 		statusMenuOpen = false;
 		const pubkey = getCurrentPubkey();
 		if (!pubkey || !task) return;
+		// Capture relays synchronously before any await so we always use the relay set
+		// that corresponds to the community currently loaded in this view.
+		const relays = communityRelays;
 		const dTag = task.tags?.find((/** @type {string[]} */ t) => t[0] === 'd')?.[1] ?? '';
 		const addr = `${EVENT_KINDS.TASK}:${task.pubkey}:${dTag}`;
 		const specStatus = CAMEL_TO_SPEC[newStatusCamel] ?? newStatusCamel;
@@ -683,7 +689,6 @@
 				tags,
 				created_at: Math.floor(Date.now() / 1000)
 			});
-			const relays = communityDef?.relays?.length ? communityDef.relays : DEFAULT_COMMUNITY_RELAYS;
 			await publishToRelays(relays, ev);
 			statusEvent = ev;
 		} catch (err) {
@@ -695,6 +700,8 @@
 		priorityMenuOpen = false;
 		const pubkey = getCurrentPubkey();
 		if (!pubkey || !task) return;
+		// Capture relays synchronously before any await.
+		const relays = communityRelays;
 		const dTag = task.tags?.find((/** @type {string[]} */ t) => t[0] === 'd')?.[1] ?? '';
 		const addr = `${EVENT_KINDS.TASK}:${task.pubkey}:${dTag}`;
 		const specStatus = CAMEL_TO_SPEC[taskStatus] ?? 'open';
@@ -708,7 +715,6 @@
 				tags,
 				created_at: Math.floor(Date.now() / 1000)
 			});
-			const relays = communityDef?.relays?.length ? communityDef.relays : DEFAULT_COMMUNITY_RELAYS;
 			await publishToRelays(relays, ev);
 			statusEvent = ev;
 		} catch (err) {

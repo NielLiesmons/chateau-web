@@ -249,10 +249,17 @@
     white-space: pre-wrap;
     color: hsl(var(--white66));
     display: -webkit-box;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  @media (min-width: 768px) {
+    .post-content {
+      -webkit-line-clamp: 1;
+      line-clamp: 1;
+    }
   }
 
   .labels-row {
