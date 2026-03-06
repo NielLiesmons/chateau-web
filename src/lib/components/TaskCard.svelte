@@ -35,8 +35,8 @@ let {
 	onClick = () => {},
 } = $props();
 
-// Merge creator → assignees → commenters, deduplicated, capped at 4 for the stack.
-const stackProfiles = $derived((() => {
+// Merge creator → assignees → commenters, deduplicated (full list for text; capped at 4 for pics).
+const allStackPeople = $derived((() => {
 	const seen = new Set();
 	/** @type {{ pubkey: string; name?: string; pictureUrl?: string }[]} */
 	const merged = [];
@@ -46,14 +46,20 @@ const stackProfiles = $derived((() => {
 			merged.push(p);
 		}
 	}
-	return merged.slice(0, 4);
+	return merged;
 })());
 
-// Always show the author name so the text pill renders and the stack height
-// is a consistent 24px, matching the LabelStack height.
-const stackText = $derived(
-	author?.name || (author ? author.pubkey.slice(0, 8) + '…' : '')
-);
+const stackProfiles = $derived(allStackPeople.slice(0, 4));
+
+// "Name", "Name & Name", or "Name & N Others" across all unique people in the stack.
+const stackText = $derived((() => {
+	const n = allStackPeople.length;
+	if (n === 0) return '';
+	const a = allStackPeople[0].name || allStackPeople[0].pubkey.slice(0, 8) + '…';
+	if (n === 1) return a;
+	if (n === 2) return `${a} & ${allStackPeople[1].name || allStackPeople[1].pubkey.slice(0, 8) + '…'}`;
+	return `${a} & ${n - 1} Others`;
+})());
 
 const hasBottomRow = $derived(stackProfiles.length > 0 || targets.length > 0 || labels.length > 0);
 </script>

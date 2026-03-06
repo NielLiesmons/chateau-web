@@ -16,6 +16,7 @@ import { DEFAULT_COMMUNITY_RELAYS } from "$lib/config.js";
 
 let {
 	isOpen = $bindable(false),
+	appName = "",
 	authorName = "",
 	contentType = "post",
 	eventId = "",
@@ -84,7 +85,11 @@ const CONTENT_TYPE_LABELS = {
 
 const violations = $derived(VIOLATIONS_BY_TYPE[contentType] ?? VIOLATIONS_BY_TYPE.post);
 const contentTypeLabel = $derived(CONTENT_TYPE_LABELS[contentType] ?? contentType.charAt(0).toUpperCase() + contentType.slice(1));
-const description = $derived(authorName ? `${authorName}'s ${contentTypeLabel}` : contentTypeLabel);
+const description = $derived(
+	contentType === 'app' && appName
+		? (authorName ? `${appName}, published by ${authorName}` : appName)
+		: (authorName ? `${authorName}'s ${contentTypeLabel}` : contentTypeLabel)
+);
 
 /** @type {Set<string>} */
 let selectedIds = $state(new Set());
@@ -256,6 +261,12 @@ $effect(() => {
 	@media (max-width: 767px) {
 		.report-content {
 			padding-bottom: max(20px, env(safe-area-inset-bottom));
+		}
+	}
+
+	@media (min-width: 768px) {
+		.report-content {
+			padding: 12px;
 		}
 	}
 

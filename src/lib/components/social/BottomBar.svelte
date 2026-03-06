@@ -10,7 +10,7 @@ import ShortTextInput from '$lib/components/common/ShortTextInput.svelte';
 import ZapSliderModal from '$lib/components/modals/ZapSliderModal.svelte';
 import ActionsModal from '$lib/components/modals/ActionsModal.svelte';
 import ReportModal from '$lib/components/modals/ReportModal.svelte';
-let { appName: _appName = '', publisherName = '', contentType = 'post', className = '', zapTarget = null, otherZaps = [], isSignedIn = true, isMember = true, onGetStarted, onJoinRequired = () => {}, searchProfiles = async () => [], searchEmojis = async () => [], oncommentSubmit, onzapReceived, onoptions, eventId = '', authorPubkey = '', communityPubkey = '', relays = [] } = $props();
+let { appName = '', publisherName = '', contentType = 'post', className = '', zapTarget = null, otherZaps = [], isSignedIn = true, isMember = true, onGetStarted, onJoinRequired = () => {}, searchProfiles = async () => [], searchEmojis = async () => [], oncommentSubmit, onzapReceived, onoptions, eventId = '', authorPubkey = '', communityPubkey = '', relays = [] } = $props();
 let actionsModalOpen = $state(false);
 let zapModalOpen = $state(false);
 let reportModalOpen = $state(false);
@@ -156,6 +156,7 @@ $effect(() => {
 
 <ReportModal
 	bind:isOpen={reportModalOpen}
+	{appName}
 	authorName={publisherName}
 	{contentType}
 	{eventId}

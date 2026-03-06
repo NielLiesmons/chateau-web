@@ -32,12 +32,15 @@ let actionsModalTarget = $state(null);
 let actionsModalOpen = $state(false);
 /** True when any modal is open on top of the thread (Zap or Comment/Zap options) – drives overlay + scale animation */
 const childModalOpen = $derived(zapModalOpen || actionsModalOpen);
+// All deeper comments: prefer threadComments (full thread, all depths) over replies, same as feedItems logic.
+const allDeepComments = $derived(
+    (threadComments?.length > 0 ? threadComments.filter((c) => c.id !== id) : replies) ?? []
+);
 // Unique people in the thread: comment repliers + zappers (by pubkey), same shape as ReplyComment for profile stack. App author first.
 const uniqueRepliers = $derived.by(() => {
-    const commentSource = isZapRoot ? threadComments : replies;
     const seen = new Set();
     const list = [];
-    for (const r of commentSource) {
+    for (const r of allDeepComments) {
         if (seen.has(r.pubkey))
             continue;
         seen.add(r.pubkey);
@@ -79,9 +82,9 @@ const replyIndicatorText = $derived.by(() => {
     const a = trimName(uniqueRepliers[0]?.displayName) || "Someone";
     if (n === 1) return a;
     if (n === 2) return `${a} & ${trimName(uniqueRepliers[1]?.displayName) || "Someone"}`;
-    return `${a} & Others`;
+    return `${a} & ${n - 1} Others`;
 });
-const replyCount = $derived(isZapRoot ? threadComments.length : (replies?.length ?? 0));
+const replyCount = $derived(allDeepComments.length);
 const sortedReplies = $derived([...replies].sort((a, b) => {
     const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
     const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;

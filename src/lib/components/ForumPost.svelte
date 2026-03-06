@@ -38,7 +38,7 @@
       : commenters?.length === 2
         ? `${commenters[0].displayName || "Someone"} & ${commenters[1].displayName || "Someone"}`
         : commenters?.length > 2
-          ? `${commenters[0].displayName || "Someone"} & Others`
+          ? `${commenters[0].displayName || "Someone"} & ${commenters.length - 1} Others`
           : ""
   );
 
