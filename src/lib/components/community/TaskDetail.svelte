@@ -93,6 +93,7 @@
 	let task = $state(null);
 	/** @type {any} */
 	let rawTaskEvent = $state(null);
+	let communityAuthorPubkey = $state('');
 	/** @type {any} */
 	let authorProfile = $state(null);
 	/** @type {any} */
@@ -217,6 +218,7 @@
 		} catch {
 			return;
 		}
+		communityAuthorPubkey = communityPubkey;
 
 		(async () => {
 			// Query by id only (task events may be addressed, not easily filtered by #h in all impls)
@@ -1042,6 +1044,10 @@
 				oncommentSubmit={handleCommentSubmit}
 				onzapReceived={() => {}}
 				onoptions={() => {}}
+				eventId={rawTaskEvent?.id ?? ''}
+				authorPubkey={rawTaskEvent?.pubkey ?? ''}
+				communityPubkey={communityAuthorPubkey}
+				relays={communityRelays}
 			/>
 		{/if}
 	{/if}

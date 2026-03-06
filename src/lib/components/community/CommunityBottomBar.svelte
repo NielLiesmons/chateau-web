@@ -68,10 +68,10 @@ const searchLabel = $derived(SECTION_SEARCH_LABEL[selectedSection] ?? 'Search');
 					{adminSaveSubmitting ? 'Saving…' : 'Save'}
 				</button>
 			{:else if showMembersBar}
-				<button type="button" class="post-btn" onclick={onAddList} aria-label="Add list">
-					<Plus variant="outline" size={16} strokeWidth={2.8} color="hsl(var(--whiteEnforced))" />
-					<span>Add List</span>
-				</button>
+			<button type="button" class="post-btn" onclick={onAddList} aria-label="Add list">
+				<Plus variant="outline" size={16} strokeWidth={2.8} color="hsl(var(--whiteEnforced))" />
+				<span>+ List</span>
+			</button>
 				<button type="button" class="search-forum-btn" onclick={onSearch} aria-label="Search member">
 					<Search variant="outline" size={18} strokeWidth={1.4} color="hsl(var(--white33))" />
 					<span>Search Member</span>

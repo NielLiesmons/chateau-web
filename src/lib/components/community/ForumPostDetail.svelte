@@ -35,6 +35,7 @@
 
 	let post = $state(null);
 	let rawPostEvent = $state(null);
+	let communityAuthorPubkey = $state('');
 	let authorProfile = $state(null);
 	let communityName = $state('');
 	let communityPicture = $state('');
@@ -79,6 +80,7 @@
 		} catch {
 			return;
 		}
+		communityAuthorPubkey = communityPubkey;
 		(async () => {
 			const raw = await queryEvent({
 				kinds: [EVENT_KINDS.FORUM_POST],
@@ -691,6 +693,10 @@
 				oncommentSubmit={handleCommentSubmit}
 				onzapReceived={() => {}}
 				onoptions={() => {}}
+				eventId={rawPostEvent?.id ?? ''}
+				authorPubkey={rawPostEvent?.pubkey ?? ''}
+				communityPubkey={communityAuthorPubkey}
+				relays={communityRelays}
 			/>
 		{/if}
 	{/if}

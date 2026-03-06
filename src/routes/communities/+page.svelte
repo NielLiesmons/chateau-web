@@ -54,6 +54,8 @@
 	import WikiDetail from '$lib/components/community/WikiDetail.svelte';
 	import ProjectCard from '$lib/components/ProjectCard.svelte';
 	import ProjectDetail from '$lib/components/community/ProjectDetail.svelte';
+	import ProfileListDetail from '$lib/components/community/ProfileListDetail.svelte';
+	import ListModal from '$lib/components/modals/ListModal.svelte';
 	import ProjectModal from '$lib/components/modals/ProjectModal.svelte';
 
 	const SECTION_PILLS = [
@@ -81,7 +83,8 @@
 	const openPostId = $derived($page.url.searchParams.get('post') || '');
 	const openTaskId = $derived($page.url.searchParams.get('task') || '');
 	const openWikiSlug = $derived($page.url.searchParams.get('wiki') || '');
-	const openProjectId = $derived($page.url.searchParams.get('project') || '');
+	const openProjectId  = $derived($page.url.searchParams.get('project') || '');
+	const openListAddr   = $derived($page.url.searchParams.get('list')    || '');
 	const currentPubkey = $derived(getCurrentPubkey());
 
 	let profileDropdownOpen = $state(false);
@@ -163,7 +166,8 @@
 	let communityEditError = $state('');
 	let addPostModalOpen = $state(false);
 	let addTaskModalOpen = $state(false);
-	let addWikiModalOpen = $state(false);
+	let addWikiModalOpen  = $state(false);
+	let addListModalOpen  = $state(false);
 	// Onboarding modals (for logged-out Get Started flow)
 	let getStartedModalOpen = $state(false);
 	let spinKeyModalOpen = $state(false);
@@ -963,6 +967,12 @@
 		url.searchParams.set('project', projectId);
 		goto(url.toString(), { replaceState: false });
 	}
+	function openList(listAddr) {
+		if (!selectedCommunity?.npub || !listAddr) return;
+		const url = new URL(window.location.href);
+		url.searchParams.set('list', listAddr);
+		goto(url.toString(), { replaceState: false });
+	}
 
 	/**
 	 * @param {{ type: string, title: string, slug: string, text: string, emojiTags: any[], mentions: any[], labels: string[], status: string, projectAddr?: string, pendingMilestones?: { title: string }[], dTag?: string }} params
@@ -1080,7 +1090,9 @@
 				kinds: s.kinds ?? []
 			}));
 		if (fromSections.length === 0 && sections.length === 0) return SECTION_PILLS.filter((p) => p.id !== 'general');
-		return [...fromSections];
+		// Always show Profiles tab so admins can manage lists
+		const profilesPill = { id: 'profiles', label: 'Profiles', kinds: [] };
+		return [...fromSections, profilesPill];
 	});
 	const selectedSectionKinds = $derived(sectionPills.find((p) => p.id === selectedSection)?.kinds ?? []);
 	const isForumSection = $derived(selectedSection === 'forum' || selectedSectionKinds.includes(11));
@@ -1198,7 +1210,7 @@
 
 	// When Crown admin modal is active, load all profile lists for list picker
 	$effect(() => {
-		if (!browser || !selectedCommunity?.pubkey || !adminCrownModalOpen) return;
+		if (!browser || !selectedCommunity?.pubkey || (!adminCrownModalOpen && selectedSection !== 'profiles')) return;
 		adminProfileLists = [];
 		(async () => {
 			const evs = await queryEvents({
@@ -1219,7 +1231,7 @@
 	// When community info modal or Crown admin modal opens, load profile lists from sections in background.
 	// Deduplicate by listAddress so one list assigned to multiple sections shows as one panel with "Can write in: A, B, C".
 	$effect(() => {
-		if (!browser || !selectedCommunity || (!communityInfoModalOpen && !adminCrownModalOpen)) return;
+		if (!browser || !selectedCommunity || (!communityInfoModalOpen && !adminCrownModalOpen && selectedSection !== 'profiles')) return;
 		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
 		const sections = comm?.sections ?? [];
 		const relays = selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS;
@@ -1242,12 +1254,28 @@
 		const list = [];
 		for (const [listAddress, info] of listToSectionInfo) {
 			const parts = listAddress.split(':');
+			const listPubkey = parts[1] ?? selectedCommunity.pubkey;
 			const dTag = parts.length >= 3 ? parts.slice(2).join(':') : '';
+			// Use Dexie for an instant first render, but ALWAYS also fetch from
+			// relay in the background so stale cached versions get updated.
 			let listEv = await queryEvent({
 				kinds: [EVENT_KINDS.PROFILE_LIST],
-				authors: [selectedCommunity.pubkey],
+				authors: [listPubkey],
 				'#d': [dTag]
 			});
+			// Always background-fetch to catch updates published from other devices.
+			fetchProfileListFromRelays(relays, listAddress).then(async (relayEv) => {
+				if (!relayEv) return;
+				await putEvents([relayEv]);
+				if (!listEv || relayEv.created_at >= listEv.created_at) {
+					const freshParsed = parseProfileList(relayEv);
+					membersListData = membersListData.map((item) =>
+						item.listAddress === listAddress
+							? { ...item, listEvent: relayEv, parsed: freshParsed ?? item.parsed }
+							: item
+					);
+				}
+			}).catch(() => {});
 			if (!listEv) {
 				listEv = await fetchProfileListFromRelays(relays, listAddress);
 				if (listEv) await putEvents([listEv]);
@@ -1403,9 +1431,10 @@
 				tags: newTags,
 				created_at: Math.floor(Date.now() / 1000)
 			});
-			await putEvents([newEv]);
-			await publishToRelays(selectedCommunity?.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS, newEv);
-			joinRequestsCount = Math.max(0, joinRequestsCount - 1);
+		await putEvents([newEv]);
+		const approveRelays = [...new Set([...(selectedCommunity?.relays ?? []), ...COMMUNITY_WRITE_RELAYS])];
+		await publishToRelays(approveRelays, newEv);
+		joinRequestsCount = Math.max(0, joinRequestsCount - 1);
 			joinRequestsList = joinRequestsList.filter((r) => r.id !== requestEvent.id);
 		} finally {
 			joinRequestsApprovingId = null;
@@ -1450,9 +1479,10 @@
 				tags: newTags,
 				created_at: Math.floor(Date.now() / 1000)
 			});
-			await putEvents([newEv]);
-			await publishToRelays(selectedCommunity?.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS, newEv);
-			const newParsed = parseProfileList(newEv);
+		await putEvents([newEv]);
+		const addRelays = [...new Set([...(selectedCommunity?.relays ?? []), ...COMMUNITY_WRITE_RELAYS])];
+		await publishToRelays(addRelays, newEv);
+		const newParsed = parseProfileList(newEv);
 			const addr = listViewMoreModal.listAddress;
 			listViewMoreModal = { ...listViewMoreModal, listEvent: newEv, parsed: newParsed };
 			adminProfileLists = adminProfileLists.map((l) => l.listAddress === addr ? { ...l, listEvent: newEv, parsed: newParsed } : l);
@@ -1479,9 +1509,10 @@
 				tags: newTags,
 				created_at: Math.floor(Date.now() / 1000)
 			});
-			await putEvents([newEv]);
-			await publishToRelays(selectedCommunity?.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS, newEv);
-			if (listViewMoreModal?.listEvent?.id === listEvent.id) {
+		await putEvents([newEv]);
+		const removeRelays = [...new Set([...(selectedCommunity?.relays ?? []), ...COMMUNITY_WRITE_RELAYS])];
+		await publishToRelays(removeRelays, newEv);
+		if (listViewMoreModal?.listEvent?.id === listEvent.id) {
 				listViewMoreModal = { ...listViewMoreModal, listEvent: newEv, parsed: { ...parseProfileList(newEv), members: newMembers } };
 			}
 			membersListData = membersListData.map((item) =>
@@ -1496,8 +1527,9 @@
 	 *  Pure save — caller is responsible for managing listFormSubmitting / listFormError. */
 	async function saveListEdits(listEvent, overrides) {
 		if (!overrides) return;
-		// Per spec, all community content goes to the community's own declared relays.
-		const writeRelays = selectedCommunity?.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS;
+		// Publish to both community relays and global write relays so the list
+		// is reachable even if community-specific relays reject the write.
+		const writeRelays = [...new Set([...(selectedCommunity?.relays ?? []), ...COMMUNITY_WRITE_RELAYS])];
 		const rawTags = listEvent.tags || [];
 		const newTags = rawTags
 			.filter((t) => t[0] !== 'name' && t[0] !== 'form' && t[0] !== 'image')
@@ -2562,6 +2594,21 @@
 				onBack={backToForum}
 			/>
 		</div>
+	{:else if openListAddr}
+		{@const listItem = [...membersListData, ...adminProfileLists].find((l) => l.listAddress === openListAddr)}
+		<div class="panel-content panel-content-detail">
+		<ProfileListDetail
+			listAddress={openListAddr}
+			communityNpub={selectedCommunity.npub}
+			communityRelays={selectedCommunity.relays ?? []}
+			{isCommunityAdmin}
+			sectionKinds={listItem?.sectionKinds ?? []}
+			catalogs={[{ name: selectedCommunity.displayName || selectedCommunity.name || 'Community', pictureUrl: selectedCommunity.picture || undefined, pubkey: selectedCommunity.pubkey }]}
+			formTemplates={adminFormTemplates}
+			onBack={backToForum}
+			{getCurrentPubkey}
+		/>
+		</div>
 	{:else}
 			<div class="right-header-block">
 				<div class="right-header-row1">
@@ -2707,17 +2754,85 @@
 					{/each}
 				{/if}
 			</div>
+		{:else if selectedSection === 'profiles'}
+			<div class="profiles-list">
+				{#if membersListData.length === 0}
+					<EmptyState message="No profile lists yet" minHeight={200} />
+				{:else}
+					{#each membersListData as item}
+						{@const listMembers = item.parsed?.members ?? []}
+						{@const infoWriteTypes = contentTypesFromKinds(item.sectionKinds ?? [])}
+						<div class="info-list-panel">
+							<div class="list-panel-section">
+								<SingleBadge image={item.parsed?.image ?? null} name={item.parsed?.name ?? item.sectionName} sizePx={52} />
+								<div class="list-panel-meta">
+									<span class="list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
+									{#if item.parsed?.content}
+										<span class="list-panel-desc">{item.parsed.content}</span>
+									{/if}
+								</div>
+							</div>
+							{#if infoWriteTypes.length > 0}
+								<div class="list-panel-divider"></div>
+								<div class="list-panel-section list-panel-section-write">
+									<p class="list-panel-write-label">CAN WRITE</p>
+									<div class="list-panel-type-pills">
+										{#each infoWriteTypes as ct}
+											<span class="list-panel-type-pill">
+												<img src={ct.emoji} alt="" class="list-panel-type-emoji" />
+												<span>{ct.label}</span>
+											</span>
+										{/each}
+									</div>
+								</div>
+							{/if}
+							<div class="list-panel-divider"></div>
+							<div class="list-panel-section list-panel-section-profiles">
+								{#if listMembers.length > 0}
+									<ul class="info-list-members-list">
+										{#each listMembers.slice(0, 4) as pk}
+											{@const p = profilesByPubkey.get(pk)}
+											<li class="info-list-member-row">
+												{#if p?.picture}
+													<img src={p.picture} alt="" class="info-list-member-avatar" />
+												{:else}
+													<div class="info-list-member-avatar info-list-member-avatar-placeholder"></div>
+												{/if}
+												<span class="info-list-member-name">{p?.displayName ?? p?.name ?? pk.slice(0, 8) + '…'}</span>
+											</li>
+										{/each}
+									</ul>
+								{/if}
+								<div class="info-list-actions">
+									<button type="button" class="btn-view-more" onclick={() => openList(item.listAddress)}>View All</button>
+									<div class="info-list-actions-right">
+										{#if isCommunityAdmin}
+											<button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => openList(item.listAddress)}>
+												<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+												<span>Edit</span>
+											</button>
+										{/if}
+										{#if item.parsed?.form && !listMembers.includes(currentPubkey)}
+											<button type="button" class="btn-primary-small info-list-action-btn" onclick={() => { selectedJoinList = { formAddress: item.parsed.form, listName: item.parsed?.name, listAddress: item.listAddress }; joinModalOpen = true; }}>Join</button>
+										{/if}
+									</div>
+								</div>
+							</div>
+						</div>
+					{/each}
+				{/if}
+			</div>
 		{:else}
 				<EmptyState message="{sectionPills.find((p) => p.id === selectedSection)?.label ?? selectedSection} coming soon" minHeight={200} />
 			{/if}
 			</div>
-	{#if selectedCommunity && !openPostId && !openTaskId && !openWikiSlug && !openProjectId}
+	{#if selectedCommunity && !openPostId && !openTaskId && !openWikiSlug && !openProjectId && !openListAddr}
 		<CommunityBottomBar
 			isMember={isMember}
 			hasForm={hasForm}
-		showFeedBar={true}
-		showMembersBar={false}
-		onAddList={() => openListFormModal('add')}
+		showFeedBar={selectedSection !== 'profiles'}
+		showMembersBar={selectedSection === 'profiles' && isCommunityAdmin}
+		onAddList={() => (addListModalOpen = true)}
 		showAdminSave={false}
 			communityName={selectedCommunity.displayName || selectedCommunity.name || ''}
 			selectedSection={selectedSection}
@@ -2841,19 +2956,19 @@
 						</ul>
 					{/if}
 					<div class="info-list-actions">
-						<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
-						<div class="info-list-actions-right">
-							{#if isCommunityAdmin}
-								<button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => openEditListModal(item)}>
-									<Pen variant="fill" size={13} color="hsl(var(--white66))" />
-									<span>Edit</span>
-								</button>
-							{/if}
-							{#if item.parsed?.form && !listMembers.includes(currentPubkey)}
-								<button type="button" class="btn-primary-small info-list-action-btn" onclick={() => { selectedJoinList = { formAddress: item.parsed.form, listName: item.parsed?.name, listAddress: item.listAddress }; joinModalOpen = true; }}>Join</button>
-							{/if}
-						</div>
-					</div>
+					<button type="button" class="btn-view-more" onclick={() => { communityInfoModalOpen = false; openList(item.listAddress); }}>View All</button>
+                <div class="info-list-actions-right">
+                    {#if isCommunityAdmin}
+                        <button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => { communityInfoModalOpen = false; openList(item.listAddress); }}>
+                            <Pen variant="fill" size={13} color="hsl(var(--white66))" />
+                            <span>Edit</span>
+                        </button>
+                    {/if}
+                    {#if item.parsed?.form && !listMembers.includes(currentPubkey)}
+                        <button type="button" class="btn-primary-small info-list-action-btn" onclick={() => { selectedJoinList = { formAddress: item.parsed.form, listName: item.parsed?.name, listAddress: item.listAddress }; joinModalOpen = true; }}>Join</button>
+                    {/if}
+                </div>
+            </div>
 				</div>
 				</div>
 			{/each}
@@ -3109,13 +3224,13 @@
 					</div>
 				{/if}
 					<div class="list-panel-divider"></div>
-					<div class="info-list-actions">
-						<button type="button" class="btn-view-more" onclick={() => openViewMoreModal(item)}>View More</button>
-						<button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => openEditListModal(item)}>
-							<Pen variant="fill" size={13} color="hsl(var(--white66))" />
-							<span>Edit</span>
-						</button>
-					</div>
+            <div class="info-list-actions">
+                <button type="button" class="btn-view-more" onclick={() => { adminCrownModalOpen = false; openList(item.listAddress); }}>View All</button>
+                <button type="button" class="btn-primary-small info-list-action-btn" aria-label="Edit list" onclick={() => { adminCrownModalOpen = false; openList(item.listAddress); }}>
+                    <Pen variant="fill" size={13} color="hsl(var(--white66))" />
+                    <span>Edit</span>
+                </button>
+            </div>
 				</div>
 			{/each}
 					<div class="admin-section-add-row">
@@ -3456,6 +3571,31 @@
 	{/if}
 </Modal>
 {/key}
+
+<!-- ListModal: create new list from the Profiles section BottomBar -->
+<ListModal
+	bind:isOpen={addListModalOpen}
+	formTemplates={adminFormTemplates}
+	onsubmit={async ({ name, image, description, formAddress, dTag }) => {
+		if (!selectedCommunity?.pubkey) throw new Error('No community');
+		const tags = [['d', dTag], ['name', name], ['p', selectedCommunity.pubkey]];
+		if (image)       tags.push(['image', image]);
+		if (formAddress) tags.push(['form', formAddress]);
+		const listEv = await signEvent({
+			kind: EVENT_KINDS.PROFILE_LIST,
+			content: description ?? '',
+			tags,
+			created_at: Math.floor(Date.now() / 1000)
+		});
+		const relays = [...new Set([...(selectedCommunity.relays ?? []), ...COMMUNITY_WRITE_RELAYS])];
+		await putEvents([listEv]);
+		await publishToRelays(relays, listEv);
+		const newParsed = parseProfileList(listEv);
+		const newListItem = { listAddress: `30000:${listEv.pubkey}:${dTag}`, name: newParsed?.name ?? name, image: newParsed?.image ?? null, listEvent: listEv, parsed: newParsed };
+		adminProfileLists = [...adminProfileLists, newListItem];
+	}}
+	onclose={() => (addListModalOpen = false)}
+/>
 
 {#key adminListPickerPresetId ?? 'closed'}
 <Modal open={adminListPickerPresetId != null} onClose={() => (adminListPickerPresetId = null)} ariaLabel="Choose lists for section" maxWidth="max-w-md" padContent={true}>

@@ -68,37 +68,44 @@
 		justify-content: center;
 		background: hsl(var(--black33));
 		border: 1.5px solid hsl(var(--white33));
-		transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+		/* transform is owned by animations; background/border only in transition */
+		transition: background 0.15s ease, border-color 0.15s ease;
+	}
+	/* Promote to GPU layer only while animating — avoids permanent memory cost */
+	.lab-checkbox.animating .lab-checkbox-box {
+		will-change: transform;
 	}
 	.lab-checkbox:hover:not(:disabled) .lab-checkbox-box {
 		transform: scale(1.01);
 	}
 	.lab-checkbox:active:not(:disabled) .lab-checkbox-box {
-		transform: scale(0.99);
+		transform: scale(0.97);
 	}
 	.lab-checkbox.checked .lab-checkbox-box {
 		background: var(--gradient-blurple);
 		border-color: transparent;
+	}
+	/* Box pop: 1.0 → 1.09 (60%) → 1.0 — gentle, easeOut (no overshoot from easing) */
+	.lab-checkbox.animating.checked .lab-checkbox-box {
+		animation: box-pop 0.24s cubic-bezier(0.22, 1, 0.36, 1);
 	}
 	.lab-checkbox-check {
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		color: hsl(var(--whiteEnforced));
-		animation: check-in 0.222s ease-out;
+		will-change: transform, opacity;
+		/* Check pop: 0 → 1.18 (60%) → 1.0 — easeOut, no hard overshoot */
+		animation: check-pop 0.24s cubic-bezier(0.22, 1, 0.36, 1);
 	}
-	@keyframes check-in {
-		0% {
-			opacity: 0;
-			transform: scale(0.6);
-		}
-		60% {
-			opacity: 1;
-			transform: scale(1.15);
-		}
-		100% {
-			opacity: 1;
-			transform: scale(1);
-		}
+	@keyframes box-pop {
+		0%   { transform: scale(1); }
+		60%  { transform: scale(1.09); }
+		100% { transform: scale(1); }
+	}
+	@keyframes check-pop {
+		0%   { opacity: 0; transform: scale(0.4); }
+		60%  { opacity: 1; transform: scale(1.18); }
+		100% { opacity: 1; transform: scale(1); }
 	}
 </style>

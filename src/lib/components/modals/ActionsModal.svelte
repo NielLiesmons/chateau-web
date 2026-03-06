@@ -12,6 +12,7 @@ import Label from "$lib/components/common/Label.svelte";
 let {
 	isOpen = $bindable(false),
 	contentType = "post",
+	onReport = () => {},
 } = $props();
 
 const contentTypeLabel = $derived(contentType.charAt(0).toUpperCase() + contentType.slice(1));
@@ -90,13 +91,13 @@ $effect(() => {
 			<!-- Report section -->
 			<div class="actions-section">
 				<div class="section-content">
-					<button
-						type="button"
-						class="report-button"
-						onclick={() => {}}
-					>
-						Report this {contentTypeLabel}
-					</button>
+				<button
+					type="button"
+					class="report-button"
+					onclick={() => { isOpen = false; onReport(); }}
+				>
+					Report this {contentTypeLabel}
+				</button>
 				</div>
 			</div>
 		</div>

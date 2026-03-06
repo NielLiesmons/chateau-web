@@ -418,7 +418,7 @@
 	{#if wikiEvent && zapTarget && getIsSignedIn()}
 		<BottomBar
 			{publisherName}
-			contentType="forum"
+			contentType="wiki"
 			{zapTarget}
 			otherZaps={[]}
 			isSignedIn={getIsSignedIn()}
@@ -428,6 +428,10 @@
 			oncommentSubmit={() => {}}
 			onzapReceived={() => {}}
 			onoptions={() => {}}
+			eventId={wikiEvent?.id ?? ''}
+			authorPubkey={wikiEvent?.pubkey ?? ''}
+			communityPubkey={communityPubkeyState}
+			relays={DEFAULT_COMMUNITY_RELAYS}
 		/>
 	{/if}
 </div>

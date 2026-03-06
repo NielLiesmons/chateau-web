@@ -132,11 +132,8 @@ export function stopLiveSubscriptions() {
  * Fetch events from relays (one-shot: EOSE + grace → close → putEvents).
  * Returns the collected events after writing them to Dexie.
  *
- * Note: nostr-tools SimplePool.subscribeMany expects a single filter object
- * as the second argument (it handles grouping internally via subscribeMap).
- *
  * @param {string[]} relayUrls
- * @param {object} filter - NIP-01 filter object
+ * @param {object} filter - NIP-01 filter object (single filter; subscribeMany wraps it internally)
  * @param {{ timeout?: number, signal?: AbortSignal }} options
  * @returns {Promise<import('nostr-tools').Event[]>}
  */
@@ -304,7 +301,7 @@ export function subscribeCommunityProjects(relayUrls, communityPubkey, authorPub
 	const filter = { kinds: [EVENT_KINDS.PROJECT, EVENT_KINDS.MILESTONE], '#h': [communityPubkey], limit: 200 };
 	if (authorPubkeys?.length) filter.authors = authorPubkeys;
 	const p = getPool();
-	const sub = p.subscribeMany(relayUrls, [filter], {
+	const sub = p.subscribeMany(relayUrls, filter, {
 		onevent(event) {
 			if (event?.id) {
 				bufferEvent(event);
@@ -360,23 +357,22 @@ export function subscribeForumPostComments(relayUrls, postIds, options = {}) {
 	if (!Array.isArray(postIds) || postIds.length === 0) return () => {};
 	const p = getPool();
 	const authorsFilter = authors?.length ? { authors } : {};
-	const sub = p.subscribeMany(
-		relayUrls,
-		[
-			{ kinds: [1111], '#E': postIds, limit: 200, ...authorsFilter },
-			{ kinds: [1111], '#e': postIds, limit: 200, ...authorsFilter }
-		],
-		{
-			onevent(event) {
-				if (event?.id) {
-					bufferEvent(event);
-					onEvent?.(event);
-				}
-			},
-			oneose() {},
-			onclose() {}
-		}
-	);
+	// subscribeMany only accepts a single filter; use subscribeMap to send two
+	// filter variants (#E root-marker and #e parent/fallback) in one subscription.
+	const requests = relayUrls.flatMap((url) => [
+		{ url, filter: { kinds: [1111], '#E': postIds, limit: 200, ...authorsFilter } },
+		{ url, filter: { kinds: [1111], '#e': postIds, limit: 200, ...authorsFilter } }
+	]);
+	const sub = p.subscribeMap(requests, {
+		onevent(event) {
+			if (event?.id) {
+				bufferEvent(event);
+				onEvent?.(event);
+			}
+		},
+		oneose() {},
+		onclose() {}
+	});
 	return () => {
 		try { sub.close(); } catch { /* noop */ }
 	};
@@ -405,7 +401,10 @@ export function subscribeTaskComments(relayUrls, taskAddrs, taskIds = [], onEven
 		filters.push({ kinds: [1111], '#E': taskIds, limit: 400 });
 		filters.push({ kinds: [1111], '#e': taskIds, limit: 400 });
 	}
-	const sub = p.subscribeMany(relayUrls, filters, {
+	// subscribeMany only accepts a single filter; use subscribeMap to fan out
+	// multiple tag-variant filters across all relays in one subscription.
+	const requests = relayUrls.flatMap((url) => filters.map((filter) => ({ url, filter })));
+	const sub = p.subscribeMap(requests, {
 		onevent(event) {
 			if (event?.id) {
 				bufferEvent(event);
@@ -451,11 +450,33 @@ export async function fetchLabelEvents(relayUrls, eventId, communityPubkey, opti
 
 /**
  * Publish a signed event to relays and write to Dexie.
+ * Returns a summary of relay results so callers can surface failures.
+ * @returns {{ ok: string[], failed: { relay: string, reason: string }[] }}
  */
 export async function publishToRelays(relayUrls, signedEvent) {
 	await putEvents([signedEvent]);
 	const p = getPool();
-	await Promise.allSettled(p.publish(relayUrls, signedEvent));
+	const results = await Promise.allSettled(p.publish(relayUrls, signedEvent));
+
+	const ok = [];
+	const failed = [];
+	results.forEach((r, i) => {
+		const relay = relayUrls[i] ?? `relay[${i}]`;
+		if (r.status === 'fulfilled') {
+			ok.push(relay);
+		} else {
+			const reason = r.reason instanceof Error ? r.reason.message : String(r.reason ?? 'unknown');
+			failed.push({ relay, reason });
+		}
+	});
+
+	console.log(
+		`[publishToRelays] kind:${signedEvent.kind} id:${signedEvent.id?.slice(0, 8)}…`,
+		`✓ ${ok.length}/${relayUrls.length} relays accepted`,
+		ok.length < relayUrls.length ? `✗ failures: ${failed.map((f) => `${f.relay} (${f.reason})`).join(', ')}` : ''
+	);
+
+	return { ok, failed };
 }
 
 // ============================================================================
