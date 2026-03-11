@@ -198,7 +198,7 @@ function formatDateTime(ts) {
 	/* Row 2: title + slug */
 	.title-slug-row {
 		display: flex;
-		align-items: baseline;
+		align-items: center;
 		gap: 8px;
 	}
 
@@ -229,7 +229,7 @@ function formatDateTime(ts) {
 	/* Row 3: summary + labels */
 	.summary-labels-row {
 		display: flex;
-		align-items: flex-start;
+		align-items: center;
 		gap: 8px;
 	}
 
@@ -238,18 +238,15 @@ function formatDateTime(ts) {
 		line-height: 1.45;
 		margin: 0;
 		color: hsl(var(--white66));
-		display: -webkit-box;
-		-webkit-line-clamp: 2;
-		line-clamp: 2;
-		-webkit-box-orient: vertical;
+		white-space: nowrap;
 		overflow: hidden;
+		text-overflow: ellipsis;
 		flex: 1;
 		min-width: 0;
 	}
 
 	.label-wrap {
 		flex-shrink: 0;
-		padding-top: 1px;
 	}
 
 	/* Row 4: L-shape + contributors */

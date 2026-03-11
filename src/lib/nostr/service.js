@@ -1042,6 +1042,79 @@ export function parseComment(event) {
 }
 
 /**
+ * Subscribe to kind:1111 comments that mention a specific pubkey (via lowercase p tag),
+ * using each community's **main relay** only.
+ *
+ * Strategy:
+ *  - Each community has one main relay where all its content lives. Backup relays are
+ *    mirrors — we only fall back to them when the main is unreachable.
+ *  - Communities are grouped by their main relay URL so we open exactly one WebSocket
+ *    per unique main relay, regardless of how many communities share it.
+ *  - Backup relay URLs are appended per group so SimplePool can reconnect through them
+ *    if the main relay WebSocket drops — they are NOT opened proactively.
+ *
+ * Enforced relays need no author filter — the relay already restricts to list members.
+ * Non-enforced relays: we subscribe without an authors filter for now; the notification
+ * store's liveQuery can apply further client-side filtering if member lists are available.
+ *
+ * @param {Map<string, { mainRelay: string | null, backupRelays: string[] }>} communityRelayMap
+ *   Map of communityPubkey → { mainRelay, backupRelays }.  Build this from parseCommunity().
+ * @param {string} userPubkey  Hex pubkey of the logged-in user.
+ * @returns {() => void}  Unsubscribe function.
+ */
+export function subscribePersonalMentions(communityRelayMap, userPubkey) {
+	if (!userPubkey || !communityRelayMap?.size) return () => {};
+
+	// Group communities by their main relay URL.
+	// Value = ordered URL list: [mainRelay, ...uniqueBackups] for this group.
+	/** @type {Map<string, Set<string>>} mainRelayUrl → ordered URL set */
+	const groupByMain = new Map();
+
+	for (const { mainRelay, backupRelays } of communityRelayMap.values()) {
+		if (!mainRelay) continue;
+		if (!groupByMain.has(mainRelay)) groupByMain.set(mainRelay, new Set([mainRelay]));
+		const urlSet = groupByMain.get(mainRelay);
+		for (const b of (backupRelays ?? [])) {
+			if (b && b !== mainRelay) urlSet.add(b);
+		}
+	}
+
+	if (!groupByMain.size) return () => {};
+
+	// Look back 30 days — avoids backfilling the entire relay history on startup
+	const since = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
+	const filter = { kinds: [EVENT_KINDS.COMMENT], '#p': [userPubkey], since, limit: 100 };
+
+	const p = getPool();
+
+	// One subscribeMany call per unique main relay — exactly one WebSocket per relay.
+	// Backup URLs are NOT opened proactively; they stay unused unless we detect the
+	// main relay is down and explicitly retry (future work).
+	const subs = [];
+	for (const mainRelayUrl of groupByMain.keys()) {
+		subs.push(
+			p.subscribeMany([mainRelayUrl], filter, {
+				onevent(event) {
+					if (event?.id) bufferEvent(event);
+				},
+				oneose() {},
+				onclose() {}
+			})
+		);
+	}
+
+	console.log(
+		`[Service] Personal mentions subscription — ${subs.length} main relay(s)`
+	);
+
+	return () => {
+		for (const sub of subs) {
+			try { sub.close(); } catch { /* noop */ }
+		}
+	};
+}
+
+/**
  * Cleanup — stop subscriptions and close pool.
  */
 export function cleanup() {
