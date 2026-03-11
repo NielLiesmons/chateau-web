@@ -183,9 +183,12 @@ $effect(() => {
 
 const CHATEAU_DEFAULT_NPUB = 'npub1vcxcc7r9racyslkfhrwu9qlznne9v95nmk3m5frd8lfuprdmwzpsxqzqcr';
 
-// Auto-select default community on desktop when landing on /communities with no selection
+// Auto-select default community on desktop when landing on /communities with no community selected.
+// Guard: only fires on the /communities index page, NOT on wiki/forum/task/project routes
+// (those routes have no communityNpub by design).
 $effect(() => {
 	if (!browser || communityNpub || typeof window === 'undefined') return;
+	if ($page.url.pathname !== '/communities') return;
 	if (window.innerWidth >= 768) {
 		goto(`/community/${encodeURIComponent(CHATEAU_DEFAULT_NPUB)}`, { replaceState: true });
 	}
