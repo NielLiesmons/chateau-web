@@ -28,7 +28,7 @@
 	import { getCurrentPubkey, getIsSignedIn, signEvent } from '$lib/stores/auth.svelte.js';
 	import BottomBar from '$lib/components/social/BottomBar.svelte';
 	import WikiModal from '$lib/components/modals/WikiModal.svelte';
-	import { Pen } from '$lib/components/icons';
+	import { Pen, Id } from '$lib/components/icons';
 	import { publishToRelays } from '$lib/nostr';
 	import { goto } from '$app/navigation';
 
@@ -206,17 +206,19 @@
 	}
 
 	$effect(() => {
-		if (!communityNpub) {
+		if (!communityNpub && !slug && !eventId) {
 			loading = false;
 			return;
 		}
 		let communityPubkey = '';
-		try {
-			const decoded = nip19.decode(communityNpub);
-			if (decoded.type === 'npub') communityPubkey = decoded.data;
-		} catch {
-			loading = false;
-			return;
+		if (communityNpub) {
+			try {
+				const decoded = nip19.decode(communityNpub);
+				if (decoded.type === 'npub') communityPubkey = decoded.data;
+			} catch {
+				loading = false;
+				return;
+			}
 		}
 
 		(async () => {
@@ -235,13 +237,11 @@
 				ev = await queryEvent({ kinds: [EVENT_KINDS.WIKI], ids: [eventId] });
 			}
 			if (!ev && slug) {
-				const candidates = await queryEvents({
-					kinds: [EVENT_KINDS.WIKI],
-					'#d': [slug],
-					'#h': [communityPubkey],
-					limit: 10
-				});
-				// Prefer same-author match; fall back to most recent
+				const slugFilter = communityPubkey
+					? { kinds: [EVENT_KINDS.WIKI], '#d': [slug], '#h': [communityPubkey], limit: 10 }
+					: { kinds: [EVENT_KINDS.WIKI], '#d': [slug], limit: 10 };
+				const candidates = await queryEvents(slugFilter);
+				// Prefer same-author (community) match; fall back to most recent
 				ev = candidates.find((e) => e.pubkey === communityPubkey) ?? candidates[0] ?? null;
 			}
 
@@ -250,7 +250,9 @@
 				const relays = DEFAULT_COMMUNITY_RELAYS;
 				const filter = eventId
 					? { kinds: [EVENT_KINDS.WIKI], ids: [eventId], limit: 1 }
-					: { kinds: [EVENT_KINDS.WIKI], '#d': [slug], '#h': [communityPubkey], limit: 10 };
+					: communityPubkey
+					? { kinds: [EVENT_KINDS.WIKI], '#d': [slug], '#h': [communityPubkey], limit: 10 }
+					: { kinds: [EVENT_KINDS.WIKI], '#d': [slug], limit: 10 };
 				const fetched = await fetchFromRelays(relays, filter);
 				if (fetched.length) {
 					await putEvents(fetched);
@@ -327,9 +329,12 @@
 				<!-- Title row -->
 				<div class="title-row">
 					<h1 class="wiki-title">{title}</h1>
-					{#if wikiSlug}
-						<span class="wiki-slug">/{wikiSlug}</span>
-					{/if}
+				{#if wikiSlug}
+					<span class="wiki-slug">
+						<Id size={12} color="hsl(var(--white33))" />
+						{wikiSlug}
+					</span>
+				{/if}
 					{#if isOwnWiki && getIsSignedIn()}
 						<button
 							type="button"
@@ -380,12 +385,13 @@
 
 				<!-- Social tabs -->
 				<div class="social-tabs-wrap">
-					<SocialTabs
-						app={{}}
-						mainEventIds={[wikiEvent.id]}
-						showDetailsTab={true}
-						detailsShareableId={wikiNaddr}
-						detailsPublicationLabel="Article"
+				<SocialTabs
+					app={{}}
+					mainEventIds={[wikiEvent.id]}
+					{wikiLinkFn}
+					showDetailsTab={true}
+					detailsShareableId={wikiNaddr}
+					detailsPublicationLabel="Article"
 						detailsNpub={npub}
 						detailsPubkey={wikiEvent.pubkey ?? ''}
 						detailsRawData={(() => {
@@ -505,6 +511,9 @@
 	}
 
 	.wiki-slug {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
 		font-size: 0.75rem;
 		color: hsl(var(--white33));
 		font-family: var(--font-mono);

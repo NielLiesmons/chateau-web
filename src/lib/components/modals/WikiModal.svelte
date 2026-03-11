@@ -12,7 +12,7 @@ import { cubicOut } from 'svelte/easing';
 import ShortTextInput from '$lib/components/common/ShortTextInput.svelte';
 import EmojiPickerModal from '$lib/components/modals/EmojiPickerModal.svelte';
 import ForumPostLabelsModal from '$lib/components/modals/ForumPostLabelsModal.svelte';
-import { Camera, EmojiFill, Plus } from '$lib/components/icons';
+import { Camera, EmojiFill, Plus, Id } from '$lib/components/icons';
 import { createSearchEmojisFunction } from '$lib/services/emoji-search';
 import { createSearchProfilesFunction } from '$lib/services/profile-search';
 
@@ -184,10 +184,10 @@ $effect(() => {
 
 			<div class="post-form-divider"></div>
 
-			<!-- Slug row -->
-			<div class="slug-area">
-				<span class="slug-prefix">/</span>
-				<input
+		<!-- Slug row -->
+		<div class="slug-area">
+			<Id size={13} color="hsl(var(--white33))" />
+			<input
 					type="text"
 					class="slug-input"
 					placeholder={toSlug(titleValue) || 'wiki'}
@@ -422,19 +422,10 @@ $effect(() => {
 	.slug-area {
 		display: flex;
 		align-items: center;
-		gap: 2px;
+		gap: 6px;
 		padding: 6px 12px;
 		min-height: 34px;
 		flex-shrink: 0;
-	}
-
-	.slug-prefix {
-		font-size: 13px;
-		font-weight: 600;
-		color: hsl(var(--white33));
-		font-family: 'JetBrains Mono', monospace;
-		flex-shrink: 0;
-		line-height: 1;
 	}
 
 	.slug-input {

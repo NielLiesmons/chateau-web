@@ -991,12 +991,13 @@
 				{/if}
 
 				<div class="social-tabs-wrap">
-					<SocialTabs
-						app={{}}
-						mainEventIds={[task.id]}
-						showDetailsTab={true}
-						detailsShareableId={taskNaddr}
-						detailsPublicationLabel="Task"
+				<SocialTabs
+					app={{}}
+					mainEventIds={[task.id]}
+					wikiLinkFn={communityNpub ? (slug) => `/communities?c=${encodeURIComponent(communityNpub)}&wiki=${encodeURIComponent(slug)}` : undefined}
+					showDetailsTab={true}
+					detailsShareableId={taskNaddr}
+					detailsPublicationLabel="Task"
 						detailsNpub={npub}
 						detailsPubkey={task.pubkey ?? ''}
 						detailsRawData={rawTaskEvent

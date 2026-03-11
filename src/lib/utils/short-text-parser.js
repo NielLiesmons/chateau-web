@@ -8,11 +8,41 @@
  * - emojiTags maps shortcode -> url for custom emoji
  */
 import * as nip19 from "nostr-tools/nip19";
+
+// ============================================================================
+// Types
+// ============================================================================
+
+/**
+ * @typedef {{ type: 'text'; value: string }} TextSegment
+ * @typedef {{ type: 'mention'; npub: string; pubkey: string; label: string | undefined }} MentionSegment
+ * @typedef {{ type: 'emoji'; shortcode: string; url: string }} EmojiSegment
+ * @typedef {{
+ *   type: 'nostr_ref';
+ *   raw: string;
+ *   bech32Type: 'naddr' | 'nevent';
+ *   kind: number | null;
+ *   pubkey?: string;
+ *   identifier?: string;
+ *   id?: string;
+ *   author?: string | null;
+ *   relays: string[];
+ * }} NostrRefSegment
+ * @typedef {{ type: 'wiki_link'; slug: string; label: string }} WikiLinkSegment
+ * @typedef {TextSegment | MentionSegment | EmojiSegment | NostrRefSegment | WikiLinkSegment} Segment
+ */
 /** Bech32 data part: alphanumeric (excluding b,i,o); length varies by type */
 const NOSTR_PREFIX = "nostr:(npub|nprofile|nevent|naddr)1";
 const NOSTR_REGEX = new RegExp(`${NOSTR_PREFIX}[a-z0-9]+`, "gi");
 /** Emoji shortcode: colon-delimited, no spaces (1–100 chars) */
 const EMOJI_REGEX = /:([^:\s]{1,100}):/g;
+/** Wikilink: [[slug]] or [[slug|label]] — same syntax as MarkdownBody */
+const WIKI_LINK_REGEX = /\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g;
+
+/** Normalize a wiki slug: lowercase, hyphens only */
+function normalizeWikiSlug(raw) {
+    return raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
 const emojiMap = (emojiTags) => {
     const m = new Map();
     if (!emojiTags)
@@ -24,9 +54,54 @@ const emojiMap = (emojiTags) => {
     }
     return m;
 };
+
+/**
+ * Decode a bech32 Nostr string (with or without "nostr:" prefix) into a nostr_ref segment.
+ * Returns null for unsupported types (npub/nprofile handled separately as mentions).
+ *
+ * @param {string} raw - Full "nostr:naddr1..." or bare "naddr1..." string
+ * @returns {NostrRefSegment | null}
+ */
+export function decodeNostrRef(raw) {
+    const bech32 = raw.startsWith("nostr:") ? raw.slice(6) : raw;
+    const normalised = raw.startsWith("nostr:") ? raw : `nostr:${raw}`;
+    try {
+        const decoded = nip19.decode(bech32);
+        if (decoded.type === "naddr") {
+            const d = decoded.data;
+            return {
+                type: "nostr_ref",
+                raw: normalised,
+                bech32Type: "naddr",
+                kind: d.kind,
+                pubkey: d.pubkey,
+                identifier: d.identifier,
+                relays: d.relays ?? [],
+            };
+        } else if (decoded.type === "nevent") {
+            const d = decoded.data;
+            return {
+                type: "nostr_ref",
+                raw: normalised,
+                bech32Type: "nevent",
+                kind: d.kind ?? null,
+                id: d.id,
+                author: d.author ?? null,
+                relays: d.relays ?? [],
+            };
+        }
+    } catch {
+        // Invalid bech32
+    }
+    return null;
+}
+
 /**
  * Parse short text into segments for rendering.
  * Escapes are not applied here; the renderer must escape text segments.
+ *
+ * @param {{ text: string; emojiTags: { shortcode: string; url: string }[] }} input
+ * @returns {Segment[]}
  */
 export function parseShortText(input) {
     const { text, emojiTags } = input;
@@ -52,15 +127,36 @@ export function parseShortText(input) {
                         label: undefined
                     }
                 });
-            }
-            else if (decoded.type === "nevent" || decoded.type === "naddr") {
+            } else if (decoded.type === "naddr") {
+                const d = decoded.data;
                 matches.push({
                     index: m.index,
                     length: raw.length,
+                    /** @type {NostrRefSegment} */
                     segment: {
                         type: "nostr_ref",
                         raw,
-                        kind: decoded.type
+                        bech32Type: "naddr",
+                        kind: d.kind,
+                        pubkey: d.pubkey,
+                        identifier: d.identifier,
+                        relays: d.relays ?? [],
+                    }
+                });
+            } else if (decoded.type === "nevent") {
+                const d = decoded.data;
+                matches.push({
+                    index: m.index,
+                    length: raw.length,
+                    /** @type {NostrRefSegment} */
+                    segment: {
+                        type: "nostr_ref",
+                        raw,
+                        bech32Type: "nevent",
+                        kind: d.kind ?? null,
+                        id: d.id,
+                        author: d.author ?? null,
+                        relays: d.relays ?? [],
                     }
                 });
             }
@@ -84,6 +180,26 @@ export function parseShortText(input) {
                 index: start,
                 length: full.length,
                 segment: { type: "emoji", shortcode, url: url ?? "" }
+            });
+        }
+    }
+    // Find all [[slug]] / [[slug|label]] wikilinks
+    WIKI_LINK_REGEX.lastIndex = 0;
+    while ((m = WIKI_LINK_REGEX.exec(text)) !== null) {
+        const full = m[0];
+        const target = m[1];
+        const display = m[2];
+        const start = m.index;
+        const end = start + full.length;
+        const overlaps = matches.some((x) => (start >= x.index && start < x.index + x.length) || (end > x.index && end <= x.index + x.length));
+        if (!overlaps && target) {
+            const slug = normalizeWikiSlug(target);
+            const label = (display ?? target).trim();
+            matches.push({
+                index: start,
+                length: full.length,
+                /** @type {WikiLinkSegment} */
+                segment: { type: "wiki_link", slug, label }
             });
         }
     }

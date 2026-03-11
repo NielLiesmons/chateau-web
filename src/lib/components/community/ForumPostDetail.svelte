@@ -634,12 +634,13 @@
 				</div>
 
 				<div class="social-tabs-wrap">
-					<SocialTabs
-						app={{}}
-						mainEventIds={[post.id]}
-						showDetailsTab={true}
-						detailsShareableId={postNevent}
-						detailsPublicationLabel="Post"
+				<SocialTabs
+					app={{}}
+					mainEventIds={[post.id]}
+					wikiLinkFn={communityNpub ? (slug) => `/communities?c=${encodeURIComponent(communityNpub)}&wiki=${encodeURIComponent(slug)}` : undefined}
+					showDetailsTab={true}
+					detailsShareableId={postNevent}
+					detailsPublicationLabel="Post"
 						detailsNpub={npub}
 						detailsPubkey={post.pubkey ?? ''}
 						detailsRawData={rawPostEvent

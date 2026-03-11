@@ -25,6 +25,7 @@ let {
 	contributors = [],
 	/** @type {() => void} */
 	onClick = () => {},
+	class: className = '',
 } = $props();
 
 const hasContributors = $derived(contributors && contributors.length > 0);
@@ -70,7 +71,7 @@ function formatDateTime(ts) {
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
 <article
-	class="wiki-card"
+	class="wiki-card {className}"
 	role="button"
 	tabindex="0"
 	onclick={() => onClick()}
@@ -90,13 +91,10 @@ function formatDateTime(ts) {
 		<span class="timestamp">{formatDateTime(createdAt)}</span>
 	</div>
 
-	<!-- Row 2: title (left) + slug (right) -->
+	<!-- Row 2: title -->
 	{#if title}
-		<div class="row title-slug-row">
+		<div class="row title-row">
 			<h3 class="wiki-title">{title}</h3>
-			{#if slug}
-				<span class="wiki-slug">/{slug}</span>
-			{/if}
 		</div>
 	{/if}
 
@@ -147,7 +145,7 @@ function formatDateTime(ts) {
 	.wiki-card {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 9px;
 		background: hsl(var(--gray33));
 		border: none;
 		border-radius: 16px;
@@ -195,11 +193,10 @@ function formatDateTime(ts) {
 		color: hsl(var(--white33));
 	}
 
-	/* Row 2: title + slug */
-	.title-slug-row {
+	/* Row 2: title */
+	.title-row {
 		display: flex;
 		align-items: center;
-		gap: 8px;
 	}
 
 	.wiki-title {
@@ -215,15 +212,6 @@ function formatDateTime(ts) {
 		flex: 1;
 		min-width: 0;
 		margin: 0;
-	}
-
-	.wiki-slug {
-		font-size: 0.6875rem;
-		color: hsl(var(--white33));
-		font-family: var(--font-mono);
-		white-space: nowrap;
-		flex-shrink: 0;
-		padding-top: 2px;
 	}
 
 	/* Row 3: summary + labels */

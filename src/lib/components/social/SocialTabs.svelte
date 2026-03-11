@@ -38,6 +38,8 @@ let {
     detailsNpub = "",
     detailsPubkey = "",
     showDetailsTab = true,
+    /** @type {((slug: string) => string) | undefined} */
+    wikiLinkFn = undefined,
 } = $props();
 const tabs = $derived([
     { id: "comments", label: "Comments" },
@@ -353,6 +355,7 @@ const combinedFeed = $derived.by(() => {
                 threadZaps={threadZapsByZapId.get(item.id) ?? []}
                 authorPubkey={app?.pubkey}
                 resolveMentionLabel={(pk) => profiles[pk]?.displayName ?? profiles[pk]?.name}
+                {wikiLinkFn}
                 appIconUrl={app?.icon}
                 appName={app?.name}
                 appIdentifier={app?.dTag}
@@ -392,6 +395,7 @@ const combinedFeed = $derived.by(() => {
                 content={item.content}
                 emojiTags={item.emojiTags}
                 resolveMentionLabel={(pk) => profiles[pk]?.displayName ?? profiles[pk]?.name}
+                {wikiLinkFn}
                 appIconUrl={app?.icon}
                 appName={app?.name}
                 appIdentifier={app?.dTag}

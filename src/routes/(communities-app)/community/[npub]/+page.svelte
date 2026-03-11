@@ -5,7 +5,7 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { nip19 } from 'nostr-tools';
-	import { Plus, Search } from '$lib/components/icons';
+	import { Plus } from '$lib/components/icons';
 	import { liveQuery, queryEvents, queryEvent, putEvents } from '$lib/nostr';
 	import {
 		parseCommunity,
@@ -48,15 +48,14 @@
 		getCurrentPubkey,
 		signEvent,
 		encrypt44,
-		decrypt44,
-		signOut,
-		connect
+		decrypt44
 	} from '$lib/stores/auth.svelte.js';
 	import ProfilePic from '$lib/components/common/ProfilePic.svelte';
 	import BackButton from '$lib/components/common/BackButton.svelte';
 	import ForumPost from '$lib/components/ForumPost.svelte';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
 	import CommunityBottomBar from '$lib/components/community/CommunityBottomBar.svelte';
+	import WikiDetail from '$lib/components/community/WikiDetail.svelte';
 	import ForumPostDetail from '$lib/components/community/ForumPostDetail.svelte';
 	import TaskDetail from '$lib/components/community/TaskDetail.svelte';
 	import Modal from '$lib/components/common/Modal.svelte';
@@ -71,7 +70,7 @@
 	import Selector from '$lib/components/common/Selector.svelte';
 	import TaskCard from '$lib/components/TaskCard.svelte';
 	import WikiCard from '$lib/components/WikiCard.svelte';
-	import WikiDetail from '$lib/components/community/WikiDetail.svelte';
+	import GeneralEventDetail from '$lib/components/community/GeneralEventDetail.svelte';
 	import ProjectCard from '$lib/components/ProjectCard.svelte';
 	import ProjectDetail from '$lib/components/community/ProjectDetail.svelte';
 	import ProfileListDetail from '$lib/components/community/ProfileListDetail.svelte';
@@ -109,25 +108,27 @@
 		{ id: 'forms', name: 'Forms', kinds: [30168], description: 'Membership application forms' }
 	];
 
-	const communityNpub = $derived($page.url.searchParams.get('c') || '');
+	const communityNpub = $derived($page.params.npub || '');
+	const openWikiSlug = $derived($page.url.searchParams.get('wiki') || '');
+	// openPost/Task/Project/List are still supported as search params on /community/[npub]?wiki=slug etc.
 	const openPostId = $derived($page.url.searchParams.get('post') || '');
 	const openTaskId = $derived($page.url.searchParams.get('task') || '');
-	const openWikiSlug = $derived($page.url.searchParams.get('wiki') || '');
 	const openProjectId = $derived($page.url.searchParams.get('project') || '');
 	const openListAddr = $derived($page.url.searchParams.get('list') || '');
+
+	// Community-agnostic event: cross-community ref opened via ?event=[naddr|nevent]
+	const openEventEncoded = $derived($page.url.searchParams.get('event') || '');
+
+	// wikiLinkFn: turns [[slug]] into a URL on this community page
+	const wikiLinkFn = $derived(
+		communityNpub
+			? (/** @type {string} */ slug) =>
+					`/community/${encodeURIComponent(communityNpub)}?wiki=${encodeURIComponent(slug)}`
+			: undefined
+	);
+
 	const currentPubkey = $derived(getCurrentPubkey());
 
-	let profileDropdownOpen = $state(false);
-
-	function handleSignOut() {
-		signOut();
-		profileDropdownOpen = false;
-	}
-
-	async function handleAddProfile() {
-		profileDropdownOpen = false;
-		await connect();
-	}
 
 	let communities = $state([]);
 	let profilesByPubkey = $state(new Map());
@@ -165,12 +166,6 @@
 	let joinError = $state('');
 	/** @deprecated use joinFormLoading instead — kept for legacy guard compat */
 	let joinFetched = $state(false);
-	let searchQuery = $state('');
-	let forumCountByPubkey = $state(new Map());
-	let taskCountByPubkey = $state(new Map());
-	let projectCountByPubkey = $state(new Map());
-	let wikiCountByPubkey = $state(new Map());
-	let lastActivityByPubkey = $state(new Map());
 	/** @type {Map<string, { pubkey: string; displayName?: string; avatarUrl?: string }[]>} */
 	let commentersByPostId = $state(new Map());
 	/** @type {Map<string, { pubkey: string; name?: string; pictureUrl?: string }[]>} */
@@ -335,15 +330,6 @@
 		return () => sub.unsubscribe();
 	});
 
-	const CHATEAU_DEFAULT_NPUB = 'npub1vcxcc7r9racyslkfhrwu9qlznne9v95nmk3m5frd8lfuprdmwzpsxqzqcr';
-
-	// Auto-select Chateau community when no community is specified in the URL
-	$effect(() => {
-		if (!browser || communityNpub || typeof window === 'undefined') return;
-		if (window.innerWidth >= 768) {
-			goto(`/communities?c=${encodeURIComponent(CHATEAU_DEFAULT_NPUB)}`, { replaceState: true });
-		}
-	});
 
 	// Tracks all author/assignee pubkeys from forum posts + tasks, for profile fetching
 	let contentPubkeys = $state(/** @type {Set<string>} */ (new Set()));
@@ -450,46 +436,6 @@
 		return () => sub.unsubscribe();
 	});
 
-	// liveQuery: content counts and last activity per community (for left panel cards)
-	// Covers forum posts, tasks, projects, and wikis in a single Dexie pass.
-	$effect(() => {
-		if (!browser || communities.length === 0) return;
-		const pubkeySet = new Set(communities.map((c) => c.pubkey));
-		const sub = liveQuery(async () => {
-			const events = await queryEvents({
-				kinds: [EVENT_KINDS.FORUM_POST, EVENT_KINDS.TASK, EVENT_KINDS.PROJECT, EVENT_KINDS.WIKI],
-				limit: 2000
-			});
-			const forumBy = new Map();
-			const taskBy = new Map();
-			const projectBy = new Map();
-			const wikiBy = new Map();
-			const lastBy = new Map();
-			for (const ev of events) {
-				const h = ev.tags?.find((t) => t[0] === 'h')?.[1];
-				if (!h || !pubkeySet.has(h)) continue;
-				if (ev.kind === EVENT_KINDS.FORUM_POST) forumBy.set(h, (forumBy.get(h) || 0) + 1);
-				else if (ev.kind === EVENT_KINDS.TASK) taskBy.set(h, (taskBy.get(h) || 0) + 1);
-				else if (ev.kind === EVENT_KINDS.PROJECT) projectBy.set(h, (projectBy.get(h) || 0) + 1);
-				else if (ev.kind === EVENT_KINDS.WIKI) wikiBy.set(h, (wikiBy.get(h) || 0) + 1);
-				const ts = ev.created_at;
-				if (!lastBy.has(h) || ts > lastBy.get(h)) lastBy.set(h, ts);
-			}
-			return { forumBy, taskBy, projectBy, wikiBy, lastBy };
-		}).subscribe({
-			next: (val) => {
-				if (val) {
-					forumCountByPubkey = val.forumBy;
-					taskCountByPubkey = val.taskBy;
-					projectCountByPubkey = val.projectBy;
-					wikiCountByPubkey = val.wikiBy;
-					lastActivityByPubkey = val.lastBy;
-				}
-			},
-			error: (e) => console.error('[Communities] content counts error', e)
-		});
-		return () => sub.unsubscribe();
-	});
 
 	// When community selected: fetch profile list for Forum, then forum posts
 	$effect(() => {
@@ -1196,10 +1142,17 @@
 		return { parsed, milestones, progress };
 	}
 
-	function openProject(projectId) {
-		const url = new URL(window.location.href);
-		url.searchParams.set('project', projectId);
-		goto(url.toString(), { replaceState: false });
+	/**
+	 * Open a project — navigates to /project/[naddr] (real SvelteKit route).
+	 */
+	function openProject(projEvent) {
+		try {
+			const dTag = projEvent.tags?.find((/** @type {string[]} */ t) => t[0] === 'd')?.[1] ?? '';
+			const naddr = nip19.naddrEncode({ kind: projEvent.kind, pubkey: projEvent.pubkey, identifier: dTag });
+			goto(`/project/${naddr}`);
+		} catch {
+			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?project=${encodeURIComponent(projEvent.id)}`);
+		}
 	}
 	function openList(listAddr) {
 		if (!selectedCommunity?.npub || !listAddr) return;
@@ -1401,55 +1354,7 @@
 		return [...membersListData, ...uncategorised];
 	});
 
-	const currentUserProfileContent = $derived.by(() => {
-		if (!currentPubkey) return {};
-		const p = profilesByPubkey.get(currentPubkey);
-		if (!p?.content) return {};
-		try {
-			return JSON.parse(p.content);
-		} catch {
-			return {};
-		}
-	});
-	const currentUserNpub = $derived(
-		currentPubkey
-			? (() => {
-					try {
-						return nip19.npubEncode(currentPubkey);
-					} catch {
-						return '';
-					}
-				})()
-			: ''
-	);
 
-	const SINGLE_COMMUNITY_NPUB = 'npub1vcxcc7r9racyslkfhrwu9qlznne9v95nmk3m5frd8lfuprdmwzpsxqzqcr';
-	const filteredCommunities = $derived.by(() => {
-		const all = !searchQuery.trim()
-			? communities
-			: communities.filter((c) => {
-					const profile = profilesByPubkey.get(c.pubkey);
-					const content = profile?.content
-						? (() => {
-								try {
-									return JSON.parse(profile.content || '{}');
-								} catch {
-									return {};
-								}
-							})()
-						: {};
-					const name = (content.display_name ?? content.name ?? '').toLowerCase();
-					return name.includes(searchQuery.trim().toLowerCase());
-				});
-		// For now only show this single community
-		return all.filter((c) => {
-			try {
-				return nip19.npubEncode(c.pubkey) === SINGLE_COMMUNITY_NPUB;
-			} catch {
-				return false;
-			}
-		});
-	});
 
 	// When Crown admin modal opens, populate admin form from current community (only when first entering or community changes).
 	$effect(() => {
@@ -2728,31 +2633,41 @@
 		communityEditModalOpen = true;
 	}
 
-	function selectCommunity(npub) {
-		goto(`/communities?c=${encodeURIComponent(npub)}`, { replaceState: true });
+	/**
+	 * Open a wiki article — navigates to /wiki/[naddr] (real SvelteKit route).
+	 */
+	function openWiki(wikiEvent, slug) {
+		try {
+			const naddr = nip19.naddrEncode({ kind: 30818, pubkey: wikiEvent.pubkey, identifier: slug });
+			goto(`/wiki/${naddr}`);
+		} catch {
+			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?wiki=${encodeURIComponent(slug)}`);
+		}
 	}
 
-	function openPost(eventId) {
-		if (!selectedCommunity?.npub) return;
-		goto(
-			`/communities?c=${encodeURIComponent(selectedCommunity.npub)}&post=${encodeURIComponent(eventId)}`
-		);
+	/**
+	 * Open a forum post — navigates to /forum/[nevent] (real SvelteKit route).
+	 */
+	function openPost(post) {
+		try {
+			const nevent = nip19.neventEncode({ id: post.id, author: post.pubkey });
+			goto(`/forum/${nevent}`);
+		} catch {
+			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?post=${encodeURIComponent(post.id)}`);
+		}
 	}
-	function openTask(eventId) {
-		if (!selectedCommunity?.npub) return;
-		goto(
-			`/communities?c=${encodeURIComponent(selectedCommunity.npub)}&task=${encodeURIComponent(eventId)}`
-		);
-	}
-	function openWiki(slug) {
-		if (!selectedCommunity?.npub) return;
-		goto(
-			`/communities?c=${encodeURIComponent(selectedCommunity.npub)}&wiki=${encodeURIComponent(slug)}`
-		);
-	}
-	function backToForum() {
-		if (!selectedCommunity?.npub) return;
-		goto(`/communities?c=${encodeURIComponent(selectedCommunity.npub)}`);
+
+	/**
+	 * Open a task — navigates to /task/[naddr] (real SvelteKit route).
+	 */
+	function openTask(task) {
+		try {
+			const dTag = task.tags?.find((/** @type {string[]} */ t) => t[0] === 'd')?.[1] ?? '';
+			const naddr = nip19.naddrEncode({ kind: task.kind, pubkey: task.pubkey, identifier: dTag });
+			goto(`/task/${naddr}`);
+		} catch {
+			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?task=${encodeURIComponent(task.id)}`);
+		}
 	}
 	function openCreatePost() {
 		addPostModalOpen = true;
@@ -2974,24 +2889,6 @@
 		const d = new Date(ts * 1000);
 		return d.toLocaleDateString(undefined, { dateStyle: 'short' });
 	}
-	function formatRelativeTime(ts) {
-		if (!ts) return '—';
-		const d = new Date(ts * 1000);
-		const now = Date.now();
-		const diff = (now - d.getTime()) / 1000;
-		if (diff < 60) return 'now';
-		if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-		if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-		if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
-		return d.toLocaleDateString(undefined, { dateStyle: 'short' });
-	}
-	/** Emoji images from static/images/emoji for LEFT column only (e.g. content pill in community list) */
-	const CONTENT_PILL_IMG = {
-		forum: '/images/emoji/forum.png',
-		task: '/images/emoji/task.png',
-		project: '/images/emoji/white_board.png',
-		wiki: '/images/emoji/wiki.png'
-	};
 </script>
 
 <svelte:head>
@@ -2999,242 +2896,32 @@
 	<meta name="description" content="Browse and join Nostr communities" />
 </svelte:head>
 
-<main class="communities-layout" class:community-open={!!selectedCommunity}>
-	<!-- Left column: fixed header + communities list -->
-	<aside class="left-column">
-		<header class="left-header">
-			{#if currentPubkey}
-				<div class="profile-menu-wrap">
-					<button
-						type="button"
-						class="profile-menu-btn"
-						onclick={() => (profileDropdownOpen = !profileDropdownOpen)}
-						aria-label="Profile menu"
-						aria-haspopup="menu"
-						aria-expanded={profileDropdownOpen}
-					>
-						<ProfilePic
-							pictureUrl={currentUserProfileContent?.picture}
-							name={currentUserProfileContent?.display_name ?? currentUserProfileContent?.name}
-							pubkey={currentUserNpub}
-							size="bubble"
-						/>
-					</button>
-
-					{#if profileDropdownOpen}
-						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-						<div
-							class="profile-menu-backdrop"
-							onclick={() => (profileDropdownOpen = false)}
-							role="presentation"
-						></div>
-						<div class="profile-menu" role="menu">
-							<div class="profile-menu-info">
-								<span class="profile-menu-name">
-									{currentUserProfileContent?.display_name ??
-										currentUserProfileContent?.name ??
-										'Anonymous'}
-								</span>
-								<span class="profile-menu-npub">{currentUserNpub.slice(0, 12)}…</span>
-							</div>
-							<div class="profile-menu-divider"></div>
-							<button
-								type="button"
-								class="profile-menu-item"
-								role="menuitem"
-								onclick={handleAddProfile}
-							>
-								<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-									<circle cx="7" cy="7" r="6.5" stroke="currentColor" stroke-width="1.2" />
-									<line
-										x1="7"
-										y1="4"
-										x2="7"
-										y2="10"
-										stroke="currentColor"
-										stroke-width="1.4"
-										stroke-linecap="round"
-									/>
-									<line
-										x1="4"
-										y1="7"
-										x2="10"
-										y2="7"
-										stroke="currentColor"
-										stroke-width="1.4"
-										stroke-linecap="round"
-									/>
-								</svg>
-								Add profile
-							</button>
-							<div class="profile-menu-divider"></div>
-							<button
-								type="button"
-								class="profile-menu-item profile-menu-item--danger"
-								role="menuitem"
-								onclick={handleSignOut}
-							>
-								<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-									<path
-										d="M5 2H2.5A1.5 1.5 0 0 0 1 3.5v7A1.5 1.5 0 0 0 2.5 12H5"
-										stroke="currentColor"
-										stroke-width="1.2"
-										stroke-linecap="round"
-									/>
-									<path
-										d="M9 4l3 3-3 3"
-										stroke="currentColor"
-										stroke-width="1.2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-									/>
-									<line
-										x1="12"
-										y1="7"
-										x2="5"
-										y2="7"
-										stroke="currentColor"
-										stroke-width="1.2"
-										stroke-linecap="round"
-									/>
-								</svg>
-								Disconnect
-							</button>
-						</div>
-					{/if}
-				</div>
-			{:else}
-				<button
-					type="button"
-					class="profile-menu-btn"
-					onclick={() => {
-						getStartedModalOpen = true;
-					}}
-					aria-label="Get started"
-				>
-					<ProfilePic size="bubble" />
-				</button>
-			{/if}
-			<button type="button" class="left-search-wrap" aria-label="Search / Command">
-				<Search variant="outline" size={16} strokeWidth={1.4} color="hsl(var(--white33))" />
-				<span class="left-search-text">Search / Command</span>
-			</button>
-			<button type="button" class="plus-btn" aria-label="Create community" tabindex="-1">
-				<Plus variant="outline" size={14} strokeWidth={2.8} color="hsl(var(--white33))" />
-			</button>
-		</header>
-		<div class="communities-list">
-			{#if filteredCommunities.length === 0}
-				<p class="text-muted-foreground text-sm p-4">
-					No communities yet. Create one to get started.
-				</p>
-			{:else}
-				{#each filteredCommunities as comm}
-					{@const npub = (() => {
-						try {
-							return nip19.npubEncode(comm.pubkey);
-						} catch {
-							return '';
-						}
-					})()}
-					{@const profile = profilesByPubkey.get(comm.pubkey)}
-					{@const displayName = profile?.content
-						? (() => {
-								try {
-									const j = JSON.parse(profile.content);
-									return j.display_name ?? j.name;
-								} catch {
-									return '';
-								}
-							})()
-						: ''}
-					{@const lastTs = lastActivityByPubkey.get(comm.pubkey)}
-					{@const _fc = forumCountByPubkey.get(comm.pubkey) ?? 0}
-					{@const _tc = taskCountByPubkey.get(comm.pubkey) ?? 0}
-					{@const _pc = projectCountByPubkey.get(comm.pubkey) ?? 0}
-					{@const _wc = wikiCountByPubkey.get(comm.pubkey) ?? 0}
-					<button
-						type="button"
-						class="community-card"
-						class:selected={communityNpub === npub}
-						onclick={() => selectCommunity(npub)}
-					>
-						<div class="community-card-top">
-							<ProfilePic
-								pictureUrl={profile?.content
-									? (() => {
-											try {
-												return JSON.parse(profile.content).picture;
-											} catch {
-												return null;
-											}
-										})()
-									: null}
-								name={displayName}
-								pubkey={comm.pubkey}
-								size="lgXl"
-							/>
-							<div class="community-card-body">
-								<div class="community-card-row1">
-									<span class="community-name">{displayName || 'Unnamed'}</span>
-									<span class="community-time">{formatRelativeTime(lastTs)}</span>
-								</div>
-								<div class="community-card-row3">
-									<span class="notif-preview-text">No notifications</span>
-								</div>
-							</div>
-						</div>
-						{#if _fc > 0 || _tc > 0 || _pc > 0 || _wc > 0}
-							<div class="community-card-row2">
-								{#if _fc > 0}<span class="content-pill"
-										><img
-											src={CONTENT_PILL_IMG.forum}
-											alt="forum"
-											class="content-pill-img"
-										/>{_fc}</span
-									>{/if}
-								{#if _tc > 0}<span class="content-pill"
-										><img
-											src={CONTENT_PILL_IMG.task}
-											alt="tasks"
-											class="content-pill-img"
-										/>{_tc}</span
-									>{/if}
-								{#if _pc > 0}<span class="content-pill"
-										><img
-											src={CONTENT_PILL_IMG.project}
-											alt="projects"
-											class="content-pill-img"
-										/>{_pc}</span
-									>{/if}
-								{#if _wc > 0}<span class="content-pill"
-										><img
-											src={CONTENT_PILL_IMG.wiki}
-											alt="wikis"
-											class="content-pill-img"
-										/>{_wc}</span
-									>{/if}
-							</div>
-						{/if}
-					</button>
-				{/each}
-			{/if}
+	{#if openEventEncoded}
+		<div class="panel-content panel-content-detail">
+			<GeneralEventDetail
+				encoded={openEventEncoded}
+				onBack={() => history.back()}
+			/>
 		</div>
-	</aside>
-
-	<!-- Right column: viewport creates containing block so modals/bars are scoped here -->
-	<div class="right-column">
-		<div class="right-page-viewport">
-			{#if !selectedCommunity}
-				<div class="panel-placeholder">
-					<EmptyState message="Select a community" minHeight={280} />
-				</div>
-			{:else if openPostId}
+	{:else if !selectedCommunity}
+		<div class="panel-placeholder">
+			<EmptyState message="Select a community" minHeight={280} />
+		</div>
+	{:else if openWikiSlug}
+		<div class="panel-content panel-content-detail">
+			<WikiDetail
+				slug={openWikiSlug}
+				communityNpub={selectedCommunity.npub}
+				wikiLinkFn={wikiLinkFn ?? ((s) => `#${s}`)}
+				onBack={() => history.back()}
+			/>
+		</div>
+	{:else if openPostId}
 				<div class="panel-content panel-content-detail">
 					<ForumPostDetail
 						eventId={openPostId}
 						communityNpub={selectedCommunity.npub}
-						onBack={backToForum}
+						onBack={() => history.back()}
 						{isMember}
 						onJoinRequired={() => {
 							joinContext = 'forum';
@@ -3247,7 +2934,7 @@
 					<TaskDetail
 						eventId={openTaskId}
 						communityNpub={selectedCommunity.npub}
-						onBack={backToForum}
+						onBack={() => history.back()}
 						{isMember}
 						onJoinRequired={() => {
 							joinContext = 'tasks';
@@ -3260,44 +2947,34 @@
 					<ProjectDetail
 						eventId={openProjectId}
 						communityNpub={selectedCommunity.npub}
-						onBack={backToForum}
+						onBack={() => history.back()}
 					/>
 				</div>
-			{:else if openWikiSlug}
-				<div class="panel-content panel-content-detail">
-					<WikiDetail
-						slug={openWikiSlug}
-						communityNpub={selectedCommunity.npub}
-						wikiLinkFn={(s) =>
-							`/communities?c=${encodeURIComponent(selectedCommunity.npub)}&wiki=${encodeURIComponent(s)}`}
-						onBack={backToForum}
-					/>
-				</div>
-			{:else if openListAddr}
-				{@const listItem = [...membersListData, ...adminProfileLists].find(
-					(l) => l.listAddress === openListAddr
-				)}
-				<div class="panel-content panel-content-detail">
-					<ProfileListDetail
-						listAddress={openListAddr}
-						communityNpub={selectedCommunity.npub}
-						communityRelays={selectedCommunity.relays ?? []}
-						{isCommunityAdmin}
-						sectionKinds={listItem?.sectionKinds ?? []}
-						catalogs={[
-							{
-								name: selectedCommunity.displayName || selectedCommunity.name || 'Community',
-								pictureUrl: selectedCommunity.picture || undefined,
-								pubkey: selectedCommunity.pubkey
-							}
-						]}
-						formTemplates={adminFormTemplates}
-						onBack={backToForum}
-						{getCurrentPubkey}
-					/>
-				</div>
-			{:else}
-				<div class="right-header-block">
+		{:else if openListAddr}
+			{@const listItem = [...membersListData, ...adminProfileLists].find(
+				(l) => l.listAddress === openListAddr
+			)}
+			<div class="panel-content panel-content-detail">
+				<ProfileListDetail
+					listAddress={openListAddr}
+					communityNpub={selectedCommunity.npub}
+					communityRelays={selectedCommunity.relays ?? []}
+					{isCommunityAdmin}
+					sectionKinds={listItem?.sectionKinds ?? []}
+					catalogs={[
+						{
+							name: selectedCommunity.displayName || selectedCommunity.name || 'Community',
+							pictureUrl: selectedCommunity.picture || undefined,
+							pubkey: selectedCommunity.pubkey
+						}
+					]}
+					formTemplates={adminFormTemplates}
+					onBack={() => history.back()}
+					{getCurrentPubkey}
+				/>
+			</div>
+		{:else}
+			<div class="right-header-block">
 					<div class="right-header-row1">
 						<span class="mobile-community-back">
 							<BackButton onBack={() => goto('/communities', { replaceState: true })} />
@@ -3392,7 +3069,7 @@
 										labels={post.labels ?? []}
 										commenters={postCommenters?.profiles ?? []}
 										commentCount={postCommenters?.count ?? 0}
-										onClick={() => openPost(post.id)}
+										onClick={() => openPost(post)}
 									/>
 								{/each}
 							{/if}
@@ -3446,7 +3123,7 @@
 											return { pubkey: pk, name: c.display_name ?? c.name, pictureUrl: c.picture };
 										})}
 										commenters={commentersByTaskId.get(task.id) ?? []}
-										onClick={() => openTask(task.id)}
+										onClick={() => openTask(task)}
 									/>
 								{/each}
 							{/if}
@@ -3480,7 +3157,7 @@
 												pictureUrl: pAuthorContent.picture
 											}}
 											due={pData.parsed.due}
-											onClick={() => openProject(projEv.id)}
+											onClick={() => openProject(projEv)}
 										/>
 									{/if}
 								{/each}
@@ -3517,7 +3194,7 @@
 											pubkey: wiki.pubkey
 										}}
 										createdAt={wiki.created_at}
-										onClick={() => openWiki(wSlug)}
+										onClick={() => openWiki(wiki, wSlug)}
 									/>
 								{/each}
 							{/if}
@@ -3626,7 +3303,7 @@
 						/>
 					{/if}
 				</div>
-				{#if selectedCommunity && !openPostId && !openTaskId && !openWikiSlug && !openProjectId && !openListAddr}
+				{#if selectedCommunity && !openWikiSlug && !openPostId && !openTaskId && !openProjectId && !openListAddr && !openEventEncoded}
 					<CommunityBottomBar
 						{isMember}
 						{hasForm}
@@ -5452,10 +5129,7 @@
 						</div>
 					{/if}
 				{/if}
-			</Modal>
-		</div>
-	</div>
-</main>
+		</Modal>
 
 <style>
 	.communities-layout {
@@ -5633,98 +5307,11 @@
 		overflow-y: auto;
 		padding: 0;
 	}
-	.community-card {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
+	.community-list-divider {
 		width: 100%;
-		padding: 12px 16px;
-		border: none;
-		border-radius: 0;
-		background: transparent;
-		color: inherit;
-		text-align: left;
-		cursor: pointer;
-	}
-	.community-card.selected {
-		margin-left: 16px;
-		margin-right: 16px;
-		width: calc(100% - 32px);
-		box-sizing: border-box;
-		padding: 8px 12px 8px 8px;
-		border-radius: 12px;
+		height: 1px;
 		background: hsl(var(--white4));
-	}
-	.community-card-top {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		width: 100%;
-	}
-	.community-card-body {
-		flex: 1;
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-	.community-card-row1 {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		min-height: 20px;
-	}
-	.community-name {
-		font-size: 0.875rem;
-		font-weight: 600;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: hsl(var(--foreground));
-	}
-	.community-time {
-		font-size: 0.75rem;
-		color: hsl(var(--white33));
 		flex-shrink: 0;
-	}
-	.community-card-row2 {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 4px;
-		width: 100%;
-	}
-	.content-pill {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 2px 8px 2px 5px;
-		background: hsl(var(--gray66));
-		border-radius: 8px;
-		font-size: 0.75rem;
-		font-weight: 500;
-		color: hsl(var(--muted-foreground));
-		white-space: nowrap;
-	}
-	.content-pill-img {
-		width: 16px;
-		height: 16px;
-		object-fit: contain;
-		flex-shrink: 0;
-	}
-	.community-card-row3 {
-		display: flex;
-		align-items: center;
-		width: 100%;
-	}
-	.notif-preview-text {
-		font-size: 0.75rem;
-		color: hsl(var(--muted-foreground));
-		opacity: 0.45;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 	}
 	.right-column {
 		display: flex;
@@ -6189,6 +5776,11 @@
 		font-size: 0.875rem;
 		color: hsl(var(--muted-foreground));
 		margin: 0;
+	}
+	.profiles-list {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
 	}
 	/* Shared 3-section list panel — used in community info modal + join modal */
 	.info-list-panel,
@@ -6825,11 +6417,13 @@
 		.right-column {
 			display: none;
 		}
-		/* Community selected: hide list, show detail full-screen */
-		.communities-layout.community-open .left-column {
+		/* Community selected OR event open: hide list, show detail full-screen */
+		.communities-layout.community-open .left-column,
+		.communities-layout.event-open .left-column {
 			display: none;
 		}
-		.communities-layout.community-open .right-column {
+		.communities-layout.community-open .right-column,
+		.communities-layout.event-open .right-column {
 			display: flex;
 			flex-direction: column;
 			height: 100dvh;

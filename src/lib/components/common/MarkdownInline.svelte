@@ -9,6 +9,8 @@
  * @type {{ tokens: import('marked').Token[] }}
  */
 import MarkdownInline from './MarkdownInline.svelte';
+import NostrRefCard from './NostrRefCard.svelte';
+import { decodeNostrRef } from '$lib/utils/short-text-parser.js';
 
 let { tokens = [] } = $props();
 </script>
@@ -40,9 +42,21 @@ let { tokens = [] } = $props();
 		<br />
 
 	{:else if token.type === 'link'}
-		{#if token.href?.startsWith('nostr:')}
-			<!-- nostr: URIs handled by the client protocol handler — no new-tab -->
+		{#if token.href?.startsWith('nostr:naddr') || token.href?.startsWith('nostr:nevent')}
+			{@const refSegment = decodeNostrRef(token.href)}
+			{#if refSegment}
+				<NostrRefCard segment={refSegment} />
+			{:else}
+				<a href={token.href}><MarkdownInline tokens={token.tokens ?? []} /></a>
+			{/if}
+		{:else if token.href?.startsWith('nostr:')}
+			<!-- Other nostr: URIs (npub, nprofile) — client protocol handler -->
 			<a href={token.href}><MarkdownInline tokens={token.tokens ?? []} /></a>
+		{:else if token.href?.startsWith('/')}
+			<!-- Relative / internal route — SvelteKit client-side navigation, no new tab -->
+			<a href={token.href} title={token.title ?? undefined}>
+				<MarkdownInline tokens={token.tokens ?? []} />
+			</a>
 		{:else}
 			<a href={token.href} title={token.title ?? undefined} target="_blank" rel="noopener noreferrer">
 				<MarkdownInline tokens={token.tokens ?? []} />

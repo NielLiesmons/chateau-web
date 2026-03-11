@@ -17,7 +17,7 @@ import ShortTextInput from "$lib/components/common/ShortTextInput.svelte";
 import ZapSliderModal from "$lib/components/modals/ZapSliderModal.svelte";
 import { Zap, Reply, Options } from "$lib/components/icons";
 import { getIsSignedIn } from "$lib/stores/auth.svelte.js";
-let { pictureUrl = null, name = "", pubkey = null, timestamp = null, profileUrl = "", loading = false, pending = false, nonMember = false, skeletonLoading = false, replies = [], threadComments = [], threadZaps = [], authorPubkey = null, className = "", content = "", emojiTags = [], resolveMentionLabel, appIconUrl = null, appName = "", appIdentifier = null, version = "", children, id = null, isZapRoot = false, zapAmount = 0, searchProfiles = async () => [], searchEmojis = async () => [], onReplySubmit, onZapReceived, onGetStarted, } = $props();
+let { pictureUrl = null, name = "", pubkey = null, timestamp = null, profileUrl = "", loading = false, pending = false, nonMember = false, skeletonLoading = false, replies = [], threadComments = [], threadZaps = [], authorPubkey = null, className = "", content = "", emojiTags = [], resolveMentionLabel, /** @type {((slug: string) => string) | undefined} */ wikiLinkFn = undefined, appIconUrl = null, appName = "", appIdentifier = null, version = "", children, id = null, isZapRoot = false, zapAmount = 0, searchProfiles = async () => [], searchEmojis = async () => [], onReplySubmit, onZapReceived, onGetStarted, } = $props();
 let modalOpen = $state(false);
 let zapModalOpen = $state(false);
 let commentExpanded = $state(false);
@@ -302,6 +302,7 @@ function handleOptions() {
           content={content}
           emojiTags={emojiTags}
           resolveMentionLabel={resolveMentionLabel}
+          {wikiLinkFn}
           class="root-comment-body"
         />
       {:else}
@@ -394,6 +395,7 @@ function handleOptions() {
                   content={content}
                   emojiTags={emojiTags}
                   resolveMentionLabel={resolveMentionLabel}
+                  {wikiLinkFn}
                   class="root-comment-body"
                 />
               {:else}
@@ -441,6 +443,7 @@ function handleOptions() {
                     content={reply.content}
                     emojiTags={reply.emojiTags ?? []}
                     resolveMentionLabel={resolveMentionLabel}
+                    {wikiLinkFn}
                     class="reply-comment-body"
                   />
                 {:else}

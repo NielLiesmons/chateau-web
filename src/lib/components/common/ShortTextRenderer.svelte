@@ -5,22 +5,34 @@
  * Matches ShortTextInput display: profile-colored @mentions, inline emoji, block cards for nevent/naddr.
  */
 import { onMount } from "svelte";
-import { parseShortText, } from "$lib/utils/short-text-parser.js";
-import { hexToColor, getProfileTextColor, rgbToCssString, } from "$lib/utils/color.js";
-let { content = "", emojiTags = [], resolveMentionLabel, class: className = "", } = $props();
+import { parseShortText } from "$lib/utils/short-text-parser.js";
+import { hexToColor, getProfileTextColor, rgbToCssString } from "$lib/utils/color.js";
+import NostrRefCard from "$lib/components/common/NostrRefCard.svelte";
+/**
+ * @type {{
+ *   content?: string,
+ *   emojiTags?: { shortcode: string; url: string }[],
+ *   resolveMentionLabel?: ((pubkey: string) => string) | undefined,
+ *   wikiLinkFn?: ((slug: string) => string) | undefined,
+ *   class?: string,
+ * }}
+ */
+let { content = "", emojiTags = [], resolveMentionLabel, wikiLinkFn = undefined, class: className = "" } = $props();
 let isDarkMode = $state(true);
 onMount(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     isDarkMode = mq.matches;
-    const handle = (e) => (isDarkMode = e.matches);
+    const handle = (/** @type {MediaQueryListEvent} */ e) => (isDarkMode = e.matches);
     mq.addEventListener("change", handle);
     return () => mq.removeEventListener("change", handle);
 });
 const input = $derived({ text: content, emojiTags });
 const segments = $derived(parseShortText(input));
+/** @param {import('$lib/utils/short-text-parser.js').MentionSegment} segment */
 function mentionLabel(segment) {
     return resolveMentionLabel?.(segment.pubkey) ?? segment.pubkey.slice(0, 8);
 }
+/** @param {string} pubkey */
 function mentionStyle(pubkey) {
     const rgb = hexToColor(pubkey);
     const textRgb = getProfileTextColor(rgb, isDarkMode);
@@ -52,12 +64,14 @@ function mentionStyle(pubkey) {
       {:else}
         <span class="short-text-emoji-fallback">:{segment.shortcode}:</span>
       {/if}
+    {:else if segment.type === "wiki_link"}
+      {#if wikiLinkFn}
+        <a href={wikiLinkFn(segment.slug)} class="short-text-wiki-link">{segment.label}</a>
+      {:else}
+        <span class="short-text-wiki-unresolved">[[{segment.label}]]</span>
+      {/if}
     {:else if segment.type === "nostr_ref"}
-      <div class="short-text-nostr-card">
-        <span class="short-text-nostr-card-label">Nostr reference</span>
-        <span class="short-text-nostr-card-kind">{segment.kind}</span>
-        <!-- Editable placeholder: replace with kind-specific display later -->
-      </div>
+      <NostrRefCard {segment} />
     {/if}
   {/each}
 </div>
@@ -98,23 +112,27 @@ function mentionStyle(pubkey) {
     color: hsl(var(--foreground) / 0.7);
   }
 
-  .short-text-nostr-card {
-    display: block;
-    margin: 0.5rem 0;
-    padding: 10px 12px;
-    background: hsl(var(--gray66));
-    border: 1px solid hsl(var(--white16));
-    border-radius: 12px;
-    font-size: 0.875rem;
+  .short-text-wiki-link {
+    color: hsl(var(--blurpleLightColor));
+    font-weight: 500;
+    text-decoration: none;
+    transition: opacity 0.15s ease;
   }
 
-  .short-text-nostr-card-label {
-    color: hsl(var(--foreground) / 0.7);
+  .short-text-wiki-link:hover {
+    opacity: 0.8;
+    text-decoration: underline;
   }
 
-  .short-text-nostr-card-kind {
-    margin-left: 6px;
+  .short-text-wiki-unresolved {
     color: hsl(var(--white33));
-    font-family: var(--font-mono, monospace);
+    font-style: italic;
+  }
+
+  /* NostrRefCard is rendered as a block inside the inline flow; give it breathing room */
+  :global([data-short-text] .nostr-wiki-ref),
+  :global([data-short-text] .nostr-ref-chip) {
+    margin: 0.5rem 0;
+    display: block;
   }
 </style>
