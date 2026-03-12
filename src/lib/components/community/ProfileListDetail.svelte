@@ -1,263 +1,309 @@
 <script lang="js">
-// @ts-nocheck
-import { untrack } from 'svelte';
-/**
- * ProfileListDetail — full detail view for a kind:30000 profile list.
- *
- * Layout (mirrors WikiDetail / ProjectDetail):
- *   - DetailHeader (back button + community breadcrumb)
- *   - Title row: list name + Edit button (admin)
- *   - Info panel: badge image · name · description
- *   - CAN WRITE panel: content-type pills from sectionKinds
- *   - Admin add-member row
- *   - Full member list with avatar + display name + npub chip + remove button (admin)
- */
-import { nip19 } from 'nostr-tools';
-import {
-	queryEvent, parseProfile,
-	fetchProfilesBatch, fetchFromRelays, putEvents, publishToRelays,
-	parseProfileList
-} from '$lib/nostr';
-import { EVENT_KINDS, DEFAULT_COMMUNITY_RELAYS, COMMUNITY_WRITE_RELAYS } from '$lib/config';
-import { contentTypesFromKinds } from '$lib/config/contentTypes.js';
-import DetailHeader from '$lib/components/layout/DetailHeader.svelte';
-import ProfilePic from '$lib/components/common/ProfilePic.svelte';
-import SkeletonLoader from '$lib/components/common/SkeletonLoader.svelte';
-import EmptyState from '$lib/components/common/EmptyState.svelte';
-import SingleBadge from '$lib/components/common/SingleBadge.svelte';
-import ListModal from '$lib/components/modals/ListModal.svelte';
-import { Pen, Cross } from '$lib/components/icons';
-import { getCurrentPubkey as _getCurrentPubkey, getIsSignedIn, signEvent } from '$lib/stores/auth.svelte.js';
+	// @ts-nocheck
+	import { untrack } from 'svelte';
+	/**
+	 * ProfileListDetail — full detail view for a kind:30000 profile list.
+	 *
+	 * Layout (mirrors WikiDetail / ProjectDetail):
+	 *   - DetailHeader (back button + community breadcrumb)
+	 *   - Title row: list name + Edit button (admin)
+	 *   - Info panel: badge image · name · description
+	 *   - CAN WRITE panel: content-type pills from sectionKinds
+	 *   - Admin add-member row
+	 *   - Full member list with avatar + display name + npub chip + remove button (admin)
+	 */
+	import { nip19 } from 'nostr-tools';
+	import {
+		queryEvent,
+		parseProfile,
+		fetchProfilesBatch,
+		fetchFromRelays,
+		putEvents,
+		publishToRelays,
+		parseProfileList
+	} from '$lib/nostr';
+	import { EVENT_KINDS, DEFAULT_COMMUNITY_RELAYS, COMMUNITY_WRITE_RELAYS } from '$lib/config';
+	import { contentTypesFromKinds } from '$lib/config/contentTypes.js';
+	import DetailHeader from '$lib/components/layout/DetailHeader.svelte';
+	import ProfilePic from '$lib/components/common/ProfilePic.svelte';
+	import SkeletonLoader from '$lib/components/common/SkeletonLoader.svelte';
+	import EmptyState from '$lib/components/common/EmptyState.svelte';
+	import SingleBadge from '$lib/components/common/SingleBadge.svelte';
+	import ListModal from '$lib/components/modals/ListModal.svelte';
+	import { Pen, Cross } from '$lib/components/icons';
+	import {
+		getCurrentPubkey as _getCurrentPubkey,
+		getIsSignedIn,
+		signEvent
+	} from '$lib/stores/auth.svelte.js';
 
-let {
-	listAddress      = '',
-	communityNpub    = '',
-	/** string[] — the community's declared relay URLs; required for correct publishing */
-	communityRelays  = /** @type {string[]} */ ([]),
-	isCommunityAdmin = false,
-	/** number[] — kinds this list's section permits writing */
-	sectionKinds     = [],
-	/** { pubkey, name, pictureUrl }[] — community catalog entry for the breadcrumb */
-	catalogs         = [],
-	/** Array<{ formAddr, parsed }> for the edit modal form dropdown */
-	formTemplates    = [],
-	onBack           = () => {},
-	getCurrentPubkey = _getCurrentPubkey
-} = $props();
+	let {
+		listAddress = '',
+		communityNpub = '',
+		/** string[] — the community's declared relay URLs; required for correct publishing */
+		communityRelays = /** @type {string[]} */ ([]),
+		isCommunityAdmin = false,
+		/** number[] — kinds this list's section permits writing */
+		sectionKinds = [],
+		/** { pubkey, name, pictureUrl }[] — community catalog entry for the breadcrumb */
+		catalogs = [],
+		/** Array<{ formAddr, parsed }> for the edit modal form dropdown */
+		formTemplates = [],
+		onBack = () => {},
+		getCurrentPubkey = _getCurrentPubkey
+	} = $props();
 
-// ── Derived ──────────────────────────────────────────────────────────────────
-const writeTypes = $derived(contentTypesFromKinds(sectionKinds));
+	// ── Derived ──────────────────────────────────────────────────────────────────
+	const writeTypes = $derived(contentTypesFromKinds(sectionKinds));
 
-// ── State ─────────────────────────────────────────────────────────────────────
-let listEvent   = $state(null);
-let parsed      = $state(null);
-let loading     = $state(true);
-let editModalOpen = $state(false);
+	// ── State ─────────────────────────────────────────────────────────────────────
+	let listEvent = $state(null);
+	let parsed = $state(null);
+	let loading = $state(true);
+	let editModalOpen = $state(false);
 
-// member profiles: pubkey → { displayName, name, picture }
-let memberProfiles = $state(new Map());
+	// member profiles: pubkey → { displayName, name, picture }
+	let memberProfiles = $state(new Map());
 
-// admin add-member
-let addInput       = $state('');
-let addError       = $state('');
-let addSubmitting  = $state(false);
-/** @type {{ ok: number, failed: { relay: string, reason: string }[] } | null} */
-let publishStatus  = $state(null);
+	// admin add-member
+	let addInput = $state('');
+	let addError = $state('');
+	let addSubmitting = $state(false);
+	/** @type {{ ok: number, failed: { relay: string, reason: string }[] } | null} */
+	let publishStatus = $state(null);
 
-// ── Load list event ───────────────────────────────────────────────────────────
-// Each run is tracked by a generation counter so stale async callbacks are
-// discarded (avoids state mutations after the effect has been torn down).
-$effect(() => {
-	if (!listAddress) { loading = false; return; }
-	const parts  = listAddress.split(':');
-	const pubkey = parts[1] ?? '';
-	const dTag   = parts.slice(2).join(':') ?? '';
+	// ── Load list event ───────────────────────────────────────────────────────────
+	// Each run is tracked by a generation counter so stale async callbacks are
+	// discarded (avoids state mutations after the effect has been torn down).
+	$effect(() => {
+		if (!listAddress) {
+			loading = false;
+			return;
+		}
+		const parts = listAddress.split(':');
+		const pubkey = parts[1] ?? '';
+		const dTag = parts.slice(2).join(':') ?? '';
 
-	let cancelled = false;
-	loading = true;
+		let cancelled = false;
+		loading = true;
 
-	// Read communityRelays with untrack so a new [] reference from the parent
-	// (e.g. `selectedCommunity.relays ?? []`) does NOT re-trigger this effect.
-	const relayUrls = untrack(() => communityRelays?.length ? [...communityRelays] : DEFAULT_COMMUNITY_RELAYS);
-
-	(async () => {
-		// Always fetch from relay so we get the latest published version.
-		// Fall back to Dexie only if the relay times out / returns nothing.
-		const fetched = await fetchFromRelays(
-			relayUrls,
-			{ kinds: [EVENT_KINDS.PROFILE_LIST], authors: [pubkey], '#d': [dTag], limit: 1 }
+		// Read communityRelays with untrack so a new [] reference from the parent
+		// (e.g. `selectedCommunity.relays ?? []`) does NOT re-trigger this effect.
+		const relayUrls = untrack(() =>
+			communityRelays?.length ? [...communityRelays] : DEFAULT_COMMUNITY_RELAYS
 		);
-		let ev = null;
-		if (fetched.length) {
-			ev = fetched[0];
-			await putEvents([ev]);
-		} else {
-			// Relay timed out — fall back to local cache
-			ev = await queryEvent({ kinds: [EVENT_KINDS.PROFILE_LIST], authors: [pubkey], '#d': [dTag] });
-		}
-		if (cancelled) return;
-		listEvent = ev ?? null;
-		parsed    = ev ? parseProfileList(ev) : null;
-		loading   = false;
-	})();
 
-	return () => { cancelled = true; };
-});
-
-// ── Load member profiles (one-shot, no liveQuery subscription) ────────────────
-// Using liveQuery inside $effect caused Dexie to re-trigger on every write to
-// the events table (including profile fetches), producing visible 300ms flicker.
-// A simple one-shot load—first Dexie, then relay backfill—is sufficient here.
-$effect(() => {
-	const members = parsed?.members ?? [];
-	if (!members.length) { memberProfiles = new Map(); return; }
-
-	let cancelled = false;
-
-	(async () => {
-		// 1. Populate immediately from whatever Dexie already has.
-		const localMap = new Map();
-		for (const pk of members) {
-			const ev = await queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [pk] });
-			if (ev) {
-				try { localMap.set(pk, parseProfile(ev)); } catch {}
+		(async () => {
+			// Always fetch from relay so we get the latest published version.
+			// Fall back to Dexie only if the relay times out / returns nothing.
+			const fetched = await fetchFromRelays(relayUrls, {
+				kinds: [EVENT_KINDS.PROFILE_LIST],
+				authors: [pubkey],
+				'#d': [dTag],
+				limit: 1
+			});
+			let ev = null;
+			if (fetched.length) {
+				ev = fetched[0];
+				await putEvents([ev]);
+			} else {
+				// Relay timed out — fall back to local cache
+				ev = await queryEvent({
+					kinds: [EVENT_KINDS.PROFILE_LIST],
+					authors: [pubkey],
+					'#d': [dTag]
+				});
 			}
-		}
-		if (cancelled) return;
-		if (localMap.size) memberProfiles = new Map(localMap);
+			if (cancelled) return;
+			listEvent = ev ?? null;
+			parsed = ev ? parseProfileList(ev) : null;
+			loading = false;
+		})();
 
-		// 2. Fetch missing profiles from relays and merge.
-		const results = await fetchProfilesBatch(members).catch(() => new Map());
-		if (cancelled) return;
-		const remoteEvs = [...results.values()].filter(Boolean);
-		if (remoteEvs.length) await putEvents(remoteEvs);
-		if (cancelled) return;
-
-		const merged = new Map(localMap);
-		for (const ev of remoteEvs) {
-			try { merged.set(ev.pubkey, parseProfile(ev)); } catch {}
-		}
-		memberProfiles = merged;
-	})();
-
-	return () => { cancelled = true; };
-});
-
-// ── Edit modal initial data ───────────────────────────────────────────────────
-const editInitialData = $derived(
-	parsed
-		? {
-				name:        parsed.name        ?? '',
-				image:       parsed.image        ?? '',
-				description: parsed.content      ?? '',
-				formAddress: parsed.form         ?? '',
-				dTag:        parsed.dTag         ?? ''
-			}
-		: null
-);
-
-// ── Save list edits ───────────────────────────────────────────────────────────
-async function handleEditSubmit({ name, image, description, formAddress, dTag }) {
-	if (!listEvent) throw new Error('List not loaded');
-	const rawTags = listEvent.tags || [];
-	const newTags = rawTags
-		.filter((t) => t[0] !== 'name' && t[0] !== 'image' && t[0] !== 'form')
-		.map((t) => [...t]);
-	if (name)        newTags.push(['name', name]);
-	if (image)       newTags.push(['image', image]);
-	if (formAddress) newTags.push(['form', formAddress]);
-	const newEv = await signEvent({
-		kind: EVENT_KINDS.PROFILE_LIST,
-		content: description ?? '',
-		tags: newTags,
-		created_at: Math.floor(Date.now() / 1000)
+		return () => {
+			cancelled = true;
+		};
 	});
-	const writeRelays = [...new Set([...communityRelays, ...DEFAULT_COMMUNITY_RELAYS, ...COMMUNITY_WRITE_RELAYS])];
-	await putEvents([newEv]);
-	listEvent = newEv;
-	parsed    = parseProfileList(newEv);
-	const { ok: editOk, failed: editFailed } = await publishToRelays(writeRelays, newEv);
-	if (editOk.length === 0 && editFailed.length > 0) {
-		throw new Error(`Saved locally but relays rejected: ${editFailed[0].reason}`);
-	}
-}
 
-// ── Add member ────────────────────────────────────────────────────────────────
-async function handleAddMember() {
-	if (!addInput.trim() || addSubmitting || !listEvent) return;
-	let pubkey = addInput.trim();
-	if (pubkey.startsWith('npub')) {
-		try {
-			const d = nip19.decode(pubkey);
-			if (d?.type === 'npub') pubkey = d.data;
-		} catch { addError = 'Invalid npub'; return; }
-	}
-	if (pubkey.length !== 64 || !/^[a-fA-F0-9]+$/.test(pubkey)) {
-		addError = 'Enter a valid npub or hex pubkey';
-		return;
-	}
-	if (parsed?.members?.includes(pubkey)) { addError = 'Already a member'; return; }
-	addError = '';
-	publishStatus = null;
-	addSubmitting = true;
-	try {
-		const newMembers = [...(parsed?.members ?? []), pubkey];
-		const rawTags = listEvent.tags || [];
-		const newTags = rawTags.filter((t) => t[0] !== 'p').map((t) => [...t]);
-		newMembers.forEach((p) => newTags.push(['p', p]));
-		const newEv = await signEvent({
-			kind: EVENT_KINDS.PROFILE_LIST,
-			content: String(listEvent.content ?? ''),
-			tags: newTags,
-			created_at: Math.floor(Date.now() / 1000)
-		});
-		const writeRelays = untrack(() => [...new Set([...communityRelays, ...DEFAULT_COMMUNITY_RELAYS, ...COMMUNITY_WRITE_RELAYS])]);
-		// Update local state immediately.
-		await putEvents([newEv]);
-		listEvent = newEv;
-		parsed    = parseProfileList(newEv);
-		addInput  = '';
-		// Broadcast and report result.
-		const { ok, failed } = await publishToRelays(writeRelays, newEv);
-		publishStatus = { ok: ok.length, failed };
-		if (ok.length === 0) {
-			addError = failed.length
-				? `All relays rejected: ${failed[0].reason}`
-				: 'Could not reach any relay — check your connection.';
+	// ── Load member profiles (one-shot, no liveQuery subscription) ────────────────
+	// Using liveQuery inside $effect caused Dexie to re-trigger on every write to
+	// the events table (including profile fetches), producing visible 300ms flicker.
+	// A simple one-shot load—first Dexie, then relay backfill—is sufficient here.
+	$effect(() => {
+		const members = parsed?.members ?? [];
+		if (!members.length) {
+			memberProfiles = new Map();
+			return;
 		}
-	} catch (e) {
-		addError = e?.message || 'Failed to add';
-	} finally {
-		addSubmitting = false;
-	}
-}
 
-// ── Remove member ─────────────────────────────────────────────────────────────
-async function handleRemoveMember(memberPubkey) {
-	if (!listEvent || !parsed?.members) return;
-	try {
-		const newMembers = parsed.members.filter((p) => p !== memberPubkey);
+		let cancelled = false;
+
+		(async () => {
+			// 1. Populate immediately from whatever Dexie already has.
+			const localMap = new Map();
+			for (const pk of members) {
+				const ev = await queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [pk] });
+				if (ev) {
+					try {
+						localMap.set(pk, parseProfile(ev));
+					} catch {}
+				}
+			}
+			if (cancelled) return;
+			if (localMap.size) memberProfiles = new Map(localMap);
+
+			// 2. Fetch missing profiles from relays and merge.
+			const results = await fetchProfilesBatch(members).catch(() => new Map());
+			if (cancelled) return;
+			const remoteEvs = [...results.values()].filter(Boolean);
+			if (remoteEvs.length) await putEvents(remoteEvs);
+			if (cancelled) return;
+
+			const merged = new Map(localMap);
+			for (const ev of remoteEvs) {
+				try {
+					merged.set(ev.pubkey, parseProfile(ev));
+				} catch {}
+			}
+			memberProfiles = merged;
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	// ── Edit modal initial data ───────────────────────────────────────────────────
+	const editInitialData = $derived(
+		parsed
+			? {
+					name: parsed.name ?? '',
+					image: parsed.image ?? '',
+					description: parsed.content ?? '',
+					formAddress: parsed.form ?? '',
+					dTag: parsed.dTag ?? ''
+				}
+			: null
+	);
+
+	// ── Save list edits ───────────────────────────────────────────────────────────
+	async function handleEditSubmit({ name, image, description, formAddress, dTag }) {
+		if (!listEvent) throw new Error('List not loaded');
 		const rawTags = listEvent.tags || [];
-		const newTags = rawTags.filter((t) => t[0] !== 'p').map((t) => [...t]);
-		newMembers.forEach((p) => newTags.push(['p', p]));
+		const newTags = rawTags
+			.filter((t) => t[0] !== 'name' && t[0] !== 'image' && t[0] !== 'form')
+			.map((t) => [...t]);
+		if (name) newTags.push(['name', name]);
+		if (image) newTags.push(['image', image]);
+		if (formAddress) newTags.push(['form', formAddress]);
 		const newEv = await signEvent({
 			kind: EVENT_KINDS.PROFILE_LIST,
-			content: String(listEvent.content ?? ''),
+			content: description ?? '',
 			tags: newTags,
 			created_at: Math.floor(Date.now() / 1000)
 		});
-		const writeRelays = [...new Set([...communityRelays, ...DEFAULT_COMMUNITY_RELAYS, ...COMMUNITY_WRITE_RELAYS])];
+		const writeRelays = [
+			...new Set([...communityRelays, ...DEFAULT_COMMUNITY_RELAYS, ...COMMUNITY_WRITE_RELAYS])
+		];
 		await putEvents([newEv]);
 		listEvent = newEv;
-		parsed    = parseProfileList(newEv);
-		publishToRelays(writeRelays, newEv); // fire-and-forget; logged in console
-	} catch {}
-}
+		parsed = parseProfileList(newEv);
+		const { ok: editOk, failed: editFailed } = await publishToRelays(writeRelays, newEv);
+		if (editOk.length === 0 && editFailed.length > 0) {
+			throw new Error(`Saved locally but relays rejected: ${editFailed[0].reason}`);
+		}
+	}
 
-// ── Npub helper ───────────────────────────────────────────────────────────────
-function toNpub(pk) {
-	try { return nip19.npubEncode(pk); } catch { return ''; }
-}
+	// ── Add member ────────────────────────────────────────────────────────────────
+	async function handleAddMember() {
+		if (!addInput.trim() || addSubmitting || !listEvent) return;
+		let pubkey = addInput.trim();
+		if (pubkey.startsWith('npub')) {
+			try {
+				const d = nip19.decode(pubkey);
+				if (d?.type === 'npub') pubkey = d.data;
+			} catch {
+				addError = 'Invalid npub';
+				return;
+			}
+		}
+		if (pubkey.length !== 64 || !/^[a-fA-F0-9]+$/.test(pubkey)) {
+			addError = 'Enter a valid npub or hex pubkey';
+			return;
+		}
+		if (parsed?.members?.includes(pubkey)) {
+			addError = 'Already a member';
+			return;
+		}
+		addError = '';
+		publishStatus = null;
+		addSubmitting = true;
+		try {
+			const newMembers = [...(parsed?.members ?? []), pubkey];
+			const rawTags = listEvent.tags || [];
+			const newTags = rawTags.filter((t) => t[0] !== 'p').map((t) => [...t]);
+			newMembers.forEach((p) => newTags.push(['p', p]));
+			const newEv = await signEvent({
+				kind: EVENT_KINDS.PROFILE_LIST,
+				content: String(listEvent.content ?? ''),
+				tags: newTags,
+				created_at: Math.floor(Date.now() / 1000)
+			});
+			const writeRelays = untrack(() => [
+				...new Set([...communityRelays, ...DEFAULT_COMMUNITY_RELAYS, ...COMMUNITY_WRITE_RELAYS])
+			]);
+			// Update local state immediately.
+			await putEvents([newEv]);
+			listEvent = newEv;
+			parsed = parseProfileList(newEv);
+			addInput = '';
+			// Broadcast and report result.
+			const { ok, failed } = await publishToRelays(writeRelays, newEv);
+			publishStatus = { ok: ok.length, failed };
+			if (ok.length === 0) {
+				addError = failed.length
+					? `All relays rejected: ${failed[0].reason}`
+					: 'Could not reach any relay — check your connection.';
+			}
+		} catch (e) {
+			addError = e?.message || 'Failed to add';
+		} finally {
+			addSubmitting = false;
+		}
+	}
+
+	// ── Remove member ─────────────────────────────────────────────────────────────
+	async function handleRemoveMember(memberPubkey) {
+		if (!listEvent || !parsed?.members) return;
+		try {
+			const newMembers = parsed.members.filter((p) => p !== memberPubkey);
+			const rawTags = listEvent.tags || [];
+			const newTags = rawTags.filter((t) => t[0] !== 'p').map((t) => [...t]);
+			newMembers.forEach((p) => newTags.push(['p', p]));
+			const newEv = await signEvent({
+				kind: EVENT_KINDS.PROFILE_LIST,
+				content: String(listEvent.content ?? ''),
+				tags: newTags,
+				created_at: Math.floor(Date.now() / 1000)
+			});
+			const writeRelays = [
+				...new Set([...communityRelays, ...DEFAULT_COMMUNITY_RELAYS, ...COMMUNITY_WRITE_RELAYS])
+			];
+			await putEvents([newEv]);
+			listEvent = newEv;
+			parsed = parseProfileList(newEv);
+			publishToRelays(writeRelays, newEv); // fire-and-forget; logged in console
+		} catch {}
+	}
+
+	// ── Npub helper ───────────────────────────────────────────────────────────────
+	function toNpub(pk) {
+		try {
+			return nip19.npubEncode(pk);
+		} catch {
+			return '';
+		}
+	}
 </script>
 
 <div class="list-detail">
@@ -285,21 +331,20 @@ function toNpub(pk) {
 
 		<div class="content-scroll">
 			<div class="content-inner">
-
 				<!-- Title row -->
 				<div class="title-row">
 					<h1 class="list-title">{parsed.name ?? 'Unnamed List'}</h1>
-				{#if isCommunityAdmin && getIsSignedIn()}
-					<button
-						type="button"
-						class="edit-btn btn-primary-small"
-						onclick={() => (editModalOpen = true)}
-						aria-label="Edit list"
-					>
-						<Pen variant="fill" color="hsl(var(--white66))" size={14} />
-						<span>Edit</span>
-					</button>
-				{/if}
+					{#if isCommunityAdmin && getIsSignedIn()}
+						<button
+							type="button"
+							class="edit-btn btn-primary-small"
+							onclick={() => (editModalOpen = true)}
+							aria-label="Edit list"
+						>
+							<Pen variant="fill" color="hsl(var(--white66))" size={14} />
+							<span>Edit</span>
+						</button>
+					{/if}
 				</div>
 
 				<!-- Info panel: badge + name + description -->
@@ -349,13 +394,19 @@ function toNpub(pk) {
 								{addSubmitting ? 'Adding…' : 'Add'}
 							</button>
 						</div>
-					{#if addError}
-						<p class="add-error">{addError}</p>
-					{:else if publishStatus}
-						{#if publishStatus.ok > 0}
-							<p class="add-ok">Published to {publishStatus.ok} relay{publishStatus.ok === 1 ? '' : 's'}{publishStatus.failed.length ? ` (${publishStatus.failed.length} failed)` : ''}.</p>
+						{#if addError}
+							<p class="add-error">{addError}</p>
+						{:else if publishStatus}
+							{#if publishStatus.ok > 0}
+								<p class="add-ok">
+									Published to {publishStatus.ok} relay{publishStatus.ok === 1
+										? ''
+										: 's'}{publishStatus.failed.length
+										? ` (${publishStatus.failed.length} failed)`
+										: ''}.
+								</p>
+							{/if}
 						{/if}
-					{/if}
 					</div>
 				{/if}
 
@@ -402,7 +453,6 @@ function toNpub(pk) {
 						</div>
 					{/if}
 				</div>
-
 			</div>
 		</div>
 	{/if}
@@ -424,9 +474,14 @@ function toNpub(pk) {
 		padding-bottom: 80px;
 	}
 
-	.detail-header-wrap { flex-shrink: 0; }
+	.detail-header-wrap {
+		flex-shrink: 0;
+	}
 
-	.content-scroll { flex: 1; min-height: 0; }
+	.content-scroll {
+		flex: 1;
+		min-height: 0;
+	}
 
 	.content-inner {
 		padding: 0 16px 16px;
@@ -452,7 +507,7 @@ function toNpub(pk) {
 	}
 
 	.edit-btn {
-		gap: 5px;
+		gap: 8px;
 		flex-shrink: 0;
 	}
 
@@ -563,7 +618,9 @@ function toNpub(pk) {
 		font-family: inherit;
 	}
 
-	.add-member-input:focus { border-color: hsl(var(--white33)); }
+	.add-member-input:focus {
+		border-color: hsl(var(--white33));
+	}
 
 	.add-error {
 		font-size: 0.8125rem;
@@ -611,7 +668,9 @@ function toNpub(pk) {
 		border-bottom: 1px solid hsl(var(--white8));
 	}
 
-	.member-row.last-row { border-bottom: none; }
+	.member-row.last-row {
+		border-bottom: none;
+	}
 
 	.member-info {
 		flex: 1;
@@ -650,6 +709,10 @@ function toNpub(pk) {
 		transition: background 0.12s ease;
 	}
 
-	.remove-btn:hover  { background: hsl(var(--white8)); }
-	.remove-btn:active { transform: scale(0.92); }
+	.remove-btn:hover {
+		background: hsl(var(--white8));
+	}
+	.remove-btn:active {
+		transform: scale(0.92);
+	}
 </style>

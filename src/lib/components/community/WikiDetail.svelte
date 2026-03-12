@@ -50,12 +50,24 @@
 	let wikiEvent = $state(preloadedEvent ?? null);
 
 	// Initialize from preloaded profiles synchronously so the header renders on frame 0.
-	const _authorEv = preloadedEvent && preloadedProfiles ? preloadedProfiles.get(preloadedEvent.pubkey) : null;
+	const _authorEv =
+		preloadedEvent && preloadedProfiles ? preloadedProfiles.get(preloadedEvent.pubkey) : null;
 	const _commEv = (() => {
 		if (!communityNpub || !preloadedProfiles) return null;
-		try { const d = nip19.decode(communityNpub); return preloadedProfiles.get(d.data) ?? null; } catch { return null; }
+		try {
+			const d = nip19.decode(communityNpub);
+			return preloadedProfiles.get(d.data) ?? null;
+		} catch {
+			return null;
+		}
 	})();
-	const _commContent = (() => { try { return _commEv ? JSON.parse(_commEv.content || '{}') : null; } catch { return null; } })();
+	const _commContent = (() => {
+		try {
+			return _commEv ? JSON.parse(_commEv.content || '{}') : null;
+		} catch {
+			return null;
+		}
+	})();
 
 	/** @type {any} */
 	let authorProfile = $state(_authorEv ? parseProfile(_authorEv) : null);
@@ -242,7 +254,11 @@
 				communityPubkeyState = communityPubkey;
 				const [profileEv, communityEv, communityProfileEv] = await Promise.all([
 					preloadedEvent.pubkey
-						? queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [preloadedEvent.pubkey], limit: 1 })
+						? queryEvent({
+								kinds: [EVENT_KINDS.PROFILE],
+								authors: [preloadedEvent.pubkey],
+								limit: 1
+							})
 						: Promise.resolve(null),
 					communityPubkey
 						? queryEvent({ kinds: [EVENT_KINDS.COMMUNITY], authors: [communityPubkey], limit: 1 })
@@ -254,7 +270,11 @@
 				if (profileEv) authorProfile = parseProfile(profileEv);
 				if (communityEv || communityProfileEv) {
 					const cp = communityProfileEv ? parseProfile(communityProfileEv) : null;
-					communityName = cp?.display_name ?? cp?.name ?? communityEv?.tags?.find((t) => t[0] === 'name')?.[1] ?? '';
+					communityName =
+						cp?.display_name ??
+						cp?.name ??
+						communityEv?.tags?.find((t) => t[0] === 'name')?.[1] ??
+						'';
 					communityPicture = cp?.picture ?? '';
 				}
 				return;
@@ -289,8 +309,8 @@
 				const filter = eventId
 					? { kinds: [EVENT_KINDS.WIKI], ids: [eventId], limit: 1 }
 					: communityPubkey
-					? { kinds: [EVENT_KINDS.WIKI], '#d': [slug], '#h': [communityPubkey], limit: 10 }
-					: { kinds: [EVENT_KINDS.WIKI], '#d': [slug], limit: 10 };
+						? { kinds: [EVENT_KINDS.WIKI], '#d': [slug], '#h': [communityPubkey], limit: 10 }
+						: { kinds: [EVENT_KINDS.WIKI], '#d': [slug], limit: 10 };
 				const fetched = await fetchFromRelays(relays, filter);
 				if (fetched.length) {
 					await putEvents(fetched);
@@ -367,23 +387,23 @@
 				<!-- Title row -->
 				<div class="title-row">
 					<h1 class="wiki-title">{title}</h1>
-				{#if wikiSlug}
-					<span class="wiki-slug">
-						<Id size={12} color="hsl(var(--white33))" />
-						{wikiSlug}
-					</span>
-				{/if}
-				{#if isOwnWiki && getIsSignedIn()}
-					<button
-						type="button"
-						class="edit-btn btn-primary-small"
-						onclick={() => (editModalOpen = true)}
-						aria-label="Edit wiki"
-					>
-						<Pen variant="fill" color="hsl(var(--white66))" size={14} />
-						<span>Edit</span>
-					</button>
-				{/if}
+					{#if wikiSlug}
+						<span class="wiki-slug">
+							<Id size={12} color="hsl(var(--white33))" />
+							{wikiSlug}
+						</span>
+					{/if}
+					{#if isOwnWiki && getIsSignedIn()}
+						<button
+							type="button"
+							class="edit-btn btn-primary-small"
+							onclick={() => (editModalOpen = true)}
+							aria-label="Edit wiki"
+						>
+							<Pen variant="fill" color="hsl(var(--white66))" size={14} />
+							<span>Edit</span>
+						</button>
+					{/if}
 				</div>
 
 				<!-- Summary panel -->
@@ -423,13 +443,13 @@
 
 				<!-- Social tabs -->
 				<div class="social-tabs-wrap">
-				<SocialTabs
-					app={{}}
-					mainEventIds={[wikiEvent.id]}
-					{wikiLinkFn}
-					showDetailsTab={true}
-					detailsShareableId={wikiNaddr}
-					detailsPublicationLabel="Article"
+					<SocialTabs
+						app={{}}
+						mainEventIds={[wikiEvent.id]}
+						{wikiLinkFn}
+						showDetailsTab={true}
+						detailsShareableId={wikiNaddr}
+						detailsPublicationLabel="Article"
 						detailsNpub={npub}
 						detailsPubkey={wikiEvent.pubkey ?? ''}
 						detailsRawData={(() => {
@@ -560,7 +580,7 @@
 	}
 
 	.edit-btn {
-		gap: 5px;
+		gap: 8px;
 		flex-shrink: 0;
 	}
 

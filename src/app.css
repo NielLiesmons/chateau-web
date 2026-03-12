@@ -563,6 +563,22 @@ h5, h6 {
   color: hsl(var(--white66));
 }
 
+/* Smaller eyebrow variant */
+.eyebrow-label-xs {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: hsl(var(--white66));
+}
+
+/* Muted color modifier — applies white33 to either eyebrow variant */
+.eyebrow-label-muted,
+.eyebrow-label.eyebrow-label-muted,
+.eyebrow-label-xs.eyebrow-label-muted {
+  color: hsl(var(--white33));
+}
+
 /* Display headings with Inter */
 .text-display {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;

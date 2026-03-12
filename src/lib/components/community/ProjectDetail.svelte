@@ -502,7 +502,7 @@ const allTeamProfiles = $derived([
 
 						<!-- STATUS + PRIORITY -->
 						<div class="meta-col">
-							<span class="meta-label">STATUS</span>
+							<span class="eyebrow-label-xs eyebrow-label-muted">STATUS</span>
 							<div class="meta-line">
 								<ProjectBox state={projectBoxState} size={16} />
 								<span class="meta-val">{projectStatusValue}</span>
@@ -515,7 +515,7 @@ const allTeamProfiles = $derived([
 
 						<!-- PERIOD -->
 						<div class="meta-col">
-							<span class="meta-label">PERIOD</span>
+							<span class="eyebrow-label-xs eyebrow-label-muted">PERIOD</span>
 							<div class="meta-line">
 								<span class="meta-sublabel">From</span>
 								<span class="meta-val" class:meta-empty={!projectParsed.start && !projectParsed.createdAt}>
@@ -531,7 +531,7 @@ const allTeamProfiles = $derived([
 
 						<!-- TARGETS -->
 						<div class="meta-col">
-							<span class="meta-label">TARGETS</span>
+							<span class="eyebrow-label-xs eyebrow-label-muted">TARGETS</span>
 							{#if projectTargets.length > 0}
 								{#each projectTargets.slice(0, 2) as tgt}
 									<div class="meta-line">
@@ -551,7 +551,7 @@ const allTeamProfiles = $derived([
 			{#if milestonesLoading && showMilestoneSkeleton}
 				<div class="milestones-panel">
 					<div class="milestones-panel-header">
-						<span class="ms-panel-label">MILESTONES</span>
+						<span class="eyebrow-label-xs eyebrow-label-muted">MILESTONES</span>
 					</div>
 					<div class="ms-item ms-last">
 						<div class="ms-main-row">
@@ -567,7 +567,7 @@ const allTeamProfiles = $derived([
 			{:else if milestones.length > 0}
 				<div class="milestones-panel">
 					<div class="milestones-panel-header">
-						<span class="ms-panel-label">MILESTONES</span>
+						<span class="eyebrow-label-xs eyebrow-label-muted">MILESTONES</span>
 					</div>
 					{#each milestones as ms, i}
 						{@const addr       = getMsAddr(ms)}
@@ -701,7 +701,7 @@ const allTeamProfiles = $derived([
 	}
 
 	.edit-btn {
-		gap: 5px;
+		gap: 8px;
 		flex-shrink: 0;
 	}
 
@@ -761,14 +761,6 @@ const allTeamProfiles = $derived([
 
 	.meta-col:not(:first-child) { padding-left: 14px; }
 	.meta-col:last-child { border-right: none; padding-right: 0; }
-
-	.meta-label {
-		font-size: 0.625rem;
-		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: hsl(var(--white33));
-	}
 
 	.meta-line {
 		display: flex;
@@ -884,14 +876,6 @@ const allTeamProfiles = $derived([
 		display: flex;
 		align-items: center;
 		padding: 10px 0 6px;
-	}
-
-	.ms-panel-label {
-		font-size: 0.625rem;
-		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: hsl(var(--white33));
 	}
 
 	/* ── Milestone item (2-row block) ── */

@@ -53,12 +53,7 @@
 		EVENT_KINDS
 	} from '$lib/config';
 	import { contentTypesFromKinds, CONTENT_TYPE_BY_SECTION } from '$lib/config/contentTypes.js';
-	import {
-		getCurrentPubkey,
-		signEvent,
-		encrypt44,
-		decrypt44
-	} from '$lib/stores/auth.svelte.js';
+	import { getCurrentPubkey, signEvent, encrypt44, decrypt44 } from '$lib/stores/auth.svelte.js';
 	import ProfilePic from '$lib/components/common/ProfilePic.svelte';
 	import BackButton from '$lib/components/common/BackButton.svelte';
 	import ForumPost from '$lib/components/ForumPostCard.svelte';
@@ -137,7 +132,6 @@
 	);
 
 	const currentPubkey = $derived(getCurrentPubkey());
-
 
 	// Synchronously read from module-level cache so frame-0 renders with real data.
 	// onMount is too late — it fires AFTER the first render, causing a visible flash.
@@ -259,6 +253,8 @@
 	let communityEditError = $state('');
 	let addPostModalOpen = $state(false);
 	let addTaskModalOpen = $state(false);
+	/** @type {string|null} status key to pre-select when opening TaskModal from a group header */
+	let newTaskInitialStatus = $state(null);
 	let addWikiModalOpen = $state(false);
 	let addListModalOpen = $state(false);
 	// Onboarding modals (for logged-out Get Started flow)
@@ -397,7 +393,6 @@
 		return () => sub.unsubscribe();
 	});
 
-
 	// Tracks all author/assignee pubkeys from forum posts + tasks, for profile fetching
 	let contentPubkeys = $state(/** @type {Set<string>} */ (new Set()));
 	// Tracks pubkeys already submitted to relay fetch (plain var — not reactive, survives re-renders)
@@ -502,7 +497,6 @@
 		});
 		return () => sub.unsubscribe();
 	});
-
 
 	// When community selected: fetch profile list for Forum, then forum posts
 	$effect(() => {
@@ -645,8 +639,12 @@
 		// Explicit one-shot fetch so Dexie is populated immediately (WebSocket subscription alone is too slow).
 		// Fetch both #E (root marker, uppercase) and #e (lowercase fallback) to catch all NIP-1111 variants.
 		const authorsFilter = generalMembers?.length ? { authors: generalMembers } : {};
-		fetchFromRelays(relays, { kinds: [1111], '#E': postIds, limit: 500, ...authorsFilter }).catch(() => {});
-		fetchFromRelays(relays, { kinds: [1111], '#e': postIds, limit: 500, ...authorsFilter }).catch(() => {});
+		fetchFromRelays(relays, { kinds: [1111], '#E': postIds, limit: 500, ...authorsFilter }).catch(
+			() => {}
+		);
+		fetchFromRelays(relays, { kinds: [1111], '#e': postIds, limit: 500, ...authorsFilter }).catch(
+			() => {}
+		);
 		return () => {
 			if (forumCommentsUnsub) {
 				forumCommentsUnsub();
@@ -667,7 +665,12 @@
 			if (forumMembers.length > 0) filter.authors = forumMembers;
 			const events = await queryEvents(filter);
 			// Attach _raw so openPost() can hand the raw Nostr event to ForumPostDetail.
-			return events.map((e) => { const p = parseForumPost(e); return p ? { ...p, _raw: e } : null; }).filter(Boolean);
+			return events
+				.map((e) => {
+					const p = parseForumPost(e);
+					return p ? { ...p, _raw: e } : null;
+				})
+				.filter(Boolean);
 		}).subscribe({
 			next: (val) => {
 				forumPosts = val || [];
@@ -1228,7 +1231,11 @@
 	function openProject(projEvent) {
 		try {
 			const dTag = projEvent.tags?.find((/** @type {string[]} */ t) => t[0] === 'd')?.[1] ?? '';
-			const naddr = nip19.naddrEncode({ kind: projEvent.kind, pubkey: projEvent.pubkey, identifier: dTag });
+			const naddr = nip19.naddrEncode({
+				kind: projEvent.kind,
+				pubkey: projEvent.pubkey,
+				identifier: dTag
+			});
 			navHandoff.set(naddr, {
 				event: projEvent,
 				communityNpub: selectedCommunity?.npub ?? communityNpub,
@@ -1236,7 +1243,9 @@
 			});
 			goto(`/project/${naddr}`);
 		} catch {
-			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?project=${encodeURIComponent(projEvent.id)}`);
+			goto(
+				`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?project=${encodeURIComponent(projEvent.id)}`
+			);
 		}
 	}
 	function openList(listAddr) {
@@ -1438,8 +1447,6 @@
 			.map((l) => ({ ...l, sectionName: '—' }));
 		return [...membersListData, ...uncategorised];
 	});
-
-
 
 	// When Crown admin modal opens, populate admin form from current community (only when first entering or community changes).
 	$effect(() => {
@@ -2743,7 +2750,9 @@
 			});
 			goto(`/wiki/${naddr}`);
 		} catch {
-			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?wiki=${encodeURIComponent(slug)}`);
+			goto(
+				`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?wiki=${encodeURIComponent(slug)}`
+			);
 		}
 	}
 
@@ -2762,7 +2771,9 @@
 			});
 			goto(`/forum/${nevent}`);
 		} catch {
-			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?post=${encodeURIComponent(post.id)}`);
+			goto(
+				`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?post=${encodeURIComponent(post.id)}`
+			);
 		}
 	}
 
@@ -2780,7 +2791,9 @@
 			});
 			goto(`/task/${naddr}`);
 		} catch {
-			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?task=${encodeURIComponent(task.id)}`);
+			goto(
+				`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?task=${encodeURIComponent(task.id)}`
+			);
 		}
 	}
 	function openCreatePost() {
@@ -3010,2245 +3023,2249 @@
 	<meta name="description" content="Browse and join Nostr communities" />
 </svelte:head>
 
-	{#if openEventEncoded}
-		<div class="panel-content panel-content-detail">
-			<GeneralEventDetail
-				encoded={openEventEncoded}
-				onBack={() => history.back()}
-			/>
-		</div>
-	{:else if !selectedCommunity}
-		<div class="panel-placeholder">
-			<EmptyState message="Select a community" minHeight={280} />
-		</div>
-	{:else if openWikiSlug}
-		<div class="panel-content panel-content-detail">
-			<WikiDetail
-				slug={openWikiSlug}
-				communityNpub={selectedCommunity.npub}
-				wikiLinkFn={wikiLinkFn ?? ((s) => `#${s}`)}
-				onBack={() => history.back()}
-			/>
-		</div>
-	{:else if openPostId}
-				<div class="panel-content panel-content-detail">
-					<ForumPostDetail
-						eventId={openPostId}
-						communityNpub={selectedCommunity.npub}
-						onBack={() => history.back()}
-						{isMember}
-						onJoinRequired={() => {
-							joinContext = 'forum';
-							joinModalOpen = true;
-						}}
-					/>
-				</div>
-			{:else if openTaskId}
-				<div class="panel-content panel-content-detail">
-					<TaskDetail
-						eventId={openTaskId}
-						communityNpub={selectedCommunity.npub}
-						onBack={() => history.back()}
-						{isMember}
-						onJoinRequired={() => {
-							joinContext = 'tasks';
-							joinModalOpen = true;
-						}}
-					/>
-				</div>
-			{:else if openProjectId}
-				<div class="panel-content panel-content-detail">
-					<ProjectDetail
-						eventId={openProjectId}
-						communityNpub={selectedCommunity.npub}
-						onBack={() => history.back()}
-					/>
-				</div>
-		{:else if openListAddr}
-			{@const listItem = [...membersListData, ...adminProfileLists].find(
-				(l) => l.listAddress === openListAddr
-			)}
-			<div class="panel-content panel-content-detail">
-				<ProfileListDetail
-					listAddress={openListAddr}
-					communityNpub={selectedCommunity.npub}
-					communityRelays={selectedCommunity.relays ?? []}
-					{isCommunityAdmin}
-					sectionKinds={listItem?.sectionKinds ?? []}
-					catalogs={[
-						{
-							name: selectedCommunity.displayName || selectedCommunity.name || 'Community',
-							pictureUrl: selectedCommunity.picture || undefined,
-							pubkey: selectedCommunity.pubkey
-						}
-					]}
-					formTemplates={adminFormTemplates}
-					onBack={() => history.back()}
-					{getCurrentPubkey}
+{#if openEventEncoded}
+	<div class="panel-content panel-content-detail">
+		<GeneralEventDetail encoded={openEventEncoded} onBack={() => history.back()} />
+	</div>
+{:else if !selectedCommunity}
+	<div class="panel-placeholder">
+		<EmptyState message="Select a community" minHeight={280} />
+	</div>
+{:else if openWikiSlug}
+	<div class="panel-content panel-content-detail">
+		<WikiDetail
+			slug={openWikiSlug}
+			communityNpub={selectedCommunity.npub}
+			wikiLinkFn={wikiLinkFn ?? ((s) => `#${s}`)}
+			onBack={() => history.back()}
+		/>
+	</div>
+{:else if openPostId}
+	<div class="panel-content panel-content-detail">
+		<ForumPostDetail
+			eventId={openPostId}
+			communityNpub={selectedCommunity.npub}
+			onBack={() => history.back()}
+			{isMember}
+			onJoinRequired={() => {
+				joinContext = 'forum';
+				joinModalOpen = true;
+			}}
+		/>
+	</div>
+{:else if openTaskId}
+	<div class="panel-content panel-content-detail">
+		<TaskDetail
+			eventId={openTaskId}
+			communityNpub={selectedCommunity.npub}
+			onBack={() => history.back()}
+			{isMember}
+			onJoinRequired={() => {
+				joinContext = 'tasks';
+				joinModalOpen = true;
+			}}
+		/>
+	</div>
+{:else if openProjectId}
+	<div class="panel-content panel-content-detail">
+		<ProjectDetail
+			eventId={openProjectId}
+			communityNpub={selectedCommunity.npub}
+			onBack={() => history.back()}
+		/>
+	</div>
+{:else if openListAddr}
+	{@const listItem = [...membersListData, ...adminProfileLists].find(
+		(l) => l.listAddress === openListAddr
+	)}
+	<div class="panel-content panel-content-detail">
+		<ProfileListDetail
+			listAddress={openListAddr}
+			communityNpub={selectedCommunity.npub}
+			communityRelays={selectedCommunity.relays ?? []}
+			{isCommunityAdmin}
+			sectionKinds={listItem?.sectionKinds ?? []}
+			catalogs={[
+				{
+					name: selectedCommunity.displayName || selectedCommunity.name || 'Community',
+					pictureUrl: selectedCommunity.picture || undefined,
+					pubkey: selectedCommunity.pubkey
+				}
+			]}
+			formTemplates={adminFormTemplates}
+			onBack={() => history.back()}
+			{getCurrentPubkey}
+		/>
+	</div>
+{:else}
+	<div class="right-header-block">
+		<div class="right-header-row1">
+			<span class="mobile-community-back">
+				<BackButton onBack={() => goto('/communities', { replaceState: true })} />
+			</span>
+			<button
+				type="button"
+				class="community-info-row-tap"
+				onclick={() => (communityInfoModalOpen = true)}
+				aria-label="Community info"
+			>
+				<ProfilePic
+					pictureUrl={selectedCommunity.picture}
+					name={selectedCommunity.displayName || selectedCommunity.name}
+					pubkey={selectedCommunity.pubkey}
+					size="bubble"
 				/>
+				<h1 class="community-display-name">
+					{selectedCommunity.displayName || selectedCommunity.name || 'Unnamed'}
+				</h1>
+			</button>
+			<div class="header-icon-group">
+				{#if isCommunityAdmin}
+					<button
+						type="button"
+						class="notifications-btn"
+						aria-label="Admin settings"
+						onclick={() => openAdminCrownModal()}
+					>
+						<Crown variant="fill" size={15} color="hsl(var(--white33))" />
+					</button>
+				{/if}
+				<button
+					type="button"
+					class="notifications-btn bell-btn"
+					aria-label="Notifications"
+					onclick={() => (joinRequestsModalOpen = true)}
+				>
+					<Bell variant="fill" size={16} color="hsl(var(--white33))" />
+					{#if isCommunityAdmin && joinRequestsCount > 0}
+						<span class="bell-badge">{joinRequestsCount}</span>
+					{/if}
+				</button>
+			</div>
+		</div>
+		<div class="tab-row pills-row-under">
+			{#each sectionPills as pill}
+				<button
+					type="button"
+					class={selectedSection === pill.id
+						? 'btn-primary-small tab-selected'
+						: 'btn-secondary-small'}
+					onclick={() =>
+						goto(`/community/${encodeURIComponent(communityNpub)}?s=${pill.id}`, {
+							replaceState: true,
+							noScroll: true,
+							keepFocus: true
+						})}
+				>
+					{pill.label}
+				</button>
+			{/each}
+		</div>
+	</div>
+	<div class="panel-content">
+		{#if isForumSection}
+			<div class="forum-list">
+				{#if forumPosts.length === 0}
+					<EmptyState message="No forum posts yet" minHeight={600} />
+				{:else}
+					{#each forumPosts as post}
+						{@const authorProfile = profilesByPubkey.get(post.pubkey)}
+						{@const authorContent = authorProfile?.content
+							? (() => {
+									try {
+										return JSON.parse(authorProfile.content);
+									} catch {
+										return {};
+									}
+								})()
+							: {}}
+						{@const postCommenters = commentersByPostId.get(post.id)}
+						<ForumPost
+							author={{
+								name: authorContent.display_name ?? authorContent.name,
+								picture: authorContent.picture,
+								npub: (() => {
+									try {
+										return nip19.npubEncode(post.pubkey);
+									} catch {
+										return '';
+									}
+								})()
+							}}
+							title={post.title}
+							content={post.content}
+							timestamp={post.createdAt}
+							labels={post.labels ?? []}
+							commenters={postCommenters?.profiles ?? []}
+							commentCount={postCommenters?.count ?? 0}
+							onClick={() => openPost(post)}
+						/>
+					{/each}
+				{/if}
+			</div>
+		{:else if selectedSection === 'tasks'}
+			<div class="tasks-list">
+				{#if taskEvents.length === 0}
+					<EmptyState message="No tasks yet" minHeight={600} />
+				{:else}
+					{@const STATUS_ORDER = [
+						'inReview',
+						'inProgress',
+						'open',
+						'backlog',
+						'closed',
+						'canceled'
+					]}
+					{@const STATUS_LABELS = {
+						inReview: 'IN REVIEW',
+						inProgress: 'IN PROGRESS',
+						open: 'OPEN',
+						backlog: 'BACKLOG',
+						closed: 'CLOSED',
+						canceled: 'CANCELED'
+					}}
+					{@const tasksByStatus = (() => {
+						/** @type {Map<string, typeof taskEvents>} */
+						const map = new Map();
+						for (const task of taskEvents.slice().sort((a, b) => b.created_at - a.created_at)) {
+							const { status } = getTaskStatusAndPriority(task);
+							const key = STATUS_ORDER.includes(status) ? status : 'open';
+							if (!map.has(key)) map.set(key, []);
+							map.get(key).push(task);
+						}
+						return map;
+					})()}
+					{#each STATUS_ORDER as statusKey}
+						{@const group = tasksByStatus.get(statusKey) ?? []}
+						{#if group.length > 0}
+							<div class="task-group-header">
+								<span class="eyebrow-label-xs">{STATUS_LABELS[statusKey]}</span>
+								<span class="task-group-count">{group.length}</span>
+								<button
+									type="button"
+									class="task-group-add-btn"
+									aria-label="Add task with status {STATUS_LABELS[statusKey]}"
+									onclick={() => {
+										newTaskInitialStatus = statusKey;
+										addTaskModalOpen = true;
+									}}
+								>
+									<Plus size={12} color="hsl(var(--white33))" variant="outline" strokeWidth={2} />
+								</button>
+							</div>
+							{#each group as task}
+								{@const { status, priority } = getTaskStatusAndPriority(task)}
+								{@const title = task.tags?.find((t) => t[0] === 'title')?.[1] ?? ''}
+								{@const taskLabels = task.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
+								{@const assigneePubkeys =
+									task.tags?.filter((t) => t[0] === 'p' && t[2] === 'assignee').map((t) => t[1]) ??
+									[]}
+								{@const authorProfile = profilesByPubkey.get(task.pubkey)}
+								{@const authorContent = authorProfile?.content
+									? (() => {
+											try {
+												return JSON.parse(authorProfile.content);
+											} catch {
+												return {};
+											}
+										})()
+									: {}}
+								<TaskCard
+									{title}
+									{status}
+									{priority}
+									labels={taskLabels}
+									createdAt={task.created_at}
+									author={{
+										pubkey: task.pubkey,
+										name: authorContent.display_name ?? authorContent.name,
+										pictureUrl: authorContent.picture
+									}}
+									assignees={assigneePubkeys.map((pk) => {
+										const p = profilesByPubkey.get(pk);
+										const c = p?.content
+											? (() => {
+													try {
+														return JSON.parse(p.content);
+													} catch {
+														return {};
+													}
+												})()
+											: {};
+										return { pubkey: pk, name: c.display_name ?? c.name, pictureUrl: c.picture };
+									})}
+									commenters={commentersByTaskId.get(task.id) ?? []}
+									onClick={() => openTask(task)}
+								/>
+							{/each}
+						{/if}
+					{/each}
+				{/if}
+			</div>
+		{:else if selectedSection === 'projects'}
+			<div class="projects-list">
+				{#if projectEvents.length === 0}
+					<EmptyState message="No projects yet" minHeight={600} />
+				{:else}
+					{#each projectEvents.slice().sort((a, b) => b.created_at - a.created_at) as projEv}
+						{@const pData = getProjectCardData(projEv)}
+						{@const pAuthor = profilesByPubkey.get(projEv.pubkey)}
+						{@const pAuthorContent = pAuthor?.content
+							? (() => {
+									try {
+										return JSON.parse(pAuthor.content);
+									} catch {
+										return {};
+									}
+								})()
+							: {}}
+						{#if pData}
+							<ProjectCard
+								title={pData.parsed.title}
+								summary={pData.parsed.summary}
+								percentage={pData.progress}
+								milestones={pData.milestones}
+								author={{
+									pubkey: projEv.pubkey,
+									name: pAuthorContent.display_name ?? pAuthorContent.name,
+									pictureUrl: pAuthorContent.picture
+								}}
+								due={pData.parsed.due}
+								onClick={() => openProject(projEv)}
+							/>
+						{/if}
+					{/each}
+				{/if}
+			</div>
+		{:else if selectedSection === 'wikis'}
+			<div class="wiki-list">
+				{#if wikiEvents.length === 0}
+					<EmptyState message="No wiki articles yet" minHeight={600} />
+				{:else}
+					{#each wikiEvents.slice().sort((a, b) => b.created_at - a.created_at) as wiki}
+						{@const wTitle = wiki.tags?.find((t) => t[0] === 'title')?.[1] ?? 'Untitled'}
+						{@const wSummary = wiki.tags?.find((t) => t[0] === 'summary')?.[1] ?? ''}
+						{@const wSlug = wiki.tags?.find((t) => t[0] === 'd')?.[1] ?? wiki.id}
+						{@const wLabels = wiki.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
+						{@const wAuthor = profilesByPubkey.get(wiki.pubkey)}
+						{@const wAuthorContent = wAuthor?.content
+							? (() => {
+									try {
+										return JSON.parse(wAuthor.content);
+									} catch {
+										return {};
+									}
+								})()
+							: {}}
+						<WikiCard
+							title={wTitle}
+							summary={wSummary}
+							slug={wSlug}
+							labels={wLabels}
+							author={{
+								name: wAuthorContent.display_name ?? wAuthorContent.name,
+								picture: wAuthorContent.picture,
+								pubkey: wiki.pubkey
+							}}
+							createdAt={wiki.created_at}
+							onClick={() => openWiki(wiki, wSlug)}
+						/>
+					{/each}
+				{/if}
+			</div>
+		{:else if selectedSection === 'profiles'}
+			<div class="profiles-list">
+				{#if membersListData.length === 0}
+					<EmptyState message="No profile lists yet" minHeight={200} />
+				{:else}
+					{#each membersListData as item}
+						{@const listMembers = item.parsed?.members ?? []}
+						{@const infoWriteTypes = contentTypesFromKinds(item.sectionKinds ?? [])}
+						<div class="info-list-panel">
+							<div class="list-panel-section">
+								<SingleBadge
+									image={item.parsed?.image ?? null}
+									name={item.parsed?.name ?? item.sectionName}
+									sizePx={52}
+								/>
+								<div class="list-panel-meta">
+									<span class="list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
+									{#if item.parsed?.content}
+										<span class="list-panel-desc">{item.parsed.content}</span>
+									{/if}
+								</div>
+							</div>
+							{#if infoWriteTypes.length > 0}
+								<div class="list-panel-divider"></div>
+								<div class="list-panel-section list-panel-section-write">
+									<p class="list-panel-write-label">CAN WRITE</p>
+									<div class="list-panel-type-pills">
+										{#each infoWriteTypes as ct}
+											<span class="list-panel-type-pill">
+												<img src={ct.emoji} alt="" class="list-panel-type-emoji" />
+												<span>{ct.label}</span>
+											</span>
+										{/each}
+									</div>
+								</div>
+							{/if}
+							<div class="list-panel-divider"></div>
+							<div class="list-panel-section list-panel-section-profiles">
+								{#if listMembers.length > 0}
+									<ul class="info-list-members-list">
+										{#each listMembers.slice(0, 4) as pk}
+											{@const p = profilesByPubkey.get(pk)}
+											<li class="info-list-member-row">
+												{#if p?.picture}
+													<img src={p.picture} alt="" class="info-list-member-avatar" />
+												{:else}
+													<div
+														class="info-list-member-avatar info-list-member-avatar-placeholder"
+													></div>
+												{/if}
+												<span class="info-list-member-name"
+													>{p?.displayName ?? p?.name ?? pk.slice(0, 8) + '…'}</span
+												>
+											</li>
+										{/each}
+									</ul>
+								{/if}
+								<div class="info-list-actions">
+									<button
+										type="button"
+										class="btn-view-more"
+										onclick={() => openList(item.listAddress)}>View All</button
+									>
+									<div class="info-list-actions-right">
+										{#if isCommunityAdmin}
+											<button
+												type="button"
+												class="btn-primary-small info-list-action-btn"
+												aria-label="Edit list"
+												onclick={() => openList(item.listAddress)}
+											>
+												<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+												<span>Edit</span>
+											</button>
+										{/if}
+										{#if item.parsed?.form && !listMembers.includes(currentPubkey)}
+											<button
+												type="button"
+												class="btn-primary-small info-list-action-btn"
+												onclick={() => {
+													selectedJoinList = {
+														formAddress: item.parsed.form,
+														listName: item.parsed?.name,
+														listAddress: item.listAddress
+													};
+													joinModalOpen = true;
+												}}>Join</button
+											>
+										{/if}
+									</div>
+								</div>
+							</div>
+						</div>
+					{/each}
+				{/if}
 			</div>
 		{:else}
-			<div class="right-header-block">
-					<div class="right-header-row1">
-						<span class="mobile-community-back">
-							<BackButton onBack={() => goto('/communities', { replaceState: true })} />
-						</span>
-						<button
-							type="button"
-							class="community-info-row-tap"
-							onclick={() => (communityInfoModalOpen = true)}
-							aria-label="Community info"
-						>
-							<ProfilePic
-								pictureUrl={selectedCommunity.picture}
-								name={selectedCommunity.displayName || selectedCommunity.name}
-								pubkey={selectedCommunity.pubkey}
-								size="bubble"
-							/>
-							<h1 class="community-display-name">
-								{selectedCommunity.displayName || selectedCommunity.name || 'Unnamed'}
-							</h1>
-						</button>
-						<div class="header-icon-group">
-							{#if isCommunityAdmin}
-								<button
-									type="button"
-									class="notifications-btn"
-									aria-label="Admin settings"
-									onclick={() => openAdminCrownModal()}
-								>
-									<Crown variant="fill" size={15} color="hsl(var(--white33))" />
-								</button>
-							{/if}
-							<button
-								type="button"
-								class="notifications-btn bell-btn"
-								aria-label="Notifications"
-								onclick={() => (joinRequestsModalOpen = true)}
-							>
-								<Bell variant="fill" size={16} color="hsl(var(--white33))" />
-								{#if isCommunityAdmin && joinRequestsCount > 0}
-									<span class="bell-badge">{joinRequestsCount}</span>
-								{/if}
-							</button>
+			<EmptyState
+				message="{sectionPills.find((p) => p.id === selectedSection)?.label ??
+					selectedSection} coming soon"
+				minHeight={200}
+			/>
+		{/if}
+	</div>
+	{#if selectedCommunity && !openWikiSlug && !openPostId && !openTaskId && !openProjectId && !openListAddr && !openEventEncoded}
+		<CommunityBottomBar
+			{isMember}
+			{hasForm}
+			showFeedBar={selectedSection !== 'profiles'}
+			showMembersBar={selectedSection === 'profiles' && isCommunityAdmin}
+			onAddList={() => (addListModalOpen = true)}
+			showAdminSave={false}
+			communityName={selectedCommunity.displayName || selectedCommunity.name || ''}
+			{selectedSection}
+			modalOpen={addPostModalOpen || addTaskModalOpen || addWikiModalOpen || projectModalOpen}
+			onJoin={() => {
+				joinContext = selectedSection;
+				joinModalOpen = true;
+			}}
+			onComment={() => {}}
+			onZap={() => {}}
+			onAdd={() => {
+				if (selectedSection === 'tasks') addTaskModalOpen = true;
+				else if (selectedSection === 'wikis') addWikiModalOpen = true;
+				else if (selectedSection === 'projects') {
+					projectModalOpen = true;
+				} else openCreatePost();
+			}}
+			onSearch={() => {
+				/* TODO: section search */
+			}}
+		/>
+	{/if}
+{/if}
+<!-- Modals and overlays scoped to right page (inside viewport containing block) -->
+<Modal
+	open={communityInfoModalOpen}
+	onClose={() => {
+		communityInfoModalOpen = false;
+		communityEditModalOpen = false;
+		communityInfoShowDetails = false;
+	}}
+	ariaLabel="Community info"
+	padContent={true}
+>
+	{#if communityInfoModalOpen && selectedCommunity}
+		{@const commTags = selectedCommunity.raw?.tags ?? []}
+		{@const blossomUrls = commTags
+			.filter((t) => t[0] === 'blossom')
+			.map((t) => t[1])
+			.filter(Boolean)}
+		{@const relayUrls = selectedCommunity.relays ?? []}
+		<div class="community-info-modal">
+			<div class="community-info-pic-wrap">
+				<ProfilePic
+					pictureUrl={selectedCommunity.picture}
+					name={selectedCommunity.displayName || selectedCommunity.name}
+					pubkey={selectedCommunity.pubkey}
+					size="2xl"
+				/>
+			</div>
+			<h2 class="community-info-name">
+				{selectedCommunity.displayName || selectedCommunity.name || 'Unnamed'}
+			</h2>
+			{#if selectedCommunity.about ?? selectedCommunity.description}
+				<p class="community-info-about">
+					{selectedCommunity.about ?? selectedCommunity.description}
+				</p>
+			{/if}
+			<button
+				type="button"
+				class="btn-more-details"
+				onclick={() => (communityInfoShowDetails = !communityInfoShowDetails)}
+			>
+				{communityInfoShowDetails ? 'Less details' : 'More details'}
+			</button>
+			{#if communityInfoShowDetails}
+				<div class="community-info-details-wrap">
+					{#if relayUrls.length > 0 || blossomUrls.length > 0}
+						<h3 class="community-info-section-label">Servers</h3>
+						<div class="community-info-servers-list">
+							{#each relayUrls as url}
+								<span class="community-info-server">{url}</span>
+							{/each}
+							{#each blossomUrls as url}
+								<span class="community-info-server community-info-blossom">{url}</span>
+							{/each}
 						</div>
-					</div>
-					<div class="tab-row pills-row-under">
-						{#each sectionPills as pill}
-							<button
-								type="button"
-								class={selectedSection === pill.id
-									? 'btn-primary-small tab-selected'
-									: 'btn-secondary-small'}
-								onclick={() =>
-								goto(`/community/${encodeURIComponent(communityNpub)}?s=${pill.id}`, {
-									replaceState: true,
-									noScroll: true,
-									keepFocus: true
-								})}
-							>
-								{pill.label}
-							</button>
-						{/each}
-					</div>
-				</div>
-				<div class="panel-content">
-					{#if isForumSection}
-						<div class="forum-list">
-							{#if forumPosts.length === 0}
-								<EmptyState message="No forum posts yet" minHeight={600} />
-							{:else}
-								{#each forumPosts as post}
-									{@const authorProfile = profilesByPubkey.get(post.pubkey)}
-									{@const authorContent = authorProfile?.content
-										? (() => {
-												try {
-													return JSON.parse(authorProfile.content);
-												} catch {
-													return {};
-												}
-											})()
-										: {}}
-									{@const postCommenters = commentersByPostId.get(post.id)}
-									<ForumPost
-										author={{
-											name: authorContent.display_name ?? authorContent.name,
-											picture: authorContent.picture,
-											npub: (() => {
-												try {
-													return nip19.npubEncode(post.pubkey);
-												} catch {
-													return '';
-												}
-											})()
-										}}
-										title={post.title}
-										content={post.content}
-										timestamp={post.createdAt}
-										labels={post.labels ?? []}
-										commenters={postCommenters?.profiles ?? []}
-										commentCount={postCommenters?.count ?? 0}
-										onClick={() => openPost(post)}
-									/>
-								{/each}
-							{/if}
-						</div>
-					{:else if selectedSection === 'tasks'}
-						<div class="tasks-list">
-							{#if taskEvents.length === 0}
-								<EmptyState message="No tasks yet" minHeight={600} />
-							{:else}
-								{#each taskEvents.slice().sort((a, b) => b.created_at - a.created_at) as task}
-									{@const { status, priority } = getTaskStatusAndPriority(task)}
-									{@const title = task.tags?.find((t) => t[0] === 'title')?.[1] ?? ''}
-									{@const taskLabels =
-										task.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
-									{@const assigneePubkeys =
-										task.tags
-											?.filter((t) => t[0] === 'p' && t[2] === 'assignee')
-											.map((t) => t[1]) ?? []}
-									{@const authorProfile = profilesByPubkey.get(task.pubkey)}
-									{@const authorContent = authorProfile?.content
-										? (() => {
-												try {
-													return JSON.parse(authorProfile.content);
-												} catch {
-													return {};
-												}
-											})()
-										: {}}
-									<TaskCard
-										{title}
-										{status}
-										{priority}
-										labels={taskLabels}
-										createdAt={task.created_at}
-										author={{
-											pubkey: task.pubkey,
-											name: authorContent.display_name ?? authorContent.name,
-											pictureUrl: authorContent.picture
-										}}
-										assignees={assigneePubkeys.map((pk) => {
-											const p = profilesByPubkey.get(pk);
-											const c = p?.content
-												? (() => {
-														try {
-															return JSON.parse(p.content);
-														} catch {
-															return {};
-														}
-													})()
-												: {};
-											return { pubkey: pk, name: c.display_name ?? c.name, pictureUrl: c.picture };
-										})}
-										commenters={commentersByTaskId.get(task.id) ?? []}
-										onClick={() => openTask(task)}
-									/>
-								{/each}
-							{/if}
-						</div>
-					{:else if selectedSection === 'projects'}
-						<div class="projects-list">
-							{#if projectEvents.length === 0}
-								<EmptyState message="No projects yet" minHeight={600} />
-							{:else}
-								{#each projectEvents.slice().sort((a, b) => b.created_at - a.created_at) as projEv}
-									{@const pData = getProjectCardData(projEv)}
-									{@const pAuthor = profilesByPubkey.get(projEv.pubkey)}
-									{@const pAuthorContent = pAuthor?.content
-										? (() => {
-												try {
-													return JSON.parse(pAuthor.content);
-												} catch {
-													return {};
-												}
-											})()
-										: {}}
-									{#if pData}
-										<ProjectCard
-											title={pData.parsed.title}
-											summary={pData.parsed.summary}
-											percentage={pData.progress}
-											milestones={pData.milestones}
-											author={{
-												pubkey: projEv.pubkey,
-												name: pAuthorContent.display_name ?? pAuthorContent.name,
-												pictureUrl: pAuthorContent.picture
-											}}
-											due={pData.parsed.due}
-											onClick={() => openProject(projEv)}
-										/>
-									{/if}
-								{/each}
-							{/if}
-						</div>
-					{:else if selectedSection === 'wikis'}
-						<div class="wiki-list">
-							{#if wikiEvents.length === 0}
-								<EmptyState message="No wiki articles yet" minHeight={600} />
-							{:else}
-								{#each wikiEvents.slice().sort((a, b) => b.created_at - a.created_at) as wiki}
-									{@const wTitle = wiki.tags?.find((t) => t[0] === 'title')?.[1] ?? 'Untitled'}
-									{@const wSummary = wiki.tags?.find((t) => t[0] === 'summary')?.[1] ?? ''}
-									{@const wSlug = wiki.tags?.find((t) => t[0] === 'd')?.[1] ?? wiki.id}
-									{@const wLabels = wiki.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
-									{@const wAuthor = profilesByPubkey.get(wiki.pubkey)}
-									{@const wAuthorContent = wAuthor?.content
-										? (() => {
-												try {
-													return JSON.parse(wAuthor.content);
-												} catch {
-													return {};
-												}
-											})()
-										: {}}
-									<WikiCard
-										title={wTitle}
-										summary={wSummary}
-										slug={wSlug}
-										labels={wLabels}
-										author={{
-											name: wAuthorContent.display_name ?? wAuthorContent.name,
-											picture: wAuthorContent.picture,
-											pubkey: wiki.pubkey
-										}}
-										createdAt={wiki.created_at}
-										onClick={() => openWiki(wiki, wSlug)}
-									/>
-								{/each}
-							{/if}
-						</div>
-					{:else if selectedSection === 'profiles'}
-						<div class="profiles-list">
-							{#if membersListData.length === 0}
-								<EmptyState message="No profile lists yet" minHeight={200} />
-							{:else}
-								{#each membersListData as item}
-									{@const listMembers = item.parsed?.members ?? []}
-									{@const infoWriteTypes = contentTypesFromKinds(item.sectionKinds ?? [])}
-									<div class="info-list-panel">
-										<div class="list-panel-section">
-											<SingleBadge
-												image={item.parsed?.image ?? null}
-												name={item.parsed?.name ?? item.sectionName}
-												sizePx={52}
-											/>
-											<div class="list-panel-meta">
-												<span class="list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
-												{#if item.parsed?.content}
-													<span class="list-panel-desc">{item.parsed.content}</span>
-												{/if}
-											</div>
-										</div>
-										{#if infoWriteTypes.length > 0}
-											<div class="list-panel-divider"></div>
-											<div class="list-panel-section list-panel-section-write">
-												<p class="list-panel-write-label">CAN WRITE</p>
-												<div class="list-panel-type-pills">
-													{#each infoWriteTypes as ct}
-														<span class="list-panel-type-pill">
-															<img src={ct.emoji} alt="" class="list-panel-type-emoji" />
-															<span>{ct.label}</span>
-														</span>
-													{/each}
-												</div>
-											</div>
-										{/if}
-										<div class="list-panel-divider"></div>
-										<div class="list-panel-section list-panel-section-profiles">
-											{#if listMembers.length > 0}
-												<ul class="info-list-members-list">
-													{#each listMembers.slice(0, 4) as pk}
-														{@const p = profilesByPubkey.get(pk)}
-														<li class="info-list-member-row">
-															{#if p?.picture}
-																<img src={p.picture} alt="" class="info-list-member-avatar" />
-															{:else}
-																<div
-																	class="info-list-member-avatar info-list-member-avatar-placeholder"
-																></div>
-															{/if}
-															<span class="info-list-member-name"
-																>{p?.displayName ?? p?.name ?? pk.slice(0, 8) + '…'}</span
-															>
-														</li>
-													{/each}
-												</ul>
-											{/if}
-											<div class="info-list-actions">
-												<button
-													type="button"
-													class="btn-view-more"
-													onclick={() => openList(item.listAddress)}>View All</button
-												>
-												<div class="info-list-actions-right">
-													{#if isCommunityAdmin}
-														<button
-															type="button"
-															class="btn-primary-small info-list-action-btn"
-															aria-label="Edit list"
-															onclick={() => openList(item.listAddress)}
-														>
-															<Pen variant="fill" size={13} color="hsl(var(--white66))" />
-															<span>Edit</span>
-														</button>
-													{/if}
-													{#if item.parsed?.form && !listMembers.includes(currentPubkey)}
-														<button
-															type="button"
-															class="btn-primary-small info-list-action-btn"
-															onclick={() => {
-																selectedJoinList = {
-																	formAddress: item.parsed.form,
-																	listName: item.parsed?.name,
-																	listAddress: item.listAddress
-																};
-																joinModalOpen = true;
-															}}>Join</button
-														>
-													{/if}
-												</div>
-											</div>
-										</div>
-									</div>
-								{/each}
-							{/if}
-						</div>
-					{:else}
-						<EmptyState
-							message="{sectionPills.find((p) => p.id === selectedSection)?.label ??
-								selectedSection} coming soon"
-							minHeight={200}
-						/>
 					{/if}
 				</div>
-				{#if selectedCommunity && !openWikiSlug && !openPostId && !openTaskId && !openProjectId && !openListAddr && !openEventEncoded}
-					<CommunityBottomBar
-						{isMember}
-						{hasForm}
-						showFeedBar={selectedSection !== 'profiles'}
-						showMembersBar={selectedSection === 'profiles' && isCommunityAdmin}
-						onAddList={() => (addListModalOpen = true)}
-						showAdminSave={false}
-						communityName={selectedCommunity.displayName || selectedCommunity.name || ''}
-						{selectedSection}
-						modalOpen={addPostModalOpen || addTaskModalOpen || addWikiModalOpen || projectModalOpen}
-						onJoin={() => {
-							joinContext = selectedSection;
-							joinModalOpen = true;
-						}}
-						onComment={() => {}}
-						onZap={() => {}}
-						onAdd={() => {
-							if (selectedSection === 'tasks') addTaskModalOpen = true;
-							else if (selectedSection === 'wikis') addWikiModalOpen = true;
-							else if (selectedSection === 'projects') {
-								projectModalOpen = true;
-							} else openCreatePost();
-						}}
-						onSearch={() => {
-							/* TODO: section search */
-						}}
-					/>
-				{/if}
 			{/if}
-			<!-- Modals and overlays scoped to right page (inside viewport containing block) -->
-			<Modal
-				open={communityInfoModalOpen}
-				onClose={() => {
-					communityInfoModalOpen = false;
-					communityEditModalOpen = false;
-					communityInfoShowDetails = false;
-				}}
-				ariaLabel="Community info"
-				padContent={true}
-			>
-				{#if communityInfoModalOpen && selectedCommunity}
-					{@const commTags = selectedCommunity.raw?.tags ?? []}
-					{@const blossomUrls = commTags
-						.filter((t) => t[0] === 'blossom')
-						.map((t) => t[1])
-						.filter(Boolean)}
-					{@const relayUrls = selectedCommunity.relays ?? []}
-					<div class="community-info-modal">
-						<div class="community-info-pic-wrap">
-							<ProfilePic
-								pictureUrl={selectedCommunity.picture}
-								name={selectedCommunity.displayName || selectedCommunity.name}
-								pubkey={selectedCommunity.pubkey}
-								size="2xl"
+			<div class="community-info-profiles-section">
+				<h3 class="community-info-profiles-label">PROFILES</h3>
+				{#if isCommunityAdmin && joinRequestsCount > 0}
+					<button
+						type="button"
+						class="members-join-requests-panel"
+						onclick={() => (joinRequestsModalOpen = true)}
+					>
+						<span class="members-panel-label">Join Requests</span>
+						<span class="members-panel-count">{joinRequestsCount}</span>
+					</button>
+				{/if}
+				{#if membersListData.length === 0}
+					<p class="community-info-profiles-empty">No profile lists found.</p>
+				{/if}
+				{#each membersListData as item}
+					{@const listMembers = item.parsed?.members ?? []}
+					{@const infoWriteTypes = contentTypesFromKinds(item.sectionKinds ?? [])}
+					<div class="info-list-panel">
+						<!-- Section 1: badge + name + description -->
+						<div class="list-panel-section">
+							<SingleBadge
+								image={item.parsed?.image ?? null}
+								name={item.parsed?.name ?? item.sectionName}
+								sizePx={52}
 							/>
-						</div>
-						<h2 class="community-info-name">
-							{selectedCommunity.displayName || selectedCommunity.name || 'Unnamed'}
-						</h2>
-						{#if selectedCommunity.about ?? selectedCommunity.description}
-							<p class="community-info-about">
-								{selectedCommunity.about ?? selectedCommunity.description}
-							</p>
-						{/if}
-						<button
-							type="button"
-							class="btn-more-details"
-							onclick={() => (communityInfoShowDetails = !communityInfoShowDetails)}
-						>
-							{communityInfoShowDetails ? 'Less details' : 'More details'}
-						</button>
-						{#if communityInfoShowDetails}
-							<div class="community-info-details-wrap">
-								{#if relayUrls.length > 0 || blossomUrls.length > 0}
-									<h3 class="community-info-section-label">Servers</h3>
-									<div class="community-info-servers-list">
-										{#each relayUrls as url}
-											<span class="community-info-server">{url}</span>
-										{/each}
-										{#each blossomUrls as url}
-											<span class="community-info-server community-info-blossom">{url}</span>
-										{/each}
-									</div>
+							<div class="list-panel-meta">
+								<span class="list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
+								{#if item.parsed?.content}
+									<span class="list-panel-desc">{item.parsed.content}</span>
 								{/if}
 							</div>
+						</div>
+						{#if infoWriteTypes.length > 0 || item.sectionName}
+							<div class="list-panel-divider"></div>
+							<!-- Section 2: CAN WRITE -->
+							<div class="list-panel-section list-panel-section-write">
+								<p class="list-panel-write-label">CAN WRITE</p>
+								<div class="list-panel-type-pills">
+									{#if infoWriteTypes.length > 0}
+										{#each infoWriteTypes as ct}
+											<span class="list-panel-type-pill">
+												<img src={ct.emoji} alt="" class="list-panel-type-emoji" />
+												<span>{ct.label}</span>
+											</span>
+										{/each}
+									{:else if item.sectionName}
+										<span class="list-panel-type-pill">
+											<span>{item.sectionName}</span>
+										</span>
+									{/if}
+								</div>
+							</div>
 						{/if}
-						<div class="community-info-profiles-section">
-							<h3 class="community-info-profiles-label">PROFILES</h3>
-							{#if isCommunityAdmin && joinRequestsCount > 0}
+						<div class="list-panel-divider"></div>
+						<!-- Section 3: profile list rows + actions -->
+						<div class="list-panel-section list-panel-section-profiles">
+							{#if listMembers.length > 0}
+								<ul class="info-list-members-list">
+									{#each listMembers.slice(0, 5) as pk}
+										{@const p = profilesByPubkey.get(pk)}
+										<li class="info-list-member-row">
+											{#if p?.picture}
+												<img src={p.picture} alt="" class="info-list-member-avatar" />
+											{:else}
+												<div
+													class="info-list-member-avatar info-list-member-avatar-placeholder"
+												></div>
+											{/if}
+											<span class="info-list-member-name"
+												>{p?.name ?? p?.display_name ?? pk.slice(0, 8) + '…'}</span
+											>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+							<div class="info-list-actions">
 								<button
 									type="button"
-									class="members-join-requests-panel"
-									onclick={() => (joinRequestsModalOpen = true)}
+									class="btn-view-more"
+									onclick={() => {
+										communityInfoModalOpen = false;
+										openList(item.listAddress);
+									}}>View All</button
 								>
-									<span class="members-panel-label">Join Requests</span>
-									<span class="members-panel-count">{joinRequestsCount}</span>
-								</button>
-							{/if}
-							{#if membersListData.length === 0}
-								<p class="community-info-profiles-empty">No profile lists found.</p>
-							{/if}
-							{#each membersListData as item}
-								{@const listMembers = item.parsed?.members ?? []}
-								{@const infoWriteTypes = contentTypesFromKinds(item.sectionKinds ?? [])}
-								<div class="info-list-panel">
-									<!-- Section 1: badge + name + description -->
-									<div class="list-panel-section">
-										<SingleBadge
-											image={item.parsed?.image ?? null}
-											name={item.parsed?.name ?? item.sectionName}
-											sizePx={52}
-										/>
-										<div class="list-panel-meta">
-											<span class="list-panel-name">{item.parsed?.name ?? item.sectionName}</span>
-											{#if item.parsed?.content}
-												<span class="list-panel-desc">{item.parsed.content}</span>
-											{/if}
-										</div>
-									</div>
-									{#if infoWriteTypes.length > 0 || item.sectionName}
-										<div class="list-panel-divider"></div>
-										<!-- Section 2: CAN WRITE -->
-										<div class="list-panel-section list-panel-section-write">
-											<p class="list-panel-write-label">CAN WRITE</p>
-											<div class="list-panel-type-pills">
-												{#if infoWriteTypes.length > 0}
-													{#each infoWriteTypes as ct}
-														<span class="list-panel-type-pill">
-															<img src={ct.emoji} alt="" class="list-panel-type-emoji" />
-															<span>{ct.label}</span>
-														</span>
-													{/each}
-												{:else if item.sectionName}
-													<span class="list-panel-type-pill">
-														<span>{item.sectionName}</span>
-													</span>
-												{/if}
-											</div>
-										</div>
-									{/if}
-									<div class="list-panel-divider"></div>
-									<!-- Section 3: profile list rows + actions -->
-									<div class="list-panel-section list-panel-section-profiles">
-										{#if listMembers.length > 0}
-											<ul class="info-list-members-list">
-												{#each listMembers.slice(0, 5) as pk}
-													{@const p = profilesByPubkey.get(pk)}
-													<li class="info-list-member-row">
-														{#if p?.picture}
-															<img src={p.picture} alt="" class="info-list-member-avatar" />
-														{:else}
-															<div
-																class="info-list-member-avatar info-list-member-avatar-placeholder"
-															></div>
-														{/if}
-														<span class="info-list-member-name"
-															>{p?.name ?? p?.display_name ?? pk.slice(0, 8) + '…'}</span
-														>
-													</li>
-												{/each}
-											</ul>
-										{/if}
-										<div class="info-list-actions">
-											<button
-												type="button"
-												class="btn-view-more"
-												onclick={() => {
-													communityInfoModalOpen = false;
-													openList(item.listAddress);
-												}}>View All</button
-											>
-											<div class="info-list-actions-right">
-												{#if isCommunityAdmin}
-													<button
-														type="button"
-														class="btn-primary-small info-list-action-btn"
-														aria-label="Edit list"
-														onclick={() => {
-															communityInfoModalOpen = false;
-															openList(item.listAddress);
-														}}
-													>
-														<Pen variant="fill" size={13} color="hsl(var(--white66))" />
-														<span>Edit</span>
-													</button>
-												{/if}
-												{#if item.parsed?.form && !listMembers.includes(currentPubkey)}
-													<button
-														type="button"
-														class="btn-primary-small info-list-action-btn"
-														onclick={() => {
-															selectedJoinList = {
-																formAddress: item.parsed.form,
-																listName: item.parsed?.name,
-																listAddress: item.listAddress
-															};
-															joinModalOpen = true;
-														}}>Join</button
-													>
-												{/if}
-											</div>
-										</div>
-									</div>
-								</div>
-							{/each}
-						</div>
-					</div>
-					{#if communityEditModalOpen}
-						<Modal
-							open={true}
-							onClose={() => {
-								communityEditModalOpen = false;
-								communityEditTarget = null;
-								communityEditError = '';
-							}}
-							ariaLabel="Edit community"
-							zIndex={51}
-							padContent={true}
-						>
-							{#if communityEditTarget === 'picture'}
-								<h2 class="join-modal-title">Edit picture</h2>
-								<form
-									class="join-form"
-									onsubmit={(e) => {
-										e.preventDefault();
-										saveCommunityEditPicture();
-									}}
-								>
-									<div class="join-form-field">
-										<label class="labels-label" for="edit-community-picture">Picture URL</label>
-										<InputTextField
-											bind:value={communityEditPicture}
-											placeholder="https://…"
-											singleLine={true}
-											id="edit-community-picture"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									{#if communityEditError}<p class="text-sm text-red-500">
-											{communityEditError}
-										</p>{/if}
-									<div class="join-modal-actions">
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => {
-												communityEditModalOpen = false;
-												communityEditTarget = null;
-											}}>Cancel</button
-										>
-										<button
-											type="submit"
-											class="btn-primary-small"
-											disabled={communityEditSubmitting}
-											>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
-										>
-									</div>
-								</form>
-							{:else if communityEditTarget === 'name'}
-								<h2 class="join-modal-title">Edit name</h2>
-								<form
-									class="join-form"
-									onsubmit={(e) => {
-										e.preventDefault();
-										saveCommunityEditName();
-									}}
-								>
-									<div class="join-form-field">
-										<label class="labels-label" for="edit-community-name">Community name</label>
-										<InputTextField
-											bind:value={communityEditName}
-											placeholder="Name"
-											singleLine={true}
-											id="edit-community-name"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									{#if communityEditError}<p class="text-sm text-red-500">
-											{communityEditError}
-										</p>{/if}
-									<div class="join-modal-actions">
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => {
-												communityEditModalOpen = false;
-												communityEditTarget = null;
-											}}>Cancel</button
-										>
-										<button
-											type="submit"
-											class="btn-primary-small"
-											disabled={communityEditSubmitting}
-											>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
-										>
-									</div>
-								</form>
-							{:else if communityEditTarget === 'description'}
-								<h2 class="join-modal-title">Edit description</h2>
-								<form
-									class="join-form"
-									onsubmit={(e) => {
-										e.preventDefault();
-										saveCommunityEditDescription();
-									}}
-								>
-									<div class="join-form-field">
-										<label class="labels-label" for="edit-community-desc">Description</label>
-										<InputTextField
-											bind:value={communityEditDescription}
-											placeholder="Description"
-											singleLine={false}
-											size="medium"
-											id="edit-community-desc"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									{#if communityEditError}<p class="text-sm text-red-500">
-											{communityEditError}
-										</p>{/if}
-									<div class="join-modal-actions">
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => {
-												communityEditModalOpen = false;
-												communityEditTarget = null;
-											}}>Cancel</button
-										>
-										<button
-											type="submit"
-											class="btn-primary-small"
-											disabled={communityEditSubmitting}
-											>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
-										>
-									</div>
-								</form>
-							{:else if communityEditTarget === 'relays'}
-								<h2 class="join-modal-title">Edit servers</h2>
-								<form
-									class="join-form"
-									onsubmit={(e) => {
-										e.preventDefault();
-										saveCommunityEditServers();
-									}}
-								>
-									<div class="join-form-field">
-										<label class="labels-label" for="edit-community-relays"
-											>Relays (one per line or comma-separated)</label
-										>
-										<InputTextField
-											bind:value={communityEditRelays}
-											placeholder="wss://…"
-											singleLine={false}
-											size="medium"
-											id="edit-community-relays"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-										<label class="relay-enforced-label">
-											<input type="checkbox" bind:checked={communityEditRelayEnforced} />
-											Main relay is enforced (relay filters membership — skip client-side author filter)
-										</label>
-									</div>
-									<div class="join-form-field">
-										<label class="labels-label" for="edit-community-blossom"
-											>Blossom servers (one per line or comma-separated)</label
-										>
-										<InputTextField
-											bind:value={communityEditBlossom}
-											placeholder="https://…"
-											singleLine={false}
-											size="medium"
-											id="edit-community-blossom"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									{#if communityEditError}<p class="text-sm text-red-500">
-											{communityEditError}
-										</p>{/if}
-									<div class="join-modal-actions">
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => {
-												communityEditModalOpen = false;
-												communityEditTarget = null;
-											}}>Cancel</button
-										>
-										<button
-											type="submit"
-											class="btn-primary-small"
-											disabled={communityEditSubmitting}
-											>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
-										>
-									</div>
-								</form>
-							{:else if communityEditTarget && String(communityEditTarget).startsWith('section-')}
-								<h2 class="join-modal-title">Edit content section</h2>
-								<form
-									class="join-form"
-									onsubmit={(e) => {
-										e.preventDefault();
-										saveCommunityEditSection();
-									}}
-								>
-									<div class="join-form-field">
-										<label class="labels-label" for="edit-section-name">Section name</label>
-										<InputTextField
-											bind:value={communityEditSectionName}
-											placeholder="e.g. Forum, Chat"
-											singleLine={true}
-											id="edit-section-name"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									<div class="join-form-field">
-										<label class="labels-label" for="edit-section-list"
-											>Profile list address (who can write)</label
-										>
-										<InputTextField
-											bind:value={communityEditSectionListAddress}
-											placeholder="30000:pubkey:d-tag"
-											singleLine={true}
-											id="edit-section-list"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									{#if communityEditError}<p class="text-sm text-red-500">
-											{communityEditError}
-										</p>{/if}
-									<div class="join-modal-actions">
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => {
-												communityEditModalOpen = false;
-												communityEditTarget = null;
-											}}>Cancel</button
-										>
-										<button
-											type="submit"
-											class="btn-primary-small"
-											disabled={communityEditSubmitting}
-											>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
-										>
-									</div>
-								</form>
-							{:else if communityEditTarget === 'full'}
-								<h2 class="join-modal-title">Edit community</h2>
-								<div class="community-edit-full">
-									<section class="community-edit-full-section">
-										<h3 class="community-edit-full-section-title">Picture</h3>
-										<div class="join-form-field">
-											<label class="labels-label" for="edit-full-picture">Picture URL</label>
-											<InputTextField
-												bind:value={communityEditPicture}
-												placeholder="https://…"
-												singleLine={true}
-												id="edit-full-picture"
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
-										</div>
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => saveCommunityEditPicture()}
-											disabled={communityEditSubmitting}>Save picture</button
-										>
-									</section>
-									<section class="community-edit-full-section">
-										<h3 class="community-edit-full-section-title">Name</h3>
-										<div class="join-form-field">
-											<label class="labels-label" for="edit-full-name">Community name</label>
-											<InputTextField
-												bind:value={communityEditName}
-												placeholder="Name"
-												singleLine={true}
-												id="edit-full-name"
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
-										</div>
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => saveCommunityEditName()}
-											disabled={communityEditSubmitting}>Save name</button
-										>
-									</section>
-									<section class="community-edit-full-section">
-										<h3 class="community-edit-full-section-title">Description</h3>
-										<div class="join-form-field">
-											<label class="labels-label" for="edit-full-desc">Description</label>
-											<InputTextField
-												bind:value={communityEditDescription}
-												placeholder="Description"
-												singleLine={false}
-												size="medium"
-												id="edit-full-desc"
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
-										</div>
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => saveCommunityEditDescription()}
-											disabled={communityEditSubmitting}>Save description</button
-										>
-									</section>
-									<section class="community-edit-full-section">
-										<h3 class="community-edit-full-section-title">Servers</h3>
-										<div class="join-form-field">
-											<label class="labels-label" for="edit-full-relays"
-												>Relays (one per line or comma-separated)</label
-											>
-											<InputTextField
-												bind:value={communityEditRelays}
-												placeholder="wss://…"
-												singleLine={false}
-												size="medium"
-												id="edit-full-relays"
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
-											<label class="relay-enforced-label">
-												<input type="checkbox" bind:checked={communityEditRelayEnforced} />
-												Main relay is enforced (relay filters membership — skip client-side author filter)
-											</label>
-										</div>
-										<div class="join-form-field">
-											<label class="labels-label" for="edit-full-blossom">Blossom servers</label>
-											<InputTextField
-												bind:value={communityEditBlossom}
-												placeholder="https://…"
-												singleLine={false}
-												size="medium"
-												id="edit-full-blossom"
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
-										</div>
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => saveCommunityEditServers()}
-											disabled={communityEditSubmitting}>Save servers</button
-										>
-									</section>
-									<section class="community-edit-full-section">
-										<h3 class="community-edit-full-section-title">Content sections</h3>
-										<p class="community-edit-full-section-desc">
-											Name + profile list (who can write) per section.
-										</p>
-										<ul class="community-edit-full-sections-list">
-											{#each communityModalSections as sec, i}
-												<li class="community-edit-full-section-item">
-													<span class="community-edit-full-section-name">{sec.sectionName}</span>
-													<span class="community-edit-full-section-list-label">{sec.listName}</span>
-													<button
-														type="button"
-														class="btn-secondary-small"
-														onclick={() => openCommunityEdit(`section-${i}`)}>Edit</button
-													>
-												</li>
-											{/each}
-										</ul>
-									</section>
-									{#if communityEditError}<p class="text-sm text-red-500">
-											{communityEditError}
-										</p>{/if}
-									<div class="join-modal-actions" style="margin-top: 1rem;">
-										<button
-											type="button"
-											class="btn-secondary-small"
-											onclick={() => {
-												communityEditModalOpen = false;
-												communityEditTarget = null;
-												communityInfoModalOpen = false;
-											}}>Done</button
-										>
-									</div>
-								</div>
-							{:else}
-								<p class="community-edit-placeholder">Unknown edit.</p>
-							{/if}
-						</Modal>
-					{/if}
-				{/if}
-			</Modal>
-
-			<Modal
-				open={adminCrownModalOpen}
-				onClose={() => {
-					adminCrownModalOpen = false;
-					adminSaveError = '';
-				}}
-				ariaLabel="Admin settings"
-				fillHeight={true}
-				padContent={true}
-			>
-				{#if adminCrownModalOpen}
-					<div class="crown-modal-layout">
-						<div class="crown-modal-head">
-							<h2 class="join-modal-title crown-modal-title">Admin</h2>
-							<Selector
-								options={['General', 'Content', 'Profiles', 'Forms']}
-								selectedOption={adminCrownSection}
-								onSelect={(opt) => (adminCrownSection = opt)}
-							/>
-							<div class="crown-modal-divider"></div>
-						</div>
-						<div class="crown-modal-body">
-							{#if adminCrownSection === 'General'}
-								<div class="admin-tab crown-admin-general">
-									<div class="admin-form-section">
-										<label class="labels-label" for="crown-admin-picture">Picture URL</label>
-										<InputTextField
-											bind:value={adminPicture}
-											placeholder="https://…"
-											singleLine={true}
-											id="crown-admin-picture"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									<div class="admin-form-section">
-										<label class="labels-label" for="crown-admin-name">Community name</label>
-										<InputTextField
-											bind:value={adminName}
-											placeholder="Name"
-											singleLine={true}
-											id="crown-admin-name"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									<div class="admin-form-section">
-										<label class="labels-label" for="crown-admin-desc">Description</label>
-										<InputTextField
-											bind:value={adminDescription}
-											placeholder="Description"
-											singleLine={false}
-											size="medium"
-											id="crown-admin-desc"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									<div class="admin-form-section">
-										<label class="labels-label" for="crown-admin-relays"
-											>Relays (one per line or comma-separated)</label
-										>
-										<InputTextField
-											bind:value={adminRelays}
-											placeholder="wss://…"
-											singleLine={false}
-											size="medium"
-											id="crown-admin-relays"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-										<label class="relay-enforced-label">
-											<input type="checkbox" bind:checked={adminRelayEnforced} />
-											Main relay is enforced (relay filters membership — skip client-side author filter)
-										</label>
-									</div>
-									<div class="admin-form-section">
-										<label class="labels-label" for="crown-admin-blossom">Blossom servers</label>
-										<InputTextField
-											bind:value={adminBlossom}
-											placeholder="https://…"
-											singleLine={false}
-											size="medium"
-											id="crown-admin-blossom"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-									{#if adminSaveError}<p class="text-sm text-red-500">{adminSaveError}</p>{/if}
-									<div class="join-modal-actions crown-save-row">
-										<button
-											type="button"
-											class="btn-primary-small"
-											disabled={adminSaveSubmitting}
-											onclick={() => saveCommunityAdminAll()}
-										>
-											{adminSaveSubmitting ? 'Saving…' : 'Save'}
-										</button>
-									</div>
-								</div>
-							{:else if adminCrownSection === 'Content'}
-								<div class="crown-content-tab">
-									{#each ADMIN_SECTION_PRESETS.filter((p) => adminSectionEnabled[p.id]) as preset}
-										{@const addrs = Array.isArray(adminSectionListAddress[preset.id])
-											? adminSectionListAddress[preset.id]
-											: adminSectionListAddress[preset.id]
-												? [adminSectionListAddress[preset.id]]
-												: []}
-										{@const listItems = adminProfileLists
-											.filter((l) => addrs.includes(l.listAddress))
-											.map((l) => ({ image: l.image, name: l.name }))}
-										<button
-											type="button"
-											class="admin-section-row admin-section-row-clickable"
-											onclick={() => (adminSectionModalPresetId = preset.id)}
-										>
-											<span class="admin-section-emoji-slot"></span>
-											<span class="admin-section-name">{preset.name}</span>
-											<span class="admin-section-badges-wrap">
-												<BadgeStack
-													items={listItems}
-													maxDisplay={3}
-													overlapPx={16}
-													badgeSizePx={32}
-												/>
-												<ChevronRight
-													variant="outline"
-													size={16}
-													color="hsl(var(--white33))"
-													className="admin-section-chevron"
-												/>
-											</span>
-										</button>
-									{/each}
-									<div class="admin-section-add-row">
-										<button
-											type="button"
-											class="admin-section-add-btn"
-											onclick={() => (adminAddSectionOpen = true)}
-											aria-label="Add content section"
-										>
-											<Plus variant="outline" size={18} color="hsl(var(--white66))" />
-											<span>Add content section</span>
-										</button>
-									</div>
-								</div>
-							{:else if adminCrownSection === 'Profiles'}
-								<div class="crown-profiles-tab">
-									{#if allAdminProfileLists.length === 0}
-										<p class="community-info-profiles-empty">No profile lists yet.</p>
-									{/if}
-									{#each allAdminProfileLists as item}
-										{@const listDisplayName = item.parsed?.name ?? item.name ?? item.sectionName}
-										<div class="info-list-panel">
-											<!-- Section 1: badge + name + description -->
-											<div class="list-panel-section">
-												<SingleBadge
-													image={item.parsed?.image ?? null}
-													name={listDisplayName}
-													sizePx={52}
-												/>
-												<div class="list-panel-meta">
-													<span class="list-panel-name">{listDisplayName}</span>
-													{#if item.parsed?.content}
-														<span class="list-panel-desc">{item.parsed.content}</span>
-													{/if}
-												</div>
-											</div>
-											{#if item.sectionName && item.sectionName !== '—'}
-												<div class="list-panel-divider"></div>
-												<!-- Section 2: CAN WRITE -->
-												<div class="list-panel-section list-panel-section-write">
-													<p class="list-panel-write-label">CAN WRITE</p>
-													<div class="list-panel-type-pills">
-														<span class="list-panel-type-pill"><span>{item.sectionName}</span></span
-														>
-													</div>
-												</div>
-											{/if}
-											<div class="list-panel-divider"></div>
-											<div class="info-list-actions">
-												<button
-													type="button"
-													class="btn-view-more"
-													onclick={() => {
-														adminCrownModalOpen = false;
-														openList(item.listAddress);
-													}}>View All</button
-												>
-												<button
-													type="button"
-													class="btn-primary-small info-list-action-btn"
-													aria-label="Edit list"
-													onclick={() => {
-														adminCrownModalOpen = false;
-														openList(item.listAddress);
-													}}
-												>
-													<Pen variant="fill" size={13} color="hsl(var(--white66))" />
-													<span>Edit</span>
-												</button>
-											</div>
-										</div>
-									{/each}
-									<div class="admin-section-add-row">
-										<button
-											type="button"
-											class="admin-section-add-btn"
-											onclick={() => openListFormModal('add')}
-											aria-label="Add profile list"
-										>
-											<Plus variant="outline" size={18} color="hsl(var(--white66))" />
-											<span>Add profile list</span>
-										</button>
-									</div>
-								</div>
-							{:else if adminCrownSection === 'Forms'}
-								<div class="crown-forms-tab">
-									{#if formTemplateModal}
-										<!-- Inline form editor -->
-										<form
-											class="join-form ft-form"
-											onsubmit={(e) => {
-												e.preventDefault();
-												saveFormTemplate();
-											}}
-										>
-											<div class="ft-inline-back">
-												<button
-													type="button"
-													class="ft-back-btn"
-													onclick={() => {
-														formTemplateModal = null;
-														formTemplateError = '';
-													}}>← Back</button
-												>
-												<span class="ft-inline-title"
-													>{formTemplateModal.mode === 'edit' ? 'Edit form' : 'New form'}</span
-												>
-											</div>
-
-											<div class="join-form-field">
-												<label class="labels-label" for="ft-name">Form name</label>
-												<InputTextField
-													bind:value={formTemplateName}
-													placeholder="e.g. Membership Application"
-													singleLine={true}
-													id="ft-name"
-													oninput={() => {}}
-													onkeydown={() => {}}
-													onfocus={() => {}}
-													onblur={() => {}}
-												/>
-											</div>
-											{#if formTemplateModal.mode === 'add'}
-												<div class="join-form-field">
-													<label class="labels-label" for="ft-dtag">Form ID (slug)</label>
-													<InputTextField
-														bind:value={formTemplateDTag}
-														placeholder="e.g. membership-application"
-														singleLine={true}
-														id="ft-dtag"
-														oninput={() => {}}
-														onkeydown={() => {}}
-														onfocus={() => {}}
-														onblur={() => {}}
-													/>
-												</div>
-											{:else}
-												<p class="ft-id-display">ID: <code>{formTemplateDTag}</code></p>
-											{/if}
-											<div class="join-form-field">
-												<label class="labels-label" for="ft-description">Description</label>
-												<InputTextField
-													bind:value={formTemplateDescription}
-													placeholder="What is this form for?"
-													singleLine={false}
-													size="medium"
-													id="ft-description"
-													oninput={() => {}}
-													onkeydown={() => {}}
-													onfocus={() => {}}
-													onblur={() => {}}
-												/>
-											</div>
-
-											<div class="ft-section-header">
-												<span class="labels-label">Fields</span>
-												<button type="button" class="ft-add-field-btn" onclick={addFormField}
-													>+ Add field</button
-												>
-											</div>
-											{#each formTemplateFields as field, idx}
-												<div class="ft-field-row">
-													<div class="ft-field-top">
-														<InputTextField
-															bind:value={formTemplateFields[idx].id}
-															placeholder="field-id"
-															singleLine={true}
-															oninput={() => {}}
-															onkeydown={() => {}}
-															onfocus={() => {}}
-															onblur={() => {}}
-														/>
-														<select
-															class="ft-type-select"
-															value={field.type}
-															onchange={(e) => updateFormField(idx, 'type', e.currentTarget.value)}
-														>
-															<option value="text">Text</option>
-															<option value="textarea">Textarea</option>
-															<option value="number">Number</option>
-															<option value="email">Email</option>
-															<option value="url">URL</option>
-															<option value="select">Select</option>
-															<option value="checkbox">Checkbox</option>
-															<option value="radio">Radio</option>
-															<option value="date">Date</option>
-														</select>
-														<button
-															type="button"
-															class="ft-remove-btn"
-															onclick={() => removeFormField(idx)}
-															aria-label="Remove field">×</button
-														>
-													</div>
-													<div class="ft-field-bottom">
-														<InputTextField
-															bind:value={formTemplateFields[idx].label}
-															placeholder="Label shown to user"
-															singleLine={true}
-															oninput={() => {}}
-															onkeydown={() => {}}
-															onfocus={() => {}}
-															onblur={() => {}}
-														/>
-														<InputTextField
-															bind:value={formTemplateFields[idx].placeholder}
-															placeholder="Placeholder hint"
-															singleLine={true}
-															oninput={() => {}}
-															onkeydown={() => {}}
-															onfocus={() => {}}
-															onblur={() => {}}
-														/>
-														<label class="ft-required-label">
-															<input
-																type="checkbox"
-																checked={field.required}
-																onchange={(e) =>
-																	updateFormField(idx, 'required', e.currentTarget.checked)}
-															/>
-															Required
-														</label>
-													</div>
-													{#if field.type === 'select' || field.type === 'radio'}
-														<div class="ft-field-options">
-															<InputTextField
-																value={field.selectOptions.join(', ')}
-																placeholder="Options, comma-separated"
-																singleLine={true}
-																oninput={(e) =>
-																	updateFormField(
-																		idx,
-																		'selectOptions',
-																		e.currentTarget.value
-																			.split(',')
-																			.map((s) => s.trim())
-																			.filter(Boolean)
-																	)}
-																onkeydown={() => {}}
-																onfocus={() => {}}
-																onblur={() => {}}
-															/>
-														</div>
-													{/if}
-												</div>
-											{/each}
-											{#if formTemplateFields.length === 0}
-												<p class="ft-no-fields">No fields yet. Add one above.</p>
-											{/if}
-
-											<div class="join-form-field">
-												<label class="labels-label" for="ft-confirm-msg">Confirmation message</label
-												>
-												<InputTextField
-													bind:value={formTemplateConfirmMsg}
-													placeholder="Shown to users after they submit (e.g. Thank you! We'll review within 48h.)"
-													singleLine={false}
-													size="medium"
-													id="ft-confirm-msg"
-													oninput={() => {}}
-													onkeydown={() => {}}
-													onfocus={() => {}}
-													onblur={() => {}}
-												/>
-											</div>
-											<label class="ft-public-label">
-												<input type="checkbox" bind:checked={formTemplatePublic} />
-												Public responses (unencrypted)
-											</label>
-
-											{#if formTemplateError}<p class="text-sm text-red-500">
-													{formTemplateError}
-												</p>{/if}
-											<div class="join-modal-actions" style="margin-top: 0.75rem;">
-												<button
-													type="button"
-													class="btn-secondary-small"
-													onclick={() => {
-														formTemplateModal = null;
-														formTemplateError = '';
-													}}>Cancel</button
-												>
-												<button
-													type="submit"
-													class="btn-primary-small"
-													disabled={formTemplateSubmitting}
-													>{formTemplateSubmitting ? 'Saving…' : 'Save'}</button
-												>
-											</div>
-										</form>
-									{:else}
-										<!-- Form list -->
-										{#if adminFormTemplates.length === 0}
-											<p class="community-info-profiles-empty">No form templates yet.</p>
-										{:else}
-											{#each adminFormTemplates as item}
-												<div class="info-list-panel crown-form-panel">
-													<div class="info-list-panel-meta" style="padding: 0;">
-														<span class="info-list-panel-name"
-															>{item.parsed?.name || item.parsed?.dTag || 'Untitled form'}</span
-														>
-														{#if item.linkedLists.length > 0}
-															<span class="info-list-panel-desc"
-																>Used by: {item.linkedLists.join(', ')}</span
-															>
-														{:else}
-															<span class="info-list-panel-desc crown-form-address"
-																>{item.formAddr}</span
-															>
-														{/if}
-													</div>
-													<div class="info-list-actions" style="margin-top: 0.5rem;">
-														<button
-															type="button"
-															class="btn-primary-small info-list-action-btn"
-															onclick={() => openFormTemplateModal('edit', item)}
-														>
-															<Pen variant="fill" size={13} color="hsl(var(--white66))" />
-															<span>Edit</span>
-														</button>
-													</div>
-												</div>
-											{/each}
-										{/if}
-										<div class="admin-section-add-row">
-											<button
-												type="button"
-												class="admin-section-add-btn"
-												onclick={() => openFormTemplateModal('add')}
-											>
-												<Plus variant="outline" size={18} color="hsl(var(--white66))" />
-												<span>New form template</span>
-											</button>
-										</div>
-									{/if}
-								</div>
-							{/if}
-						</div>
-					</div>
-				{/if}
-			</Modal>
-
-			<Modal
-				open={joinRequestsModalOpen}
-				onClose={() => (joinRequestsModalOpen = false)}
-				ariaLabel="Join requests"
-				padContent={true}
-			>
-				{#if joinRequestsModalOpen}
-					<h2 class="join-modal-title">Join requests</h2>
-					{#if joinRequestsList.length === 0}
-						<p class="text-sm text-muted-foreground">No pending requests.</p>
-					{:else}
-						<ul class="requests-list">
-							{#each joinRequestsList as req}
-								{@const listEv = getListByFormAddress(req.tags?.find((t) => t[0] === 'a')?.[1])}
-								{@const alreadyMember =
-									listEv && parseProfileList(listEv)?.members?.includes(req.pubkey)}
-								<li class="request-item request-item-row">
-									<ProfilePic pubkey={req.pubkey} size="sm" />
-									<div class="request-meta">
-										<span class="request-pubkey">{req.pubkey.slice(0, 12)}…</span>
-										<span class="request-date">{formatDate(req.created_at)}</span>
-										{#if joinRequestsDecrypted.get(req.id)}
-											{@const raw = joinRequestsDecrypted.get(req.id)}
-											{@const parsed = (() => {
-												try {
-													return JSON.parse(raw);
-												} catch {
-													return null;
-												}
-											})()}
-											{#if Array.isArray(parsed)}
-												{#each parsed.filter((t) => t[0] === 'response' && t[1]) as entry}
-													<p class="request-field">
-														<span class="request-field-label">{entry[1]}:</span>
-														{entry[2] ?? ''}
-													</p>
-												{/each}
-											{:else}
-												<p class="request-message">{raw}</p>
-											{/if}
-										{/if}
-									</div>
-									{#if !alreadyMember}
-										<button
-											type="button"
-											class="btn-primary-small"
-											disabled={joinRequestsApprovingId === req.id}
-											onclick={() => approveJoinRequest(req)}
-										>
-											{joinRequestsApprovingId === req.id ? 'Adding…' : 'Approve'}
-										</button>
-									{:else}
-										<span class="text-muted-foreground text-sm">Member</span>
-									{/if}
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				{/if}
-			</Modal>
-
-			{#key listViewMoreModal?.listAddress ?? 'closed'}
-				<Modal
-					open={!!listViewMoreModal}
-					onClose={() => {
-						listViewMoreModal = null;
-						listViewMoreAddInput = '';
-						listViewMoreAddError = '';
-					}}
-					ariaLabel="List members"
-					maxWidth="max-w-md"
-					padContent={true}
-				>
-					{#if listViewMoreModal}
-						{@const listEvent = listViewMoreModal.listEvent}
-						{@const parsed = listViewMoreModal.parsed ?? parseProfileList(listEvent)}
-						{@const members = parsed?.members ?? []}
-						<div class="list-form-modal-content">
-							<h2 class="join-modal-title">{parsed?.name ?? 'List'}</h2>
-							{#if isCommunityAdmin}
-								<div class="list-modal-add-wrap">
-									<InputTextField
-										bind:value={listViewMoreAddInput}
-										placeholder="npub or hex pubkey to add"
-										singleLine={true}
-										onkeydown={({ key }) => key === 'Enter' && addProfileToList(listEvent)}
-										oninput={() => {}}
-										onfocus={() => {}}
-										onblur={() => {}}
-									/>
-									<button
-										type="button"
-										class="btn-primary-small"
-										disabled={listViewMoreAddSubmitting || !listViewMoreAddInput.trim()}
-										onclick={() => addProfileToList(listEvent)}
-									>
-										{listViewMoreAddSubmitting ? 'Adding…' : 'Add'}
-									</button>
-									<button
-										type="button"
-										class="list-panel-edit-btn"
-										aria-label="Edit list"
-										onclick={() => openListFormModal('edit', listViewMoreModal)}>Edit</button
-									>
-								</div>
-								{#if listViewMoreAddError}
-									<p class="text-sm text-red-500">{listViewMoreAddError}</p>
-								{/if}
-							{/if}
-						</div>
-						<ul class="list-modal-members">
-							{#each members as pubkey}
-								<li class="list-modal-member-row">
-									<ProfilePic {pubkey} size="sm" />
-									<span class="list-modal-member-pubkey">{pubkey.slice(0, 16)}…</span>
+								<div class="info-list-actions-right">
 									{#if isCommunityAdmin}
 										<button
 											type="button"
-											class="list-modal-remove-btn"
-											onclick={() => removeProfileFromList(listEvent, pubkey)}
-											aria-label="Remove"
-										>
-											<Cross
-												variant="outline"
-												size={14}
-												strokeWidth={1.4}
-												color="hsl(var(--white66))"
-											/>
-										</button>
-									{/if}
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				</Modal>
-			{/key}
-
-			{#key listFormModal ? (listFormModal.mode === 'edit' ? listFormModal.listAddress : 'add') : 'closed'}
-				<Modal
-					open={!!listFormModal}
-					onClose={() => {
-						listFormModal = null;
-						listFormError = '';
-					}}
-					ariaLabel="List form"
-					maxWidth="max-w-md"
-					padContent={true}
-				>
-					{#if listFormModal}
-						<div class="list-form-modal-content">
-							<h2 class="join-modal-title">
-								{listFormModal.mode === 'edit' ? 'Edit list' : 'Add list'}
-							</h2>
-							<form
-								class="join-form"
-								onsubmit={(e) => {
-									e.preventDefault();
-									submitListForm();
-								}}
-							>
-								<div class="join-form-field">
-									<label class="labels-label" for="list-form-name">Name</label>
-									<InputTextField
-										bind:value={listFormName}
-										placeholder="List name"
-										singleLine={true}
-										id="list-form-name"
-										oninput={() => {}}
-										onkeydown={() => {}}
-										onfocus={() => {}}
-										onblur={() => {}}
-									/>
-								</div>
-								<div class="join-form-field">
-									<label class="labels-label" for="list-form-image">Image URL</label>
-									<InputTextField
-										bind:value={listFormImage}
-										placeholder="https://… (optional)"
-										singleLine={true}
-										id="list-form-image"
-										oninput={() => {}}
-										onkeydown={() => {}}
-										onfocus={() => {}}
-										onblur={() => {}}
-									/>
-								</div>
-								<div class="join-form-field">
-									<label class="labels-label" for="list-form-description">Description</label>
-									<InputTextField
-										bind:value={listFormDescription}
-										placeholder="Description (optional)"
-										singleLine={false}
-										size="medium"
-										id="list-form-description"
-										oninput={() => {}}
-										onkeydown={() => {}}
-										onfocus={() => {}}
-										onblur={() => {}}
-									/>
-								</div>
-								<div class="join-form-field">
-									<label class="labels-label" for="list-form-join">Join form</label>
-									{#if adminFormTemplates.length > 0}
-										<select
-											id="list-form-join"
-											class="list-form-select"
-											value={listFormFormAddress}
-											onchange={(e) => {
-												listFormFormAddress = e.currentTarget.value;
+											class="btn-primary-small info-list-action-btn"
+											aria-label="Edit list"
+											onclick={() => {
+												communityInfoModalOpen = false;
+												openList(item.listAddress);
 											}}
 										>
-											<option value="">— No form —</option>
-											{#each adminFormTemplates as tpl (tpl.formAddr)}
-												<option value={tpl.formAddr}>{tpl.parsed?.name ?? tpl.formAddr}</option>
-											{/each}
-										</select>
-									{:else}
-										<InputTextField
-											bind:value={listFormFormAddress}
-											placeholder="30168:pubkey:d-tag (optional)"
-											singleLine={true}
-											id="list-form-join"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-										<p class="list-form-hint">
-											No forms found — create one in the Forms tab first.
-										</p>
+											<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+											<span>Edit</span>
+										</button>
+									{/if}
+									{#if item.parsed?.form && !listMembers.includes(currentPubkey)}
+										<button
+											type="button"
+											class="btn-primary-small info-list-action-btn"
+											onclick={() => {
+												selectedJoinList = {
+													formAddress: item.parsed.form,
+													listName: item.parsed?.name,
+													listAddress: item.listAddress
+												};
+												joinModalOpen = true;
+											}}>Join</button
+										>
 									{/if}
 								</div>
-								{#if listFormError}
-									<p class="text-sm text-red-500">{listFormError}</p>
-								{/if}
-								<div class="join-modal-actions">
-									<button
-										type="button"
-										class="btn-secondary-small"
-										onclick={() => {
-											listFormModal = null;
-											listFormError = '';
-										}}>Cancel</button
-									>
-									<button type="submit" class="btn-primary-small" disabled={listFormSubmitting}
-										>{listFormSubmitting
-											? listFormModal.mode === 'edit'
-												? 'Saving…'
-												: 'Adding…'
-											: listFormModal.mode === 'edit'
-												? 'Save'
-												: 'Add list'}</button
-									>
-								</div>
-							</form>
+							</div>
 						</div>
-					{/if}
-				</Modal>
-			{/key}
-
-			<!-- ListModal: create new list from the Profiles section BottomBar -->
-			<ListModal
-				bind:isOpen={addListModalOpen}
-				formTemplates={adminFormTemplates}
-				onsubmit={async ({ name, image, description, formAddress, dTag }) => {
-					if (!selectedCommunity?.pubkey) throw new Error('No community');
-					const tags = [
-						['d', dTag],
-						['name', name],
-						['p', selectedCommunity.pubkey]
-					];
-					if (image) tags.push(['image', image]);
-					if (formAddress) tags.push(['form', formAddress]);
-					const listEv = await signEvent({
-						kind: EVENT_KINDS.PROFILE_LIST,
-						content: description ?? '',
-						tags,
-						created_at: Math.floor(Date.now() / 1000)
-					});
-					const relays = [
-						...new Set([...(selectedCommunity.relays ?? []), ...COMMUNITY_WRITE_RELAYS])
-					];
-					await putEvents([listEv]);
-					await publishToRelays(relays, listEv);
-					const newParsed = parseProfileList(listEv);
-					const newListItem = {
-						listAddress: `30000:${listEv.pubkey}:${dTag}`,
-						name: newParsed?.name ?? name,
-						image: newParsed?.image ?? null,
-						listEvent: listEv,
-						parsed: newParsed
-					};
-					adminProfileLists = [...adminProfileLists, newListItem];
+					</div>
+				{/each}
+			</div>
+		</div>
+		{#if communityEditModalOpen}
+			<Modal
+				open={true}
+				onClose={() => {
+					communityEditModalOpen = false;
+					communityEditTarget = null;
+					communityEditError = '';
 				}}
-				onclose={() => (addListModalOpen = false)}
-			/>
-
-			{#key adminListPickerPresetId ?? 'closed'}
-				<Modal
-					open={adminListPickerPresetId != null}
-					onClose={() => (adminListPickerPresetId = null)}
-					ariaLabel="Choose lists for section"
-					maxWidth="max-w-md"
-					padContent={true}
-				>
-					{#if adminListPickerPresetId}
-						{@const presetId = adminListPickerPresetId}
-						{@const preset = ADMIN_SECTION_PRESETS.find((p) => p.id === presetId)}
-						<h2 class="join-modal-title">Choose lists for {preset?.name ?? presetId}</h2>
-						<p class="list-picker-desc">
-							Who can write in this section. Select one or more profile lists.
-						</p>
-						<div class="list-picker-list">
-							{#each adminProfileLists as list (list.listAddress)}
-								{@const addrs = Array.isArray(adminSectionListAddress[presetId])
-									? adminSectionListAddress[presetId]
-									: adminSectionListAddress[presetId]
-										? [adminSectionListAddress[presetId]]
-										: []}
-								{@const selected = addrs.includes(list.listAddress)}
-								<label class="list-picker-row">
-									<Checkbox
-										checked={selected}
-										onChanged={(val) => {
-											const arr = [...addrs];
-											if (val) arr.push(list.listAddress);
-											else {
-												const i = arr.indexOf(list.listAddress);
-												if (i !== -1) arr.splice(i, 1);
-											}
-											adminSectionListAddress = { ...adminSectionListAddress, [presetId]: arr };
-										}}
-									/>
-									<span class="list-picker-name">{list.name}</span>
-								</label>
-							{/each}
+				ariaLabel="Edit community"
+				zIndex={51}
+				padContent={true}
+			>
+				{#if communityEditTarget === 'picture'}
+					<h2 class="join-modal-title">Edit picture</h2>
+					<form
+						class="join-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							saveCommunityEditPicture();
+						}}
+					>
+						<div class="join-form-field">
+							<label class="labels-label" for="edit-community-picture">Picture URL</label>
+							<InputTextField
+								bind:value={communityEditPicture}
+								placeholder="https://…"
+								singleLine={true}
+								id="edit-community-picture"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
 						</div>
-						{#if adminProfileLists.length === 0}
-							<p class="text-sm text-muted-foreground">
-								No profile lists yet. Create one with Add List in the Members tab.
-							</p>
-						{/if}
-						<div class="join-modal-actions">
-							<button
-								type="button"
-								class="btn-primary-small"
-								onclick={() => (adminListPickerPresetId = null)}>Done</button
-							>
-						</div>
-					{/if}
-				</Modal>
-			{/key}
-
-			{#key adminSectionModalPresetId ?? 'closed'}
-				<Modal
-					open={adminSectionModalPresetId != null}
-					onClose={() => (adminSectionModalPresetId = null)}
-					ariaLabel="Section details"
-					maxWidth="max-w-md"
-					padContent={true}
-				>
-					{#if adminSectionModalPresetId}
-						{@const presetId = adminSectionModalPresetId}
-						{@const preset = ADMIN_SECTION_PRESETS.find((p) => p.id === presetId)}
-						<h2 class="join-modal-title">{preset?.name ?? presetId}</h2>
-						{#if preset?.kinds?.length}
-							<p class="admin-section-modal-kinds">
-								Kinds that can be written: {preset.kinds.join(', ')}
-							</p>
-						{/if}
-						<p class="list-picker-desc">
-							Who can write in this section. Select one or more profile lists.
-						</p>
-						<div class="list-picker-list">
-							{#each adminProfileLists as list (list.listAddress)}
-								{@const addrs = Array.isArray(adminSectionListAddress[presetId])
-									? adminSectionListAddress[presetId]
-									: adminSectionListAddress[presetId]
-										? [adminSectionListAddress[presetId]]
-										: []}
-								{@const selected = addrs.includes(list.listAddress)}
-								<label class="list-picker-row">
-									<Checkbox
-										checked={selected}
-										onChanged={(val) => {
-											const arr = [...addrs];
-											if (val) arr.push(list.listAddress);
-											else {
-												const i = arr.indexOf(list.listAddress);
-												if (i !== -1) arr.splice(i, 1);
-											}
-											adminSectionListAddress = { ...adminSectionListAddress, [presetId]: arr };
-										}}
-									/>
-									<span class="list-picker-name">{list.name}</span>
-								</label>
-							{/each}
-						</div>
-						{#if adminProfileLists.length === 0}
-							<p class="text-sm text-muted-foreground">
-								No profile lists yet. Create one with Add List in the Members tab.
-							</p>
-						{/if}
-						<div class="join-modal-actions admin-section-modal-actions">
-							<button
-								type="button"
-								class="btn-danger-small"
-								onclick={() => {
-									adminSectionEnabled = { ...adminSectionEnabled, [presetId]: false };
-									adminSectionListAddress = { ...adminSectionListAddress, [presetId]: [] };
-									adminSectionModalPresetId = null;
-								}}>Delete section</button
-							>
-							<button
-								type="button"
-								class="btn-primary-small"
-								onclick={() => (adminSectionModalPresetId = null)}>Done</button
-							>
-						</div>
-					{/if}
-				</Modal>
-			{/key}
-
-			{#key adminAddSectionOpen ? 'open' : 'closed'}
-				<Modal
-					open={adminAddSectionOpen}
-					onClose={() => (adminAddSectionOpen = false)}
-					ariaLabel="Add content section"
-					maxWidth="max-w-md"
-					padContent={true}
-				>
-					{#if adminAddSectionOpen}
-						<h2 class="join-modal-title">Add content section</h2>
-						<p class="list-picker-desc">
-							Enable a section from presets. Only disabled sections are listed.
-						</p>
-						<div class="list-picker-list">
-							{#each ADMIN_SECTION_PRESETS.filter((p) => !adminSectionEnabled[p.id]) as preset}
-								<button
-									type="button"
-									class="admin-add-section-preset-row"
-									onclick={() => {
-										adminSectionEnabled = { ...adminSectionEnabled, [preset.id]: true };
-										adminAddSectionOpen = false;
-									}}
-								>
-									<span>{preset.name}</span>
-								</button>
-							{/each}
-						</div>
-						{#if ADMIN_SECTION_PRESETS.every((p) => adminSectionEnabled[p.id])}
-							<p class="text-sm text-muted-foreground">All preset sections are already enabled.</p>
-						{/if}
+						{#if communityEditError}<p class="text-sm text-red-500">
+								{communityEditError}
+							</p>{/if}
 						<div class="join-modal-actions">
 							<button
 								type="button"
 								class="btn-secondary-small"
-								onclick={() => (adminAddSectionOpen = false)}>Cancel</button
+								onclick={() => {
+									communityEditModalOpen = false;
+									communityEditTarget = null;
+								}}>Cancel</button
+							>
+							<button type="submit" class="btn-primary-small" disabled={communityEditSubmitting}
+								>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
 							>
 						</div>
-					{/if}
-				</Modal>
-			{/key}
-
-			<ForumPostModal
-				bind:isOpen={addPostModalOpen}
-				communityName={selectedCommunity?.name ?? ''}
-				{getCurrentPubkey}
-				onsubmit={handleForumPostSubmit}
-				onclose={closeCreatePost}
-			/>
-
-			<TaskModal
-				bind:isOpen={addTaskModalOpen}
-				communityName={selectedCommunity?.name ?? ''}
-				{getCurrentPubkey}
-				onsubmit={handleTaskSubmit}
-				onclose={closeCreateTask}
-			/>
-
-			<WikiModal
-				bind:isOpen={addWikiModalOpen}
-				communityName={selectedCommunity?.name ?? ''}
-				{getCurrentPubkey}
-				onsubmit={handleWikiSubmit}
-				onclose={closeCreateWiki}
-			/>
-
-			<ProjectModal
-				bind:isOpen={projectModalOpen}
-				communityName={selectedCommunity?.name ?? ''}
-				{getCurrentPubkey}
-				onsubmit={handleProjectSubmit}
-				onclose={() => {
-					projectModalOpen = false;
-				}}
-			/>
-
-			<GetStartedModal
-				bind:open={getStartedModalOpen}
-				onstart={handleGetStartedStart}
-				onconnected={() => {
-					getStartedModalOpen = false;
-				}}
-			/>
-			<SpinKeyModal
-				bind:open={spinKeyModalOpen}
-				profileName={onboardingProfileName}
-				zIndex={55}
-				onspinComplete={handleSpinComplete}
-				onuseExistingKey={handleUseExistingKey}
-			/>
-			<OnboardingBuildingModal bind:open={onboardingBuildingModalOpen} zIndex={56} />
-
-			<Modal
-				open={joinModalOpen}
-				onClose={closeJoinModal}
-				ariaLabel="Join community"
-				title={joinStep === 'list'
-					? `Join ${selectedCommunity?.displayName || selectedCommunity?.name || 'Community'}`
-					: null}
-				description={joinStep === 'list'
-					? joinContext && CONTENT_TYPE_BY_SECTION[joinContext]
-						? `To write ${CONTENT_TYPE_BY_SECTION[joinContext].label} you need to be part of one of these lists.`
-						: 'What list do you want to join?'
-					: null}
-				closeButtonMobile={true}
-				padContent={true}
-			>
-				{#if joinModalOpen}
-					{#if !currentPubkey}
-						<p class="text-sm text-muted-foreground">Add a profile to request access.</p>
+					</form>
+				{:else if communityEditTarget === 'name'}
+					<h2 class="join-modal-title">Edit name</h2>
+					<form
+						class="join-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							saveCommunityEditName();
+						}}
+					>
+						<div class="join-form-field">
+							<label class="labels-label" for="edit-community-name">Community name</label>
+							<InputTextField
+								bind:value={communityEditName}
+								placeholder="Name"
+								singleLine={true}
+								id="edit-community-name"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						{#if communityEditError}<p class="text-sm text-red-500">
+								{communityEditError}
+							</p>{/if}
 						<div class="join-modal-actions">
-							<button type="button" class="btn-secondary-small" onclick={closeJoinModal}
-								>Close</button
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => {
+									communityEditModalOpen = false;
+									communityEditTarget = null;
+								}}>Cancel</button
+							>
+							<button type="submit" class="btn-primary-small" disabled={communityEditSubmitting}
+								>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
 							>
 						</div>
-					{:else if joinStep === 'list'}
-						{#if joinableLists.length === 0}
-							<p class="text-sm" style="color: hsl(var(--white33));">Loading…</p>
-						{:else}
-							<div class="join-list-panels">
-								{#each joinableLists as item}
-									{@const stackProfiles = (item.members ?? []).slice(0, 3).map((pk) => {
-										const p = profilesByPubkey.get(pk);
-										return {
-											pubkey: pk,
-											name: p?.name ?? p?.display_name ?? '',
-											pictureUrl: p?.picture ?? ''
-										};
-									})}
-									{@const joinWriteTypes = contentTypesFromKinds(item.sectionKinds ?? [])}
-									<div class="join-list-panel">
-										<!-- Section 1: badge + name + description -->
-										<div class="list-panel-section">
-											<SingleBadge image={item.image} name={item.listName} sizePx={52} />
-											<div class="list-panel-meta">
-												<span class="list-panel-name">{item.listName}</span>
-												{#if item.listDescription}
-													<span class="list-panel-desc">{item.listDescription}</span>
-												{/if}
-											</div>
-										</div>
-										{#if joinWriteTypes.length > 0 || item.sectionName}
-											<div class="list-panel-divider"></div>
-											<!-- Section 2: CAN WRITE -->
-											<div class="list-panel-section list-panel-section-write">
-												<p class="list-panel-write-label">CAN WRITE</p>
-												<div class="list-panel-type-pills">
-													{#if joinWriteTypes.length > 0}
-														{#each joinWriteTypes as ct}
-															<span class="list-panel-type-pill">
-																<img src={ct.emoji} alt="" class="list-panel-type-emoji" />
-																<span>{ct.label}</span>
-															</span>
-														{/each}
-													{:else if item.sectionName}
-														<span class="list-panel-type-pill">
-															<span>{item.sectionName}</span>
-														</span>
-													{/if}
-												</div>
-											</div>
-										{/if}
-										<div class="list-panel-divider"></div>
-										<!-- Section 3: profile stack + Join button -->
-										<div class="list-panel-section list-panel-section-actions">
-											{#if item.members?.length > 0}
-												<ProfilePicStack
-													profiles={stackProfiles}
-													size="sm"
-													text="{item.members.length} Profiles"
-												/>
-											{:else}
-												<span></span>
-											{/if}
-											<button
-												type="button"
-												class="btn-primary-small"
-												onclick={() => {
-													selectedJoinList = item;
-													joinStep = 'form';
-													fetchJoinForm(item.formAddress);
-												}}>Join</button
-											>
-										</div>
-									</div>
-								{/each}
-							</div>
-						{/if}
-					{:else if joinStep === 'form'}
-						<div class="join-form-header">
-							<p class="join-eyebrow">JOIN FORM</p>
-							{#if joinParsedForm?.name}
-								<h2 class="join-modal-title">{joinParsedForm.name}</h2>
-							{/if}
+					</form>
+				{:else if communityEditTarget === 'description'}
+					<h2 class="join-modal-title">Edit description</h2>
+					<form
+						class="join-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							saveCommunityEditDescription();
+						}}
+					>
+						<div class="join-form-field">
+							<label class="labels-label" for="edit-community-desc">Description</label>
+							<InputTextField
+								bind:value={communityEditDescription}
+								placeholder="Description"
+								singleLine={false}
+								size="medium"
+								id="edit-community-desc"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
 						</div>
-						<form
-							class="join-form"
-							onsubmit={(e) => {
-								e.preventDefault();
-								submitJoinForm();
-							}}
-						>
-							{#if joinParsedForm?.fields?.length}
-								{#each joinParsedForm.fields as field (field.id)}
-									<div class="join-form-field">
-										<label class="labels-label" for="jf-{field.id}"
-											>{field.label}{#if field.required}<span class="join-required">*</span
-												>{/if}</label
+						{#if communityEditError}<p class="text-sm text-red-500">
+								{communityEditError}
+							</p>{/if}
+						<div class="join-modal-actions">
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => {
+									communityEditModalOpen = false;
+									communityEditTarget = null;
+								}}>Cancel</button
+							>
+							<button type="submit" class="btn-primary-small" disabled={communityEditSubmitting}
+								>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
+							>
+						</div>
+					</form>
+				{:else if communityEditTarget === 'relays'}
+					<h2 class="join-modal-title">Edit servers</h2>
+					<form
+						class="join-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							saveCommunityEditServers();
+						}}
+					>
+						<div class="join-form-field">
+							<label class="labels-label" for="edit-community-relays"
+								>Relays (one per line or comma-separated)</label
+							>
+							<InputTextField
+								bind:value={communityEditRelays}
+								placeholder="wss://…"
+								singleLine={false}
+								size="medium"
+								id="edit-community-relays"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+							<label class="relay-enforced-label">
+								<input type="checkbox" bind:checked={communityEditRelayEnforced} />
+								Main relay is enforced (relay filters membership — skip client-side author filter)
+							</label>
+						</div>
+						<div class="join-form-field">
+							<label class="labels-label" for="edit-community-blossom"
+								>Blossom servers (one per line or comma-separated)</label
+							>
+							<InputTextField
+								bind:value={communityEditBlossom}
+								placeholder="https://…"
+								singleLine={false}
+								size="medium"
+								id="edit-community-blossom"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						{#if communityEditError}<p class="text-sm text-red-500">
+								{communityEditError}
+							</p>{/if}
+						<div class="join-modal-actions">
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => {
+									communityEditModalOpen = false;
+									communityEditTarget = null;
+								}}>Cancel</button
+							>
+							<button type="submit" class="btn-primary-small" disabled={communityEditSubmitting}
+								>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
+							>
+						</div>
+					</form>
+				{:else if communityEditTarget && String(communityEditTarget).startsWith('section-')}
+					<h2 class="join-modal-title">Edit content section</h2>
+					<form
+						class="join-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							saveCommunityEditSection();
+						}}
+					>
+						<div class="join-form-field">
+							<label class="labels-label" for="edit-section-name">Section name</label>
+							<InputTextField
+								bind:value={communityEditSectionName}
+								placeholder="e.g. Forum, Chat"
+								singleLine={true}
+								id="edit-section-name"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						<div class="join-form-field">
+							<label class="labels-label" for="edit-section-list"
+								>Profile list address (who can write)</label
+							>
+							<InputTextField
+								bind:value={communityEditSectionListAddress}
+								placeholder="30000:pubkey:d-tag"
+								singleLine={true}
+								id="edit-section-list"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						{#if communityEditError}<p class="text-sm text-red-500">
+								{communityEditError}
+							</p>{/if}
+						<div class="join-modal-actions">
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => {
+									communityEditModalOpen = false;
+									communityEditTarget = null;
+								}}>Cancel</button
+							>
+							<button type="submit" class="btn-primary-small" disabled={communityEditSubmitting}
+								>{communityEditSubmitting ? 'Saving…' : 'Save'}</button
+							>
+						</div>
+					</form>
+				{:else if communityEditTarget === 'full'}
+					<h2 class="join-modal-title">Edit community</h2>
+					<div class="community-edit-full">
+						<section class="community-edit-full-section">
+							<h3 class="community-edit-full-section-title">Picture</h3>
+							<div class="join-form-field">
+								<label class="labels-label" for="edit-full-picture">Picture URL</label>
+								<InputTextField
+									bind:value={communityEditPicture}
+									placeholder="https://…"
+									singleLine={true}
+									id="edit-full-picture"
+									oninput={() => {}}
+									onkeydown={() => {}}
+									onfocus={() => {}}
+									onblur={() => {}}
+								/>
+							</div>
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => saveCommunityEditPicture()}
+								disabled={communityEditSubmitting}>Save picture</button
+							>
+						</section>
+						<section class="community-edit-full-section">
+							<h3 class="community-edit-full-section-title">Name</h3>
+							<div class="join-form-field">
+								<label class="labels-label" for="edit-full-name">Community name</label>
+								<InputTextField
+									bind:value={communityEditName}
+									placeholder="Name"
+									singleLine={true}
+									id="edit-full-name"
+									oninput={() => {}}
+									onkeydown={() => {}}
+									onfocus={() => {}}
+									onblur={() => {}}
+								/>
+							</div>
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => saveCommunityEditName()}
+								disabled={communityEditSubmitting}>Save name</button
+							>
+						</section>
+						<section class="community-edit-full-section">
+							<h3 class="community-edit-full-section-title">Description</h3>
+							<div class="join-form-field">
+								<label class="labels-label" for="edit-full-desc">Description</label>
+								<InputTextField
+									bind:value={communityEditDescription}
+									placeholder="Description"
+									singleLine={false}
+									size="medium"
+									id="edit-full-desc"
+									oninput={() => {}}
+									onkeydown={() => {}}
+									onfocus={() => {}}
+									onblur={() => {}}
+								/>
+							</div>
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => saveCommunityEditDescription()}
+								disabled={communityEditSubmitting}>Save description</button
+							>
+						</section>
+						<section class="community-edit-full-section">
+							<h3 class="community-edit-full-section-title">Servers</h3>
+							<div class="join-form-field">
+								<label class="labels-label" for="edit-full-relays"
+									>Relays (one per line or comma-separated)</label
+								>
+								<InputTextField
+									bind:value={communityEditRelays}
+									placeholder="wss://…"
+									singleLine={false}
+									size="medium"
+									id="edit-full-relays"
+									oninput={() => {}}
+									onkeydown={() => {}}
+									onfocus={() => {}}
+									onblur={() => {}}
+								/>
+								<label class="relay-enforced-label">
+									<input type="checkbox" bind:checked={communityEditRelayEnforced} />
+									Main relay is enforced (relay filters membership — skip client-side author filter)
+								</label>
+							</div>
+							<div class="join-form-field">
+								<label class="labels-label" for="edit-full-blossom">Blossom servers</label>
+								<InputTextField
+									bind:value={communityEditBlossom}
+									placeholder="https://…"
+									singleLine={false}
+									size="medium"
+									id="edit-full-blossom"
+									oninput={() => {}}
+									onkeydown={() => {}}
+									onfocus={() => {}}
+									onblur={() => {}}
+								/>
+							</div>
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => saveCommunityEditServers()}
+								disabled={communityEditSubmitting}>Save servers</button
+							>
+						</section>
+						<section class="community-edit-full-section">
+							<h3 class="community-edit-full-section-title">Content sections</h3>
+							<p class="community-edit-full-section-desc">
+								Name + profile list (who can write) per section.
+							</p>
+							<ul class="community-edit-full-sections-list">
+								{#each communityModalSections as sec, i}
+									<li class="community-edit-full-section-item">
+										<span class="community-edit-full-section-name">{sec.sectionName}</span>
+										<span class="community-edit-full-section-list-label">{sec.listName}</span>
+										<button
+											type="button"
+											class="btn-secondary-small"
+											onclick={() => openCommunityEdit(`section-${i}`)}>Edit</button
 										>
-										{#if field.type === 'textarea'}
-											<InputTextField
-												bind:value={joinFieldValues[field.id]}
-												placeholder={field.placeholder || field.defaultValue || ''}
-												singleLine={false}
-												size="medium"
-												id="jf-{field.id}"
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
-										{:else if field.type === 'select' && field.selectOptions?.length}
-											<select
-												class="join-select"
-												id="jf-{field.id}"
-												bind:value={joinFieldValues[field.id]}
-											>
-												<option value="">— Select —</option>
-												{#each field.selectOptions as opt}
-													<option value={opt}>{opt}</option>
-												{/each}
-											</select>
-										{:else if field.type === 'checkbox'}
-											<label class="join-checkbox-label">
-												<input
-													type="checkbox"
-													id="jf-{field.id}"
-													checked={joinFieldValues[field.id] === 'true'}
-													onchange={(e) => {
-														joinFieldValues[field.id] = e.currentTarget.checked ? 'true' : 'false';
-													}}
-												/>
-												{field.placeholder || ''}
-											</label>
-										{:else}
-											<InputTextField
-												bind:value={joinFieldValues[field.id]}
-												placeholder={field.placeholder || field.defaultValue || ''}
-												singleLine={true}
-												id="jf-{field.id}"
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
+									</li>
+								{/each}
+							</ul>
+						</section>
+						{#if communityEditError}<p class="text-sm text-red-500">
+								{communityEditError}
+							</p>{/if}
+						<div class="join-modal-actions" style="margin-top: 1rem;">
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => {
+									communityEditModalOpen = false;
+									communityEditTarget = null;
+									communityInfoModalOpen = false;
+								}}>Done</button
+							>
+						</div>
+					</div>
+				{:else}
+					<p class="community-edit-placeholder">Unknown edit.</p>
+				{/if}
+			</Modal>
+		{/if}
+	{/if}
+</Modal>
+
+<Modal
+	open={adminCrownModalOpen}
+	onClose={() => {
+		adminCrownModalOpen = false;
+		adminSaveError = '';
+	}}
+	ariaLabel="Admin settings"
+	fillHeight={true}
+	padContent={true}
+>
+	{#if adminCrownModalOpen}
+		<div class="crown-modal-layout">
+			<div class="crown-modal-head">
+				<h2 class="join-modal-title crown-modal-title">Admin</h2>
+				<Selector
+					options={['General', 'Content', 'Profiles', 'Forms']}
+					selectedOption={adminCrownSection}
+					onSelect={(opt) => (adminCrownSection = opt)}
+				/>
+				<div class="crown-modal-divider"></div>
+			</div>
+			<div class="crown-modal-body">
+				{#if adminCrownSection === 'General'}
+					<div class="admin-tab crown-admin-general">
+						<div class="admin-form-section">
+							<label class="labels-label" for="crown-admin-picture">Picture URL</label>
+							<InputTextField
+								bind:value={adminPicture}
+								placeholder="https://…"
+								singleLine={true}
+								id="crown-admin-picture"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						<div class="admin-form-section">
+							<label class="labels-label" for="crown-admin-name">Community name</label>
+							<InputTextField
+								bind:value={adminName}
+								placeholder="Name"
+								singleLine={true}
+								id="crown-admin-name"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						<div class="admin-form-section">
+							<label class="labels-label" for="crown-admin-desc">Description</label>
+							<InputTextField
+								bind:value={adminDescription}
+								placeholder="Description"
+								singleLine={false}
+								size="medium"
+								id="crown-admin-desc"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						<div class="admin-form-section">
+							<label class="labels-label" for="crown-admin-relays"
+								>Relays (one per line or comma-separated)</label
+							>
+							<InputTextField
+								bind:value={adminRelays}
+								placeholder="wss://…"
+								singleLine={false}
+								size="medium"
+								id="crown-admin-relays"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+							<label class="relay-enforced-label">
+								<input type="checkbox" bind:checked={adminRelayEnforced} />
+								Main relay is enforced (relay filters membership — skip client-side author filter)
+							</label>
+						</div>
+						<div class="admin-form-section">
+							<label class="labels-label" for="crown-admin-blossom">Blossom servers</label>
+							<InputTextField
+								bind:value={adminBlossom}
+								placeholder="https://…"
+								singleLine={false}
+								size="medium"
+								id="crown-admin-blossom"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						{#if adminSaveError}<p class="text-sm text-red-500">{adminSaveError}</p>{/if}
+						<div class="join-modal-actions crown-save-row">
+							<button
+								type="button"
+								class="btn-primary-small"
+								disabled={adminSaveSubmitting}
+								onclick={() => saveCommunityAdminAll()}
+							>
+								{adminSaveSubmitting ? 'Saving…' : 'Save'}
+							</button>
+						</div>
+					</div>
+				{:else if adminCrownSection === 'Content'}
+					<div class="crown-content-tab">
+						{#each ADMIN_SECTION_PRESETS.filter((p) => adminSectionEnabled[p.id]) as preset}
+							{@const addrs = Array.isArray(adminSectionListAddress[preset.id])
+								? adminSectionListAddress[preset.id]
+								: adminSectionListAddress[preset.id]
+									? [adminSectionListAddress[preset.id]]
+									: []}
+							{@const listItems = adminProfileLists
+								.filter((l) => addrs.includes(l.listAddress))
+								.map((l) => ({ image: l.image, name: l.name }))}
+							<button
+								type="button"
+								class="admin-section-row admin-section-row-clickable"
+								onclick={() => (adminSectionModalPresetId = preset.id)}
+							>
+								<span class="admin-section-emoji-slot"></span>
+								<span class="admin-section-name">{preset.name}</span>
+								<span class="admin-section-badges-wrap">
+									<BadgeStack items={listItems} maxDisplay={3} overlapPx={16} badgeSizePx={32} />
+									<ChevronRight
+										variant="outline"
+										size={16}
+										color="hsl(var(--white33))"
+										className="admin-section-chevron"
+									/>
+								</span>
+							</button>
+						{/each}
+						<div class="admin-section-add-row">
+							<button
+								type="button"
+								class="admin-section-add-btn"
+								onclick={() => (adminAddSectionOpen = true)}
+								aria-label="Add content section"
+							>
+								<Plus variant="outline" size={18} color="hsl(var(--white66))" />
+								<span>Add content section</span>
+							</button>
+						</div>
+					</div>
+				{:else if adminCrownSection === 'Profiles'}
+					<div class="crown-profiles-tab">
+						{#if allAdminProfileLists.length === 0}
+							<p class="community-info-profiles-empty">No profile lists yet.</p>
+						{/if}
+						{#each allAdminProfileLists as item}
+							{@const listDisplayName = item.parsed?.name ?? item.name ?? item.sectionName}
+							<div class="info-list-panel">
+								<!-- Section 1: badge + name + description -->
+								<div class="list-panel-section">
+									<SingleBadge
+										image={item.parsed?.image ?? null}
+										name={listDisplayName}
+										sizePx={52}
+									/>
+									<div class="list-panel-meta">
+										<span class="list-panel-name">{listDisplayName}</span>
+										{#if item.parsed?.content}
+											<span class="list-panel-desc">{item.parsed.content}</span>
 										{/if}
 									</div>
-								{/each}
-							{:else}
+								</div>
+								{#if item.sectionName && item.sectionName !== '—'}
+									<div class="list-panel-divider"></div>
+									<!-- Section 2: CAN WRITE -->
+									<div class="list-panel-section list-panel-section-write">
+										<p class="list-panel-write-label">CAN WRITE</p>
+										<div class="list-panel-type-pills">
+											<span class="list-panel-type-pill"><span>{item.sectionName}</span></span>
+										</div>
+									</div>
+								{/if}
+								<div class="list-panel-divider"></div>
+								<div class="info-list-actions">
+									<button
+										type="button"
+										class="btn-view-more"
+										onclick={() => {
+											adminCrownModalOpen = false;
+											openList(item.listAddress);
+										}}>View All</button
+									>
+									<button
+										type="button"
+										class="btn-primary-small info-list-action-btn"
+										aria-label="Edit list"
+										onclick={() => {
+											adminCrownModalOpen = false;
+											openList(item.listAddress);
+										}}
+									>
+										<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+										<span>Edit</span>
+									</button>
+								</div>
+							</div>
+						{/each}
+						<div class="admin-section-add-row">
+							<button
+								type="button"
+								class="admin-section-add-btn"
+								onclick={() => openListFormModal('add')}
+								aria-label="Add profile list"
+							>
+								<Plus variant="outline" size={18} color="hsl(var(--white66))" />
+								<span>Add profile list</span>
+							</button>
+						</div>
+					</div>
+				{:else if adminCrownSection === 'Forms'}
+					<div class="crown-forms-tab">
+						{#if formTemplateModal}
+							<!-- Inline form editor -->
+							<form
+								class="join-form ft-form"
+								onsubmit={(e) => {
+									e.preventDefault();
+									saveFormTemplate();
+								}}
+							>
+								<div class="ft-inline-back">
+									<button
+										type="button"
+										class="ft-back-btn"
+										onclick={() => {
+											formTemplateModal = null;
+											formTemplateError = '';
+										}}>← Back</button
+									>
+									<span class="ft-inline-title"
+										>{formTemplateModal.mode === 'edit' ? 'Edit form' : 'New form'}</span
+									>
+								</div>
+
 								<div class="join-form-field">
+									<label class="labels-label" for="ft-name">Form name</label>
 									<InputTextField
-										bind:value={joinMessage}
-										title="Message (optional)"
-										placeholder="Why do you want to join?"
-										singleLine={false}
-										size="medium"
-										id="join-message"
+										bind:value={formTemplateName}
+										placeholder="e.g. Membership Application"
+										singleLine={true}
+										id="ft-name"
 										oninput={() => {}}
 										onkeydown={() => {}}
 										onfocus={() => {}}
 										onblur={() => {}}
 									/>
 								</div>
-							{/if}
-							{#if joinError}
-								<p class="text-sm text-red-500">{joinError}</p>
-							{/if}
-							<button type="submit" class="btn-primary-large w-full" disabled={joinSubmitting}>
-								{joinSubmitting ? 'Submitting…' : 'Join'}
-							</button>
-						</form>
-					{:else if joinStep === 'done'}
-						<div class="join-done-wrap">
-							{#if joinConfirmationMessage}
-								<p class="join-confirm-msg">{joinConfirmationMessage}</p>
+								{#if formTemplateModal.mode === 'add'}
+									<div class="join-form-field">
+										<label class="labels-label" for="ft-dtag">Form ID (slug)</label>
+										<InputTextField
+											bind:value={formTemplateDTag}
+											placeholder="e.g. membership-application"
+											singleLine={true}
+											id="ft-dtag"
+											oninput={() => {}}
+											onkeydown={() => {}}
+											onfocus={() => {}}
+											onblur={() => {}}
+										/>
+									</div>
+								{:else}
+									<p class="ft-id-display">ID: <code>{formTemplateDTag}</code></p>
+								{/if}
+								<div class="join-form-field">
+									<label class="labels-label" for="ft-description">Description</label>
+									<InputTextField
+										bind:value={formTemplateDescription}
+										placeholder="What is this form for?"
+										singleLine={false}
+										size="medium"
+										id="ft-description"
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+								</div>
+
+								<div class="ft-section-header">
+									<span class="labels-label">Fields</span>
+									<button type="button" class="ft-add-field-btn" onclick={addFormField}
+										>+ Add field</button
+									>
+								</div>
+								{#each formTemplateFields as field, idx}
+									<div class="ft-field-row">
+										<div class="ft-field-top">
+											<InputTextField
+												bind:value={formTemplateFields[idx].id}
+												placeholder="field-id"
+												singleLine={true}
+												oninput={() => {}}
+												onkeydown={() => {}}
+												onfocus={() => {}}
+												onblur={() => {}}
+											/>
+											<select
+												class="ft-type-select"
+												value={field.type}
+												onchange={(e) => updateFormField(idx, 'type', e.currentTarget.value)}
+											>
+												<option value="text">Text</option>
+												<option value="textarea">Textarea</option>
+												<option value="number">Number</option>
+												<option value="email">Email</option>
+												<option value="url">URL</option>
+												<option value="select">Select</option>
+												<option value="checkbox">Checkbox</option>
+												<option value="radio">Radio</option>
+												<option value="date">Date</option>
+											</select>
+											<button
+												type="button"
+												class="ft-remove-btn"
+												onclick={() => removeFormField(idx)}
+												aria-label="Remove field">×</button
+											>
+										</div>
+										<div class="ft-field-bottom">
+											<InputTextField
+												bind:value={formTemplateFields[idx].label}
+												placeholder="Label shown to user"
+												singleLine={true}
+												oninput={() => {}}
+												onkeydown={() => {}}
+												onfocus={() => {}}
+												onblur={() => {}}
+											/>
+											<InputTextField
+												bind:value={formTemplateFields[idx].placeholder}
+												placeholder="Placeholder hint"
+												singleLine={true}
+												oninput={() => {}}
+												onkeydown={() => {}}
+												onfocus={() => {}}
+												onblur={() => {}}
+											/>
+											<label class="ft-required-label">
+												<input
+													type="checkbox"
+													checked={field.required}
+													onchange={(e) =>
+														updateFormField(idx, 'required', e.currentTarget.checked)}
+												/>
+												Required
+											</label>
+										</div>
+										{#if field.type === 'select' || field.type === 'radio'}
+											<div class="ft-field-options">
+												<InputTextField
+													value={field.selectOptions.join(', ')}
+													placeholder="Options, comma-separated"
+													singleLine={true}
+													oninput={(e) =>
+														updateFormField(
+															idx,
+															'selectOptions',
+															e.currentTarget.value
+																.split(',')
+																.map((s) => s.trim())
+																.filter(Boolean)
+														)}
+													onkeydown={() => {}}
+													onfocus={() => {}}
+													onblur={() => {}}
+												/>
+											</div>
+										{/if}
+									</div>
+								{/each}
+								{#if formTemplateFields.length === 0}
+									<p class="ft-no-fields">No fields yet. Add one above.</p>
+								{/if}
+
+								<div class="join-form-field">
+									<label class="labels-label" for="ft-confirm-msg">Confirmation message</label>
+									<InputTextField
+										bind:value={formTemplateConfirmMsg}
+										placeholder="Shown to users after they submit (e.g. Thank you! We'll review within 48h.)"
+										singleLine={false}
+										size="medium"
+										id="ft-confirm-msg"
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+								</div>
+								<label class="ft-public-label">
+									<input type="checkbox" bind:checked={formTemplatePublic} />
+									Public responses (unencrypted)
+								</label>
+
+								{#if formTemplateError}<p class="text-sm text-red-500">
+										{formTemplateError}
+									</p>{/if}
+								<div class="join-modal-actions" style="margin-top: 0.75rem;">
+									<button
+										type="button"
+										class="btn-secondary-small"
+										onclick={() => {
+											formTemplateModal = null;
+											formTemplateError = '';
+										}}>Cancel</button
+									>
+									<button type="submit" class="btn-primary-small" disabled={formTemplateSubmitting}
+										>{formTemplateSubmitting ? 'Saving…' : 'Save'}</button
+									>
+								</div>
+							</form>
+						{:else}
+							<!-- Form list -->
+							{#if adminFormTemplates.length === 0}
+								<p class="community-info-profiles-empty">No form templates yet.</p>
 							{:else}
-								<p class="join-confirm-msg">Your request has been submitted!</p>
+								{#each adminFormTemplates as item}
+									<div class="info-list-panel crown-form-panel">
+										<div class="info-list-panel-meta" style="padding: 0;">
+											<span class="info-list-panel-name"
+												>{item.parsed?.name || item.parsed?.dTag || 'Untitled form'}</span
+											>
+											{#if item.linkedLists.length > 0}
+												<span class="info-list-panel-desc"
+													>Used by: {item.linkedLists.join(', ')}</span
+												>
+											{:else}
+												<span class="info-list-panel-desc crown-form-address">{item.formAddr}</span>
+											{/if}
+										</div>
+										<div class="info-list-actions" style="margin-top: 0.5rem;">
+											<button
+												type="button"
+												class="btn-primary-small info-list-action-btn"
+												onclick={() => openFormTemplateModal('edit', item)}
+											>
+												<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+												<span>Edit</span>
+											</button>
+										</div>
+									</div>
+								{/each}
 							{/if}
-							<div class="join-modal-actions">
-								<button type="button" class="btn-primary-small" onclick={closeJoinModal}
-									>Close</button
+							<div class="admin-section-add-row">
+								<button
+									type="button"
+									class="admin-section-add-btn"
+									onclick={() => openFormTemplateModal('add')}
+								>
+									<Plus variant="outline" size={18} color="hsl(var(--white66))" />
+									<span>New form template</span>
+								</button>
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		</div>
+	{/if}
+</Modal>
+
+<Modal
+	open={joinRequestsModalOpen}
+	onClose={() => (joinRequestsModalOpen = false)}
+	ariaLabel="Join requests"
+	padContent={true}
+>
+	{#if joinRequestsModalOpen}
+		<h2 class="join-modal-title">Join requests</h2>
+		{#if joinRequestsList.length === 0}
+			<p class="text-sm text-muted-foreground">No pending requests.</p>
+		{:else}
+			<ul class="requests-list">
+				{#each joinRequestsList as req}
+					{@const listEv = getListByFormAddress(req.tags?.find((t) => t[0] === 'a')?.[1])}
+					{@const alreadyMember = listEv && parseProfileList(listEv)?.members?.includes(req.pubkey)}
+					<li class="request-item request-item-row">
+						<ProfilePic pubkey={req.pubkey} size="sm" />
+						<div class="request-meta">
+							<span class="request-pubkey">{req.pubkey.slice(0, 12)}…</span>
+							<span class="request-date">{formatDate(req.created_at)}</span>
+							{#if joinRequestsDecrypted.get(req.id)}
+								{@const raw = joinRequestsDecrypted.get(req.id)}
+								{@const parsed = (() => {
+									try {
+										return JSON.parse(raw);
+									} catch {
+										return null;
+									}
+								})()}
+								{#if Array.isArray(parsed)}
+									{#each parsed.filter((t) => t[0] === 'response' && t[1]) as entry}
+										<p class="request-field">
+											<span class="request-field-label">{entry[1]}:</span>
+											{entry[2] ?? ''}
+										</p>
+									{/each}
+								{:else}
+									<p class="request-message">{raw}</p>
+								{/if}
+							{/if}
+						</div>
+						{#if !alreadyMember}
+							<button
+								type="button"
+								class="btn-primary-small"
+								disabled={joinRequestsApprovingId === req.id}
+								onclick={() => approveJoinRequest(req)}
+							>
+								{joinRequestsApprovingId === req.id ? 'Adding…' : 'Approve'}
+							</button>
+						{:else}
+							<span class="text-muted-foreground text-sm">Member</span>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	{/if}
+</Modal>
+
+{#key listViewMoreModal?.listAddress ?? 'closed'}
+	<Modal
+		open={!!listViewMoreModal}
+		onClose={() => {
+			listViewMoreModal = null;
+			listViewMoreAddInput = '';
+			listViewMoreAddError = '';
+		}}
+		ariaLabel="List members"
+		maxWidth="max-w-md"
+		padContent={true}
+	>
+		{#if listViewMoreModal}
+			{@const listEvent = listViewMoreModal.listEvent}
+			{@const parsed = listViewMoreModal.parsed ?? parseProfileList(listEvent)}
+			{@const members = parsed?.members ?? []}
+			<div class="list-form-modal-content">
+				<h2 class="join-modal-title">{parsed?.name ?? 'List'}</h2>
+				{#if isCommunityAdmin}
+					<div class="list-modal-add-wrap">
+						<InputTextField
+							bind:value={listViewMoreAddInput}
+							placeholder="npub or hex pubkey to add"
+							singleLine={true}
+							onkeydown={({ key }) => key === 'Enter' && addProfileToList(listEvent)}
+							oninput={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+						<button
+							type="button"
+							class="btn-primary-small"
+							disabled={listViewMoreAddSubmitting || !listViewMoreAddInput.trim()}
+							onclick={() => addProfileToList(listEvent)}
+						>
+							{listViewMoreAddSubmitting ? 'Adding…' : 'Add'}
+						</button>
+						<button
+							type="button"
+							class="list-panel-edit-btn"
+							aria-label="Edit list"
+							onclick={() => openListFormModal('edit', listViewMoreModal)}>Edit</button
+						>
+					</div>
+					{#if listViewMoreAddError}
+						<p class="text-sm text-red-500">{listViewMoreAddError}</p>
+					{/if}
+				{/if}
+			</div>
+			<ul class="list-modal-members">
+				{#each members as pubkey}
+					<li class="list-modal-member-row">
+						<ProfilePic {pubkey} size="sm" />
+						<span class="list-modal-member-pubkey">{pubkey.slice(0, 16)}…</span>
+						{#if isCommunityAdmin}
+							<button
+								type="button"
+								class="list-modal-remove-btn"
+								onclick={() => removeProfileFromList(listEvent, pubkey)}
+								aria-label="Remove"
+							>
+								<Cross variant="outline" size={14} strokeWidth={1.4} color="hsl(var(--white66))" />
+							</button>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</Modal>
+{/key}
+
+{#key listFormModal ? (listFormModal.mode === 'edit' ? listFormModal.listAddress : 'add') : 'closed'}
+	<Modal
+		open={!!listFormModal}
+		onClose={() => {
+			listFormModal = null;
+			listFormError = '';
+		}}
+		ariaLabel="List form"
+		maxWidth="max-w-md"
+		padContent={true}
+	>
+		{#if listFormModal}
+			<div class="list-form-modal-content">
+				<h2 class="join-modal-title">
+					{listFormModal.mode === 'edit' ? 'Edit list' : 'Add list'}
+				</h2>
+				<form
+					class="join-form"
+					onsubmit={(e) => {
+						e.preventDefault();
+						submitListForm();
+					}}
+				>
+					<div class="join-form-field">
+						<label class="labels-label" for="list-form-name">Name</label>
+						<InputTextField
+							bind:value={listFormName}
+							placeholder="List name"
+							singleLine={true}
+							id="list-form-name"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+					</div>
+					<div class="join-form-field">
+						<label class="labels-label" for="list-form-image">Image URL</label>
+						<InputTextField
+							bind:value={listFormImage}
+							placeholder="https://… (optional)"
+							singleLine={true}
+							id="list-form-image"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+					</div>
+					<div class="join-form-field">
+						<label class="labels-label" for="list-form-description">Description</label>
+						<InputTextField
+							bind:value={listFormDescription}
+							placeholder="Description (optional)"
+							singleLine={false}
+							size="medium"
+							id="list-form-description"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+					</div>
+					<div class="join-form-field">
+						<label class="labels-label" for="list-form-join">Join form</label>
+						{#if adminFormTemplates.length > 0}
+							<select
+								id="list-form-join"
+								class="list-form-select"
+								value={listFormFormAddress}
+								onchange={(e) => {
+									listFormFormAddress = e.currentTarget.value;
+								}}
+							>
+								<option value="">— No form —</option>
+								{#each adminFormTemplates as tpl (tpl.formAddr)}
+									<option value={tpl.formAddr}>{tpl.parsed?.name ?? tpl.formAddr}</option>
+								{/each}
+							</select>
+						{:else}
+							<InputTextField
+								bind:value={listFormFormAddress}
+								placeholder="30168:pubkey:d-tag (optional)"
+								singleLine={true}
+								id="list-form-join"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+							<p class="list-form-hint">No forms found — create one in the Forms tab first.</p>
+						{/if}
+					</div>
+					{#if listFormError}
+						<p class="text-sm text-red-500">{listFormError}</p>
+					{/if}
+					<div class="join-modal-actions">
+						<button
+							type="button"
+							class="btn-secondary-small"
+							onclick={() => {
+								listFormModal = null;
+								listFormError = '';
+							}}>Cancel</button
+						>
+						<button type="submit" class="btn-primary-small" disabled={listFormSubmitting}
+							>{listFormSubmitting
+								? listFormModal.mode === 'edit'
+									? 'Saving…'
+									: 'Adding…'
+								: listFormModal.mode === 'edit'
+									? 'Save'
+									: 'Add list'}</button
+						>
+					</div>
+				</form>
+			</div>
+		{/if}
+	</Modal>
+{/key}
+
+<!-- ListModal: create new list from the Profiles section BottomBar -->
+<ListModal
+	bind:isOpen={addListModalOpen}
+	formTemplates={adminFormTemplates}
+	onsubmit={async ({ name, image, description, formAddress, dTag }) => {
+		if (!selectedCommunity?.pubkey) throw new Error('No community');
+		const tags = [
+			['d', dTag],
+			['name', name],
+			['p', selectedCommunity.pubkey]
+		];
+		if (image) tags.push(['image', image]);
+		if (formAddress) tags.push(['form', formAddress]);
+		const listEv = await signEvent({
+			kind: EVENT_KINDS.PROFILE_LIST,
+			content: description ?? '',
+			tags,
+			created_at: Math.floor(Date.now() / 1000)
+		});
+		const relays = [...new Set([...(selectedCommunity.relays ?? []), ...COMMUNITY_WRITE_RELAYS])];
+		await putEvents([listEv]);
+		await publishToRelays(relays, listEv);
+		const newParsed = parseProfileList(listEv);
+		const newListItem = {
+			listAddress: `30000:${listEv.pubkey}:${dTag}`,
+			name: newParsed?.name ?? name,
+			image: newParsed?.image ?? null,
+			listEvent: listEv,
+			parsed: newParsed
+		};
+		adminProfileLists = [...adminProfileLists, newListItem];
+	}}
+	onclose={() => (addListModalOpen = false)}
+/>
+
+{#key adminListPickerPresetId ?? 'closed'}
+	<Modal
+		open={adminListPickerPresetId != null}
+		onClose={() => (adminListPickerPresetId = null)}
+		ariaLabel="Choose lists for section"
+		maxWidth="max-w-md"
+		padContent={true}
+	>
+		{#if adminListPickerPresetId}
+			{@const presetId = adminListPickerPresetId}
+			{@const preset = ADMIN_SECTION_PRESETS.find((p) => p.id === presetId)}
+			<h2 class="join-modal-title">Choose lists for {preset?.name ?? presetId}</h2>
+			<p class="list-picker-desc">
+				Who can write in this section. Select one or more profile lists.
+			</p>
+			<div class="list-picker-list">
+				{#each adminProfileLists as list (list.listAddress)}
+					{@const addrs = Array.isArray(adminSectionListAddress[presetId])
+						? adminSectionListAddress[presetId]
+						: adminSectionListAddress[presetId]
+							? [adminSectionListAddress[presetId]]
+							: []}
+					{@const selected = addrs.includes(list.listAddress)}
+					<label class="list-picker-row">
+						<Checkbox
+							checked={selected}
+							onChanged={(val) => {
+								const arr = [...addrs];
+								if (val) arr.push(list.listAddress);
+								else {
+									const i = arr.indexOf(list.listAddress);
+									if (i !== -1) arr.splice(i, 1);
+								}
+								adminSectionListAddress = { ...adminSectionListAddress, [presetId]: arr };
+							}}
+						/>
+						<span class="list-picker-name">{list.name}</span>
+					</label>
+				{/each}
+			</div>
+			{#if adminProfileLists.length === 0}
+				<p class="text-sm text-muted-foreground">
+					No profile lists yet. Create one with Add List in the Members tab.
+				</p>
+			{/if}
+			<div class="join-modal-actions">
+				<button
+					type="button"
+					class="btn-primary-small"
+					onclick={() => (adminListPickerPresetId = null)}>Done</button
+				>
+			</div>
+		{/if}
+	</Modal>
+{/key}
+
+{#key adminSectionModalPresetId ?? 'closed'}
+	<Modal
+		open={adminSectionModalPresetId != null}
+		onClose={() => (adminSectionModalPresetId = null)}
+		ariaLabel="Section details"
+		maxWidth="max-w-md"
+		padContent={true}
+	>
+		{#if adminSectionModalPresetId}
+			{@const presetId = adminSectionModalPresetId}
+			{@const preset = ADMIN_SECTION_PRESETS.find((p) => p.id === presetId)}
+			<h2 class="join-modal-title">{preset?.name ?? presetId}</h2>
+			{#if preset?.kinds?.length}
+				<p class="admin-section-modal-kinds">
+					Kinds that can be written: {preset.kinds.join(', ')}
+				</p>
+			{/if}
+			<p class="list-picker-desc">
+				Who can write in this section. Select one or more profile lists.
+			</p>
+			<div class="list-picker-list">
+				{#each adminProfileLists as list (list.listAddress)}
+					{@const addrs = Array.isArray(adminSectionListAddress[presetId])
+						? adminSectionListAddress[presetId]
+						: adminSectionListAddress[presetId]
+							? [adminSectionListAddress[presetId]]
+							: []}
+					{@const selected = addrs.includes(list.listAddress)}
+					<label class="list-picker-row">
+						<Checkbox
+							checked={selected}
+							onChanged={(val) => {
+								const arr = [...addrs];
+								if (val) arr.push(list.listAddress);
+								else {
+									const i = arr.indexOf(list.listAddress);
+									if (i !== -1) arr.splice(i, 1);
+								}
+								adminSectionListAddress = { ...adminSectionListAddress, [presetId]: arr };
+							}}
+						/>
+						<span class="list-picker-name">{list.name}</span>
+					</label>
+				{/each}
+			</div>
+			{#if adminProfileLists.length === 0}
+				<p class="text-sm text-muted-foreground">
+					No profile lists yet. Create one with Add List in the Members tab.
+				</p>
+			{/if}
+			<div class="join-modal-actions admin-section-modal-actions">
+				<button
+					type="button"
+					class="btn-danger-small"
+					onclick={() => {
+						adminSectionEnabled = { ...adminSectionEnabled, [presetId]: false };
+						adminSectionListAddress = { ...adminSectionListAddress, [presetId]: [] };
+						adminSectionModalPresetId = null;
+					}}>Delete section</button
+				>
+				<button
+					type="button"
+					class="btn-primary-small"
+					onclick={() => (adminSectionModalPresetId = null)}>Done</button
+				>
+			</div>
+		{/if}
+	</Modal>
+{/key}
+
+{#key adminAddSectionOpen ? 'open' : 'closed'}
+	<Modal
+		open={adminAddSectionOpen}
+		onClose={() => (adminAddSectionOpen = false)}
+		ariaLabel="Add content section"
+		maxWidth="max-w-md"
+		padContent={true}
+	>
+		{#if adminAddSectionOpen}
+			<h2 class="join-modal-title">Add content section</h2>
+			<p class="list-picker-desc">
+				Enable a section from presets. Only disabled sections are listed.
+			</p>
+			<div class="list-picker-list">
+				{#each ADMIN_SECTION_PRESETS.filter((p) => !adminSectionEnabled[p.id]) as preset}
+					<button
+						type="button"
+						class="admin-add-section-preset-row"
+						onclick={() => {
+							adminSectionEnabled = { ...adminSectionEnabled, [preset.id]: true };
+							adminAddSectionOpen = false;
+						}}
+					>
+						<span>{preset.name}</span>
+					</button>
+				{/each}
+			</div>
+			{#if ADMIN_SECTION_PRESETS.every((p) => adminSectionEnabled[p.id])}
+				<p class="text-sm text-muted-foreground">All preset sections are already enabled.</p>
+			{/if}
+			<div class="join-modal-actions">
+				<button
+					type="button"
+					class="btn-secondary-small"
+					onclick={() => (adminAddSectionOpen = false)}>Cancel</button
+				>
+			</div>
+		{/if}
+	</Modal>
+{/key}
+
+<ForumPostModal
+	bind:isOpen={addPostModalOpen}
+	communityName={selectedCommunity?.name ?? ''}
+	{getCurrentPubkey}
+	onsubmit={handleForumPostSubmit}
+	onclose={closeCreatePost}
+/>
+
+<TaskModal
+	bind:isOpen={addTaskModalOpen}
+	communityName={selectedCommunity?.name ?? ''}
+	{getCurrentPubkey}
+	initialData={newTaskInitialStatus ? { status: newTaskInitialStatus } : null}
+	onsubmit={handleTaskSubmit}
+	onclose={() => {
+		newTaskInitialStatus = null;
+		closeCreateTask();
+	}}
+/>
+
+<WikiModal
+	bind:isOpen={addWikiModalOpen}
+	communityName={selectedCommunity?.name ?? ''}
+	{getCurrentPubkey}
+	onsubmit={handleWikiSubmit}
+	onclose={closeCreateWiki}
+/>
+
+<ProjectModal
+	bind:isOpen={projectModalOpen}
+	communityName={selectedCommunity?.name ?? ''}
+	{getCurrentPubkey}
+	onsubmit={handleProjectSubmit}
+	onclose={() => {
+		projectModalOpen = false;
+	}}
+/>
+
+<GetStartedModal
+	bind:open={getStartedModalOpen}
+	onstart={handleGetStartedStart}
+	onconnected={() => {
+		getStartedModalOpen = false;
+	}}
+/>
+<SpinKeyModal
+	bind:open={spinKeyModalOpen}
+	profileName={onboardingProfileName}
+	zIndex={55}
+	onspinComplete={handleSpinComplete}
+	onuseExistingKey={handleUseExistingKey}
+/>
+<OnboardingBuildingModal bind:open={onboardingBuildingModalOpen} zIndex={56} />
+
+<Modal
+	open={joinModalOpen}
+	onClose={closeJoinModal}
+	ariaLabel="Join community"
+	title={joinStep === 'list'
+		? `Join ${selectedCommunity?.displayName || selectedCommunity?.name || 'Community'}`
+		: null}
+	description={joinStep === 'list'
+		? joinContext && CONTENT_TYPE_BY_SECTION[joinContext]
+			? `To write ${CONTENT_TYPE_BY_SECTION[joinContext].label} you need to be part of one of these lists.`
+			: 'What list do you want to join?'
+		: null}
+	closeButtonMobile={true}
+	padContent={true}
+>
+	{#if joinModalOpen}
+		{#if !currentPubkey}
+			<p class="text-sm text-muted-foreground">Add a profile to request access.</p>
+			<div class="join-modal-actions">
+				<button type="button" class="btn-secondary-small" onclick={closeJoinModal}>Close</button>
+			</div>
+		{:else if joinStep === 'list'}
+			{#if joinableLists.length === 0}
+				<p class="text-sm" style="color: hsl(var(--white33));">Loading…</p>
+			{:else}
+				<div class="join-list-panels">
+					{#each joinableLists as item}
+						{@const stackProfiles = (item.members ?? []).slice(0, 3).map((pk) => {
+							const p = profilesByPubkey.get(pk);
+							return {
+								pubkey: pk,
+								name: p?.name ?? p?.display_name ?? '',
+								pictureUrl: p?.picture ?? ''
+							};
+						})}
+						{@const joinWriteTypes = contentTypesFromKinds(item.sectionKinds ?? [])}
+						<div class="join-list-panel">
+							<!-- Section 1: badge + name + description -->
+							<div class="list-panel-section">
+								<SingleBadge image={item.image} name={item.listName} sizePx={52} />
+								<div class="list-panel-meta">
+									<span class="list-panel-name">{item.listName}</span>
+									{#if item.listDescription}
+										<span class="list-panel-desc">{item.listDescription}</span>
+									{/if}
+								</div>
+							</div>
+							{#if joinWriteTypes.length > 0 || item.sectionName}
+								<div class="list-panel-divider"></div>
+								<!-- Section 2: CAN WRITE -->
+								<div class="list-panel-section list-panel-section-write">
+									<p class="list-panel-write-label">CAN WRITE</p>
+									<div class="list-panel-type-pills">
+										{#if joinWriteTypes.length > 0}
+											{#each joinWriteTypes as ct}
+												<span class="list-panel-type-pill">
+													<img src={ct.emoji} alt="" class="list-panel-type-emoji" />
+													<span>{ct.label}</span>
+												</span>
+											{/each}
+										{:else if item.sectionName}
+											<span class="list-panel-type-pill">
+												<span>{item.sectionName}</span>
+											</span>
+										{/if}
+									</div>
+								</div>
+							{/if}
+							<div class="list-panel-divider"></div>
+							<!-- Section 3: profile stack + Join button -->
+							<div class="list-panel-section list-panel-section-actions">
+								{#if item.members?.length > 0}
+									<ProfilePicStack
+										profiles={stackProfiles}
+										size="sm"
+										text="{item.members.length} Profiles"
+									/>
+								{:else}
+									<span></span>
+								{/if}
+								<button
+									type="button"
+									class="btn-primary-small"
+									onclick={() => {
+										selectedJoinList = item;
+										joinStep = 'form';
+										fetchJoinForm(item.formAddress);
+									}}>Join</button
 								>
 							</div>
 						</div>
-					{/if}
+					{/each}
+				</div>
+			{/if}
+		{:else if joinStep === 'form'}
+			<div class="join-form-header">
+				<p class="join-eyebrow">JOIN FORM</p>
+				{#if joinParsedForm?.name}
+					<h2 class="join-modal-title">{joinParsedForm.name}</h2>
 				{/if}
-		</Modal>
+			</div>
+			<form
+				class="join-form"
+				onsubmit={(e) => {
+					e.preventDefault();
+					submitJoinForm();
+				}}
+			>
+				{#if joinParsedForm?.fields?.length}
+					{#each joinParsedForm.fields as field (field.id)}
+						<div class="join-form-field">
+							<label class="labels-label" for="jf-{field.id}"
+								>{field.label}{#if field.required}<span class="join-required">*</span>{/if}</label
+							>
+							{#if field.type === 'textarea'}
+								<InputTextField
+									bind:value={joinFieldValues[field.id]}
+									placeholder={field.placeholder || field.defaultValue || ''}
+									singleLine={false}
+									size="medium"
+									id="jf-{field.id}"
+									oninput={() => {}}
+									onkeydown={() => {}}
+									onfocus={() => {}}
+									onblur={() => {}}
+								/>
+							{:else if field.type === 'select' && field.selectOptions?.length}
+								<select
+									class="join-select"
+									id="jf-{field.id}"
+									bind:value={joinFieldValues[field.id]}
+								>
+									<option value="">— Select —</option>
+									{#each field.selectOptions as opt}
+										<option value={opt}>{opt}</option>
+									{/each}
+								</select>
+							{:else if field.type === 'checkbox'}
+								<label class="join-checkbox-label">
+									<input
+										type="checkbox"
+										id="jf-{field.id}"
+										checked={joinFieldValues[field.id] === 'true'}
+										onchange={(e) => {
+											joinFieldValues[field.id] = e.currentTarget.checked ? 'true' : 'false';
+										}}
+									/>
+									{field.placeholder || ''}
+								</label>
+							{:else}
+								<InputTextField
+									bind:value={joinFieldValues[field.id]}
+									placeholder={field.placeholder || field.defaultValue || ''}
+									singleLine={true}
+									id="jf-{field.id}"
+									oninput={() => {}}
+									onkeydown={() => {}}
+									onfocus={() => {}}
+									onblur={() => {}}
+								/>
+							{/if}
+						</div>
+					{/each}
+				{:else}
+					<div class="join-form-field">
+						<InputTextField
+							bind:value={joinMessage}
+							title="Message (optional)"
+							placeholder="Why do you want to join?"
+							singleLine={false}
+							size="medium"
+							id="join-message"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+					</div>
+				{/if}
+				{#if joinError}
+					<p class="text-sm text-red-500">{joinError}</p>
+				{/if}
+				<button type="submit" class="btn-primary-large w-full" disabled={joinSubmitting}>
+					{joinSubmitting ? 'Submitting…' : 'Join'}
+				</button>
+			</form>
+		{:else if joinStep === 'done'}
+			<div class="join-done-wrap">
+				{#if joinConfirmationMessage}
+					<p class="join-confirm-msg">{joinConfirmationMessage}</p>
+				{:else}
+					<p class="join-confirm-msg">Your request has been submitted!</p>
+				{/if}
+				<div class="join-modal-actions">
+					<button type="button" class="btn-primary-small" onclick={closeJoinModal}>Close</button>
+				</div>
+			</div>
+		{/if}
+	{/if}
+</Modal>
 
 <style>
 	.communities-layout {
@@ -6440,6 +6457,43 @@
 		flex-direction: column;
 		padding: 0;
 		gap: 0;
+	}
+
+	.task-group-header {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		width: 100%;
+		padding: 10px 16px;
+		background: hsl(var(--white4));
+		border-bottom: 1.4px solid hsl(var(--white8));
+	}
+
+	.task-group-count {
+		font-size: 11px;
+		font-weight: 500;
+		color: hsl(var(--white33));
+	}
+
+	.task-group-add-btn {
+		margin-left: auto;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		border-radius: 6px;
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		flex-shrink: 0;
+		transition: background 0.15s;
+	}
+	.task-group-add-btn:hover {
+		background: hsl(var(--white4));
+	}
+	.task-group-add-btn:active {
+		background: hsl(var(--white11));
 	}
 
 	/* Wiki panels — gapped cards with horizontal padding */

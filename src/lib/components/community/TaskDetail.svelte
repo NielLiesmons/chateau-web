@@ -1,5 +1,5 @@
 <script lang="js">
-// @ts-nocheck
+	// @ts-nocheck
 	import { nip19 } from 'nostr-tools';
 	import {
 		queryEvent,
@@ -41,7 +41,15 @@
 	import { cubicOut } from 'svelte/easing';
 	import { goto } from '$app/navigation';
 
-	let { eventId = '', communityNpub = '', event: preloadedEvent = null, profiles: preloadedProfiles = null, onBack = () => {}, isMember = true, onJoinRequired = () => {} } = $props();
+	let {
+		eventId = '',
+		communityNpub = '',
+		event: preloadedEvent = null,
+		profiles: preloadedProfiles = null,
+		onBack = () => {},
+		isMember = true,
+		onJoinRequired = () => {}
+	} = $props();
 
 	let statusMenuOpen = $state(false);
 	let priorityMenuOpen = $state(false);
@@ -50,35 +58,42 @@
 
 	/** Svelte action: watches the element and sets panelOverflows when scrollWidth > clientWidth */
 	function observeOverflow(node) {
-		const check = () => { panelOverflows = node.scrollWidth > node.clientWidth; };
+		const check = () => {
+			panelOverflows = node.scrollWidth > node.clientWidth;
+		};
 		check();
 		const ro = new ResizeObserver(check);
 		ro.observe(node);
 		// Also re-check on any content mutation (e.g. profiles loading in)
 		const mo = new MutationObserver(check);
 		mo.observe(node, { childList: true, subtree: true });
-		return { destroy() { ro.disconnect(); mo.disconnect(); } };
+		return {
+			destroy() {
+				ro.disconnect();
+				mo.disconnect();
+			}
+		};
 	}
 	let statusMenuPos = $state({ top: 0, left: 0 });
 	let priorityMenuPos = $state({ top: 0, left: 0 });
 
 	/** @type {Array<{ value: 'backlog'|'open'|'inProgress'|'inReview'|'closed'|'canceled', label: string }>} */
 	const STATUS_OPTIONS = [
-		{ value: 'backlog',    label: 'Backlog'     },
-		{ value: 'open',       label: 'Open'        },
+		{ value: 'backlog', label: 'Backlog' },
+		{ value: 'open', label: 'Open' },
 		{ value: 'inProgress', label: 'In Progress' },
-		{ value: 'inReview',   label: 'In Review'   },
-		{ value: 'closed',     label: 'Closed'      },
-		{ value: 'canceled',   label: 'Canceled'    },
+		{ value: 'inReview', label: 'In Review' },
+		{ value: 'closed', label: 'Closed' },
+		{ value: 'canceled', label: 'Canceled' }
 	];
 
 	/** @type {Array<{ value: 'none'|'low'|'medium'|'high'|'urgent', label: string }>} */
 	const PRIORITY_OPTIONS = [
-		{ value: 'none',   label: 'No priority' },
-		{ value: 'low',    label: 'Low'         },
-		{ value: 'medium', label: 'Medium'      },
-		{ value: 'high',   label: 'High'        },
-		{ value: 'urgent', label: 'Urgent'      },
+		{ value: 'none', label: 'No priority' },
+		{ value: 'low', label: 'Low' },
+		{ value: 'medium', label: 'Medium' },
+		{ value: 'high', label: 'High' },
+		{ value: 'urgent', label: 'Urgent' }
 	];
 
 	/** @type {Record<string, string>} */
@@ -98,12 +113,24 @@
 	let communityAuthorPubkey = $state('');
 
 	// Initialize from preloaded profiles synchronously so the header renders on frame 0.
-	const _authorEv = preloadedEvent && preloadedProfiles ? preloadedProfiles.get(preloadedEvent.pubkey) : null;
+	const _authorEv =
+		preloadedEvent && preloadedProfiles ? preloadedProfiles.get(preloadedEvent.pubkey) : null;
 	const _commEv = (() => {
 		if (!communityNpub || !preloadedProfiles) return null;
-		try { const d = nip19.decode(communityNpub); return preloadedProfiles.get(d.data) ?? null; } catch { return null; }
+		try {
+			const d = nip19.decode(communityNpub);
+			return preloadedProfiles.get(d.data) ?? null;
+		} catch {
+			return null;
+		}
 	})();
-	const _commContent = (() => { try { return _commEv ? JSON.parse(_commEv.content || '{}') : null; } catch { return null; } })();
+	const _commContent = (() => {
+		try {
+			return _commEv ? JSON.parse(_commEv.content || '{}') : null;
+		} catch {
+			return null;
+		}
+	})();
 
 	/** @type {any} */
 	let authorProfile = $state(_authorEv ? parseProfile(_authorEv) : null);
@@ -235,7 +262,8 @@
 
 		(async () => {
 			// Fast path: event was handed off from the list — skip Dexie fetch.
-			const raw = preloadedEvent ??
+			const raw =
+				preloadedEvent ??
 				(await queryEvent({ kinds: [EVENT_KINDS.TASK], ids: [eventId] })) ??
 				(await queryEvent({ kinds: [EVENT_KINDS.TASK], '#h': [communityPubkey] }));
 
@@ -325,32 +353,50 @@
 	// Resolve allowed commenters (General section profile list). Same logic as ForumPostDetail.
 	$effect(() => {
 		const def = communityDef;
-		if (!def) { allowedCommenters = undefined; return; }
-		if (def.mainRelayEnforced) { allowedCommenters = null; return; }
+		if (!def) {
+			allowedCommenters = undefined;
+			return;
+		}
+		if (def.mainRelayEnforced) {
+			allowedCommenters = null;
+			return;
+		}
 		const relays = def.relays?.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
 		const generalSection = def.sections?.find((s) => s.name === 'General');
-		if (!generalSection?.profileListAddress) { allowedCommenters = null; return; }
+		if (!generalSection?.profileListAddress) {
+			allowedCommenters = null;
+			return;
+		}
 		const parts = generalSection.profileListAddress.split(':');
 		const listPubkey = parts[1];
 		const listDTag = parts.slice(2).join(':');
 		allowedCommenters = undefined;
 		let cancelled = false;
 		(async () => {
-			let listEvent = listPubkey && listDTag
-				? await queryEvent({ kinds: [EVENT_KINDS.PROFILE_LIST], authors: [listPubkey], '#d': [listDTag] })
-				: null;
-			if (!listEvent) listEvent = await fetchProfileListFromRelays(relays, generalSection.profileListAddress);
+			let listEvent =
+				listPubkey && listDTag
+					? await queryEvent({
+							kinds: [EVENT_KINDS.PROFILE_LIST],
+							authors: [listPubkey],
+							'#d': [listDTag]
+						})
+					: null;
+			if (!listEvent)
+				listEvent = await fetchProfileListFromRelays(relays, generalSection.profileListAddress);
 			if (cancelled) return;
 			const list = listEvent ? parseProfileList(listEvent) : null;
 			allowedCommenters = list?.members?.length ? list.members : null;
 		})();
-		return () => { cancelled = true; };
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	// Plain vars for non-member parent fetching (same pattern as ForumPostDetail).
 	let _taskLastParsedAllowed = /** @type {any[]} */ ([]);
 	let _taskPostIdRef = '';
-	let _taskNonMemberById = /** @type {Map<string, {loading?: boolean, comment?: any, notFound?: boolean}>} */ (new Map());
+	let _taskNonMemberById =
+		/** @type {Map<string, {loading?: boolean, comment?: any, notFound?: boolean}>} */ (new Map());
 
 	function _taskRefreshComments(parsedAllowed) {
 		const nonMemberEntries = [];
@@ -360,7 +406,12 @@
 		const combined = [...parsedAllowed, ...nonMemberEntries];
 		const combinedIdSet = new Set(combined.map((c) => c.id));
 		for (const c of combined) {
-			if (c.parentId && c.parentId !== _taskPostIdRef && !combinedIdSet.has(c.parentId) && !_taskNonMemberById.has(c.parentId)) {
+			if (
+				c.parentId &&
+				c.parentId !== _taskPostIdRef &&
+				!combinedIdSet.has(c.parentId) &&
+				!_taskNonMemberById.has(c.parentId)
+			) {
 				_taskNonMemberById.set(c.parentId, { loading: true });
 				_taskFetchNonMemberParent(c.parentId);
 			}
@@ -391,15 +442,24 @@
 				p.npub = nip19.npubEncode(event.pubkey);
 				p.nonMember = true;
 				_taskNonMemberById.set(id, { comment: p });
-				fetchProfilesBatch([event.pubkey]).then((batch) => {
-					const ev = batch.get(event.pubkey);
-					if (ev?.content) {
-						try {
-							const c = JSON.parse(ev.content);
-							profiles = { ...profiles, [event.pubkey]: { displayName: c.display_name ?? c.name, name: c.name, picture: c.picture } };
-						} catch {}
-					}
-				}).catch(() => {});
+				fetchProfilesBatch([event.pubkey])
+					.then((batch) => {
+						const ev = batch.get(event.pubkey);
+						if (ev?.content) {
+							try {
+								const c = JSON.parse(ev.content);
+								profiles = {
+									...profiles,
+									[event.pubkey]: {
+										displayName: c.display_name ?? c.name,
+										name: c.name,
+										picture: c.picture
+									}
+								};
+							} catch {}
+						}
+					})
+					.catch(() => {});
 			} else {
 				_taskNonMemberById.set(id, { notFound: true });
 			}
@@ -438,8 +498,12 @@
 			const [byE, bye, byA, bya] = await Promise.all([
 				queryEvents({ kinds: [1111], '#E': [tid], limit: 500 }),
 				queryEvents({ kinds: [1111], '#e': [tid], limit: 500 }),
-				taskAddr ? queryEvents({ kinds: [1111], '#A': [taskAddr], limit: 500 }) : Promise.resolve([]),
-				taskAddr ? queryEvents({ kinds: [1111], '#a': [taskAddr], limit: 500 }) : Promise.resolve([])
+				taskAddr
+					? queryEvents({ kinds: [1111], '#A': [taskAddr], limit: 500 })
+					: Promise.resolve([]),
+				taskAddr
+					? queryEvents({ kinds: [1111], '#a': [taskAddr], limit: 500 })
+					: Promise.resolve([])
 			]);
 			const byId = new Map();
 			for (const e of [...byE, ...bye, ...byA, ...bya]) if (!byId.has(e.id)) byId.set(e.id, e);
@@ -466,7 +530,11 @@
 							if (ev?.content) {
 								try {
 									const c = JSON.parse(ev.content);
-									next[pk] = { displayName: c.display_name ?? c.name, name: c.name, picture: c.picture };
+									next[pk] = {
+										displayName: c.display_name ?? c.name,
+										name: c.name,
+										picture: c.picture
+									};
 								} catch {}
 							}
 						}
@@ -484,8 +552,15 @@
 			.then(() => {})
 			.catch(() => {});
 		if (taskAddr) {
-			fetchFromRelays(relays, { kinds: [1111], '#A': [taskAddr], limit: 500, ...(allowed?.length ? { authors: allowed } : {}) })
-				.then(async (evs) => { if (evs.length) await putEvents(evs); })
+			fetchFromRelays(relays, {
+				kinds: [1111],
+				'#A': [taskAddr],
+				limit: 500,
+				...(allowed?.length ? { authors: allowed } : {})
+			})
+				.then(async (evs) => {
+					if (evs.length) await putEvents(evs);
+				})
 				.catch(() => {});
 		}
 		return () => sub.unsubscribe();
@@ -597,13 +672,13 @@
 	// Authorized to post status events: task author, assignees, or community owner
 	const isAuthorizedForStatus = $derived(
 		getIsSignedIn() &&
-		!!getCurrentPubkey() &&
-		!!(
-			task?.pubkey === getCurrentPubkey() ||
-			assigneeProfiles.some((p) => p.pubkey === getCurrentPubkey()) ||
-			communityDef?.pubkey === getCurrentPubkey() ||
-			communityPubkeyFromNpub === getCurrentPubkey()
-		)
+			!!getCurrentPubkey() &&
+			!!(
+				task?.pubkey === getCurrentPubkey() ||
+				assigneeProfiles.some((p) => p.pubkey === getCurrentPubkey()) ||
+				communityDef?.pubkey === getCurrentPubkey() ||
+				communityPubkeyFromNpub === getCurrentPubkey()
+			)
 	);
 
 	const editInitialData = $derived(
@@ -655,7 +730,11 @@
 		let el = btn.parentElement;
 		while (el && el !== document.documentElement) {
 			const s = getComputedStyle(el);
-			if (s.transform !== 'none' || s.perspective !== 'none' || s.willChange.includes('transform')) {
+			if (
+				s.transform !== 'none' ||
+				s.perspective !== 'none' ||
+				s.willChange.includes('transform')
+			) {
 				const r = el.getBoundingClientRect();
 				return { top: btnRect.bottom - r.top + 6, left: btnRect.left - r.left };
 			}
@@ -693,7 +772,10 @@
 		const addr = `${EVENT_KINDS.TASK}:${task.pubkey}:${dTag}`;
 		const specStatus = CAMEL_TO_SPEC[newStatusCamel] ?? newStatusCamel;
 		/** @type {string[][]} */
-		const tags = [['a', addr], ['status', specStatus]];
+		const tags = [
+			['a', addr],
+			['status', specStatus]
+		];
 		if (taskPriority && taskPriority !== 'none') tags.push(['priority', taskPriority]);
 		try {
 			const ev = await signEvent({
@@ -719,7 +801,10 @@
 		const addr = `${EVENT_KINDS.TASK}:${task.pubkey}:${dTag}`;
 		const specStatus = CAMEL_TO_SPEC[taskStatus] ?? 'open';
 		/** @type {string[][]} */
-		const tags = [['a', addr], ['status', specStatus]];
+		const tags = [
+			['a', addr],
+			['status', specStatus]
+		];
 		if (newPriority && newPriority !== 'none') tags.push(['priority', newPriority]);
 		try {
 			const ev = await signEvent({
@@ -736,17 +821,33 @@
 	}
 
 	async function handleEditSubmit(/** @type {any} */ params) {
-		const { title, status, priority, text, emojiTags = [], mentions = [], labels = [], assignees: assigneePks = [], dTag: submittedDTag = '' } = params;
+		const {
+			title,
+			status,
+			priority,
+			text,
+			emojiTags = [],
+			mentions = [],
+			labels = [],
+			assignees: assigneePks = [],
+			dTag: submittedDTag = ''
+		} = params;
 		const pubkey = getCurrentPubkey();
 		if (!pubkey) throw new Error('Not signed in');
-		const finalDTag = submittedDTag || (task?.tags?.find((/** @type {string[]} */ t) => t[0] === 'd')?.[1] ?? '');
+		const finalDTag =
+			submittedDTag || (task?.tags?.find((/** @type {string[]} */ t) => t[0] === 'd')?.[1] ?? '');
 		const communityPubkey = communityPubkeyFromNpub;
 		/** @type {string[][]} */
-		const tags = [['d', finalDTag], ['title', title.trim()]];
+		const tags = [
+			['d', finalDTag],
+			['title', title.trim()]
+		];
 		if (communityPubkey) tags.push(['h', communityPubkey]);
 		labels.forEach((/** @type {string} */ l) => tags.push(['t', l]));
 		assigneePks.forEach((/** @type {string} */ pk) => tags.push(['p', pk, 'assignee']));
-		mentions.forEach((/** @type {string} */ pk) => { if (!assigneePks.includes(pk)) tags.push(['p', pk]); });
+		mentions.forEach((/** @type {string} */ pk) => {
+			if (!assigneePks.includes(pk)) tags.push(['p', pk]);
+		});
 		emojiTags.forEach((/** @type {string[]} */ e) => tags.push(e));
 
 		const taskEv = await signEvent({
@@ -764,7 +865,10 @@
 		const specStatus = CAMEL_TO_SPEC[status] ?? status;
 		const addr = `${EVENT_KINDS.TASK}:${pubkey}:${finalDTag}`;
 		/** @type {string[][]} */
-		const statusTags = [['a', addr], ['status', specStatus]];
+		const statusTags = [
+			['a', addr],
+			['status', specStatus]
+		];
 		if (priority && priority !== 'none') statusTags.push(['priority', priority]);
 		const statusEv = await signEvent({
 			kind: EVENT_KINDS.STATUS,
@@ -780,7 +884,15 @@
 			const batch = await fetchProfilesBatch(assigneePks);
 			assigneeProfiles = assigneePks.map((/** @type {string} */ pk) => {
 				const pEv = batch.get(pk);
-				const c = pEv?.content ? (() => { try { return JSON.parse(pEv.content); } catch { return {}; } })() : {};
+				const c = pEv?.content
+					? (() => {
+							try {
+								return JSON.parse(pEv.content);
+							} catch {
+								return {};
+							}
+						})()
+					: {};
 				return { pubkey: pk, name: c.display_name ?? c.name, pictureUrl: c.picture };
 			});
 		} else {
@@ -859,122 +971,137 @@
 
 		<div class="content-scroll">
 			<div class="content-inner">
-			<!-- Title row -->
-			<div class="title-row">
-				<h1 class="task-title">{taskTitle}</h1>
-				{#if isOwnTask && getIsSignedIn()}
-					<button
-						type="button"
-						class="edit-btn btn-primary-small"
-						onclick={() => (editModalOpen = true)}
-						aria-label="Edit task"
-					>
-						<Pen variant="fill" color="hsl(var(--white66))" size={14} />
-						<span>Edit</span>
-					</button>
-				{/if}
-			</div>
+				<!-- Title row -->
+				<div class="title-row">
+					<h1 class="task-title">{taskTitle}</h1>
+					{#if isOwnTask && getIsSignedIn()}
+						<button
+							type="button"
+							class="edit-btn btn-primary-small"
+							onclick={() => (editModalOpen = true)}
+							aria-label="Edit task"
+						>
+							<Pen variant="fill" color="hsl(var(--white66))" size={14} />
+							<span>Edit</span>
+						</button>
+					{/if}
+				</div>
 
-			<!-- Meta panel -->
-			<div class="meta-scroll-wrap" class:panel-overflows={panelOverflows} use:observeOverflow>
-			<div class="task-meta-panel">
-				<div class="task-meta-cols">
-					<!-- STATUS + PRIORITY -->
-					<div class="task-meta-col">
-						<div class="task-meta-header-row"><span class="task-meta-label">STATUS</span></div>
-						<div class="task-meta-line">
-							<TaskBox state={taskStatus} size={16} />
-							<span class="task-meta-val">{statusDisplayLabel}</span>
-							{#if isAuthorizedForStatus}
-								<button
-									type="button"
-									class="meta-inline-btn"
-									onclick={toggleStatusMenu}
-									aria-label="Change status"
-									aria-haspopup="listbox"
-									aria-expanded={statusMenuOpen}
-								>
-									<ChevronDown variant="outline" color="hsl(0 0% 100% / 0.44)" size={12} strokeWidth={2} />
-								</button>
-							{/if}
-						</div>
-						<div class="task-meta-line">
-							<PriorityBox priority={taskPriority !== 'none' ? taskPriority : 'none'} size={16} />
-							<span class="task-meta-val" class:task-meta-empty={taskPriority === 'none'}
-								>{priorityDisplayLabel}</span
-							>
-							{#if isAuthorizedForStatus}
-								<button
-									type="button"
-									class="meta-inline-btn"
-									onclick={togglePriorityMenu}
-									aria-label="Change priority"
-									aria-haspopup="listbox"
-									aria-expanded={priorityMenuOpen}
-								>
-									<ChevronDown variant="outline" color="hsl(0 0% 100% / 0.44)" size={12} strokeWidth={2} />
-								</button>
-							{/if}
-						</div>
-					</div>
-
-					<!-- PROJECT + MILESTONE -->
-					<div class="task-meta-col">
-						<div class="task-meta-header-row"><span class="task-meta-label">PROJECT</span></div>
-						<div class="task-meta-line">
-							<span
-								class="task-meta-val"
-								class:task-meta-cap={!!projectRef}
-								class:task-meta-empty={!projectRef}
-							>
-								{projectRef ? addrLabel(projectRef) : 'No project'}
-							</span>
-						</div>
-						<div class="task-meta-line">
-							<span class="task-meta-val" class:task-meta-empty={!milestoneRef}>
-								{milestoneRef ? addrLabel(milestoneRef) : 'No milestone'}
-							</span>
-						</div>
-					</div>
-
-					<!-- TARGETS -->
-					<div class="task-meta-col">
-						<div class="task-meta-header-row"><span class="task-meta-label">TARGETS</span></div>
-						{#if taskTargetRefs.length > 0}
-							{#each taskTargetRefs as ref}
+				<!-- Meta panel -->
+				<div class="meta-scroll-wrap" class:panel-overflows={panelOverflows} use:observeOverflow>
+					<div class="task-meta-panel">
+						<div class="task-meta-cols">
+							<!-- STATUS + PRIORITY -->
+							<div class="task-meta-col">
+								<div class="task-meta-header-row"><span class="eyebrow-label-xs eyebrow-label-muted">STATUS</span></div>
 								<div class="task-meta-line">
-									<span class="task-meta-val task-meta-mono">{ref.label}</span>
+									<TaskBox state={taskStatus} size={16} />
+									<span class="task-meta-val">{statusDisplayLabel}</span>
+									{#if isAuthorizedForStatus}
+										<button
+											type="button"
+											class="meta-inline-btn"
+											onclick={toggleStatusMenu}
+											aria-label="Change status"
+											aria-haspopup="listbox"
+											aria-expanded={statusMenuOpen}
+										>
+											<ChevronDown
+												variant="outline"
+												color="hsl(0 0% 100% / 0.44)"
+												size={12}
+												strokeWidth={2}
+											/>
+										</button>
+									{/if}
 								</div>
-							{/each}
-						{:else}
-							<span class="task-meta-val task-meta-empty">No targets</span>
-						{/if}
-					</div>
-
-					<!-- ASSIGNED TO -->
-					<div class="task-meta-col">
-						<div class="task-meta-header-row"><span class="task-meta-label">ASSIGNED TO</span></div>
-						{#if assigneeProfiles.length > 0}
-							{#each assigneeProfiles.slice(0, 2) as profile (profile.pubkey)}
 								<div class="task-meta-line">
-									<ProfilePic
-										pubkey={profile.pubkey}
-										pictureUrl={profile.pictureUrl}
-										name={profile.name}
-										size="xs"
+									<PriorityBox
+										priority={taskPriority !== 'none' ? taskPriority : 'none'}
+										size={16}
 									/>
-									<span class="task-meta-val"
-										>{profile.name || profile.pubkey.slice(0, 8) + '…'}</span
+									<span class="task-meta-val" class:task-meta-empty={taskPriority === 'none'}
+										>{priorityDisplayLabel}</span
 									>
+									{#if isAuthorizedForStatus}
+										<button
+											type="button"
+											class="meta-inline-btn"
+											onclick={togglePriorityMenu}
+											aria-label="Change priority"
+											aria-haspopup="listbox"
+											aria-expanded={priorityMenuOpen}
+										>
+											<ChevronDown
+												variant="outline"
+												color="hsl(0 0% 100% / 0.44)"
+												size={12}
+												strokeWidth={2}
+											/>
+										</button>
+									{/if}
 								</div>
-							{/each}
-						{:else}
-							<span class="task-meta-val task-meta-empty">Unassigned</span>
-						{/if}
+							</div>
+
+							<!-- PROJECT + MILESTONE -->
+							<div class="task-meta-col">
+								<div class="task-meta-header-row"><span class="eyebrow-label-xs eyebrow-label-muted">PROJECT</span></div>
+								<div class="task-meta-line">
+									<span
+										class="task-meta-val"
+										class:task-meta-cap={!!projectRef}
+										class:task-meta-empty={!projectRef}
+									>
+										{projectRef ? addrLabel(projectRef) : 'No project'}
+									</span>
+								</div>
+								<div class="task-meta-line">
+									<span class="task-meta-val" class:task-meta-empty={!milestoneRef}>
+										{milestoneRef ? addrLabel(milestoneRef) : 'No milestone'}
+									</span>
+								</div>
+							</div>
+
+							<!-- TARGETS -->
+							<div class="task-meta-col">
+								<div class="task-meta-header-row"><span class="eyebrow-label-xs eyebrow-label-muted">TARGETS</span></div>
+								{#if taskTargetRefs.length > 0}
+									{#each taskTargetRefs as ref}
+										<div class="task-meta-line">
+											<span class="task-meta-val task-meta-mono">{ref.label}</span>
+										</div>
+									{/each}
+								{:else}
+									<span class="task-meta-val task-meta-empty">No targets</span>
+								{/if}
+							</div>
+
+							<!-- ASSIGNED TO -->
+							<div class="task-meta-col">
+								<div class="task-meta-header-row">
+									<span class="eyebrow-label-xs eyebrow-label-muted">ASSIGNED TO</span>
+								</div>
+								{#if assigneeProfiles.length > 0}
+									{#each assigneeProfiles.slice(0, 2) as profile (profile.pubkey)}
+										<div class="task-meta-line">
+											<ProfilePic
+												pubkey={profile.pubkey}
+												pictureUrl={profile.pictureUrl}
+												name={profile.name}
+												size="xs"
+											/>
+											<span class="task-meta-val"
+												>{profile.name || profile.pubkey.slice(0, 8) + '…'}</span
+											>
+										</div>
+									{/each}
+								{:else}
+									<span class="task-meta-val task-meta-empty">Unassigned</span>
+								{/if}
+							</div>
+						</div>
 					</div>
 				</div>
-			</div>
-			</div>
 
 				{#if task.content?.trim()}
 					<div class="description-container" class:expanded={descriptionExpanded}>
@@ -1004,13 +1131,16 @@
 				{/if}
 
 				<div class="social-tabs-wrap">
-				<SocialTabs
-					app={{}}
-					mainEventIds={[task.id]}
-					wikiLinkFn={communityNpub ? (slug) => `/communities?c=${encodeURIComponent(communityNpub)}&wiki=${encodeURIComponent(slug)}` : undefined}
-					showDetailsTab={true}
-					detailsShareableId={taskNaddr}
-					detailsPublicationLabel="Task"
+					<SocialTabs
+						app={{}}
+						mainEventIds={[task.id]}
+						wikiLinkFn={communityNpub
+							? (slug) =>
+									`/communities?c=${encodeURIComponent(communityNpub)}&wiki=${encodeURIComponent(slug)}`
+							: undefined}
+						showDetailsTab={true}
+						detailsShareableId={taskNaddr}
+						detailsPublicationLabel="Task"
 						detailsNpub={npub}
 						detailsPubkey={task.pubkey ?? ''}
 						detailsRawData={rawTaskEvent
@@ -1075,7 +1205,11 @@
 	<!-- Fixed-position menus — escape all overflow containers -->
 	{#if statusMenuOpen}
 		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-		<div class="meta-menu-backdrop" onclick={() => (statusMenuOpen = false)} role="presentation"></div>
+		<div
+			class="meta-menu-backdrop"
+			onclick={() => (statusMenuOpen = false)}
+			role="presentation"
+		></div>
 		<div
 			class="meta-fixed-menu"
 			role="listbox"
@@ -1101,7 +1235,11 @@
 
 	{#if priorityMenuOpen}
 		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-		<div class="meta-menu-backdrop" onclick={() => (priorityMenuOpen = false)} role="presentation"></div>
+		<div
+			class="meta-menu-backdrop"
+			onclick={() => (priorityMenuOpen = false)}
+			role="presentation"
+		></div>
 		<div
 			class="meta-fixed-menu"
 			role="listbox"
@@ -1177,7 +1315,7 @@
 	}
 
 	.edit-btn {
-		gap: 5px;
+		gap: 8px;
 		flex-shrink: 0;
 	}
 
@@ -1189,7 +1327,9 @@
 		margin-bottom: 14px;
 		scrollbar-width: none;
 	}
-	.meta-scroll-wrap::-webkit-scrollbar { display: none; }
+	.meta-scroll-wrap::-webkit-scrollbar {
+		display: none;
+	}
 	/* Right-edge fade only when panel actually overflows */
 	.meta-scroll-wrap.panel-overflows {
 		mask-image: linear-gradient(to right, black 90%, transparent 100%);
@@ -1219,8 +1359,13 @@
 		padding: 10px 14px 10px 0;
 		border-right: 1px solid hsl(var(--white11));
 	}
-	.task-meta-col:not(:first-child) { padding-left: 14px; }
-	.task-meta-col:last-child { border-right: none; padding-right: 0; }
+	.task-meta-col:not(:first-child) {
+		padding-left: 14px;
+	}
+	.task-meta-col:last-child {
+		border-right: none;
+		padding-right: 0;
+	}
 
 	/* Label row inside column (label + optional Edit button inline) */
 	.task-meta-header-row {
@@ -1228,14 +1373,6 @@
 		align-items: center;
 		gap: 6px;
 		margin-bottom: 1px;
-	}
-
-	.task-meta-label {
-		font-size: 0.625rem;
-		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: hsl(var(--white33));
 	}
 
 	.task-meta-line {
@@ -1278,8 +1415,12 @@
 		opacity: 0.8;
 		transition: opacity 0.15s ease;
 	}
-	.meta-inline-btn:hover { opacity: 1; }
-	.meta-inline-btn:active { opacity: 0.5; }
+	.meta-inline-btn:hover {
+		opacity: 1;
+	}
+	.meta-inline-btn:active {
+		opacity: 0.5;
+	}
 
 	/* ── Fixed-position dropdown menus (escape all overflow containers) ── */
 	.meta-menu-backdrop {
@@ -1316,7 +1457,9 @@
 	.status-option:not(:last-child) {
 		border-bottom: 0.33px solid hsl(var(--white8));
 	}
-	.status-option:hover { background: hsl(var(--white4)); }
+	.status-option:hover {
+		background: hsl(var(--white4));
+	}
 	.status-option.active .status-label {
 		color: hsl(var(--white));
 		font-weight: 600;
