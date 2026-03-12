@@ -17,7 +17,7 @@ import LabelStack from '$lib/components/common/LabelStack.svelte';
 
 let {
 	title = '',
-	/** @type {'backlog'|'open'|'inProgress'|'inReview'|'closed'} */
+	/** @type {'backlog'|'open'|'inProgress'|'inReview'|'closed'|'canceled'} */
 	status = 'open',
 	/** @type {'none'|'low'|'medium'|'high'|'urgent'} */
 	priority = 'none',

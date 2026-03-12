@@ -31,14 +31,24 @@
 	import { createSearchEmojisFunction } from '$lib/services/emoji-search.js';
 	import { goto } from '$app/navigation';
 
-	let { eventId = '', communityNpub = '', onBack = () => {}, isMember = true, onJoinRequired = () => {} } = $props();
+	let { eventId = '', communityNpub = '', event: preloadedEvent = null, profiles: preloadedProfiles = null, onBack = () => {}, isMember = true, onJoinRequired = () => {} } = $props();
 
-	let post = $state(null);
-	let rawPostEvent = $state(null);
+	// If a preloaded event + profiles were passed (navHandoff), use them immediately — no Dexie round-trip.
+	let post = $state(preloadedEvent ? parseForumPost(preloadedEvent) : null);
+	let rawPostEvent = $state(preloadedEvent ?? null);
 	let communityAuthorPubkey = $state('');
-	let authorProfile = $state(null);
-	let communityName = $state('');
-	let communityPicture = $state('');
+
+	// Initialize from preloaded profiles synchronously so the header renders on frame 0.
+	const _authorEv = preloadedEvent && preloadedProfiles ? preloadedProfiles.get(preloadedEvent.pubkey) : null;
+	const _commEv = (() => {
+		if (!communityNpub || !preloadedProfiles) return null;
+		try { const d = nip19.decode(communityNpub); return preloadedProfiles.get(d.data) ?? null; } catch { return null; }
+	})();
+	const _commContent = (() => { try { return _commEv ? JSON.parse(_commEv.content || '{}') : null; } catch { return null; } })();
+
+	let authorProfile = $state(_authorEv ? parseProfile(_authorEv) : null);
+	let communityName = $state(_commContent?.display_name ?? _commContent?.name ?? '');
+	let communityPicture = $state(_commContent?.picture ?? _commContent?.image ?? '');
 	let descriptionExpanded = $state(false);
 	let isTruncated = $state(false);
 	let comments = $state([]);
@@ -82,7 +92,8 @@
 		}
 		communityAuthorPubkey = communityPubkey;
 		(async () => {
-			const raw = await queryEvent({
+			// Fast path: event was handed off from the list — skip Dexie fetch.
+			const raw = preloadedEvent ?? await queryEvent({
 				kinds: [EVENT_KINDS.FORUM_POST],
 				ids: [eventId],
 				'#h': [communityPubkey]

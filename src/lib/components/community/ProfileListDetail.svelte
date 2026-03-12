@@ -289,17 +289,17 @@ function toNpub(pk) {
 				<!-- Title row -->
 				<div class="title-row">
 					<h1 class="list-title">{parsed.name ?? 'Unnamed List'}</h1>
-					{#if isCommunityAdmin && getIsSignedIn()}
-						<button
-							type="button"
-							class="edit-btn"
-							onclick={() => (editModalOpen = true)}
-							aria-label="Edit list"
-						>
-							<Pen variant="outline" color="hsl(var(--white66))" size={14} />
-							<span>Edit</span>
-						</button>
-					{/if}
+				{#if isCommunityAdmin && getIsSignedIn()}
+					<button
+						type="button"
+						class="edit-btn btn-primary-small"
+						onclick={() => (editModalOpen = true)}
+						aria-label="Edit list"
+					>
+						<Pen variant="fill" color="hsl(var(--white66))" size={14} />
+						<span>Edit</span>
+					</button>
+				{/if}
 				</div>
 
 				<!-- Info panel: badge + name + description -->
@@ -452,23 +452,9 @@ function toNpub(pk) {
 	}
 
 	.edit-btn {
-		display: inline-flex;
-		align-items: center;
 		gap: 5px;
 		flex-shrink: 0;
-		height: 28px;
-		padding: 0 10px 0 8px;
-		background: hsl(var(--white8));
-		border: none;
-		border-radius: 9999px;
-		font-size: 0.8125rem;
-		font-weight: 500;
-		color: hsl(var(--white66));
-		cursor: pointer;
-		transition: background 0.15s ease;
 	}
-	.edit-btn:hover  { background: hsl(var(--white16)); }
-	.edit-btn:active { transform: scale(0.96); }
 
 	/* ── Section label ── */
 	.section-label {

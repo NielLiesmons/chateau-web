@@ -38,13 +38,13 @@ const PROJECT_LABEL_SUGGESTIONS = [
 	'Marketing', 'Docs', 'Security', 'Testing', 'Nostr', 'Open Source'
 ];
 
-/** Only two manual states – intermediate progress is computed from milestones */
 const STATUS_OPTIONS = [
-	{ value: 'open',   label: 'Open',   pct: 0   },
-	{ value: 'closed', label: 'Closed', pct: 100 },
+	{ value: 'backlog',    label: 'Backlog'     },
+	{ value: 'planned',    label: 'Planned'     },
+	{ value: 'inProgress', label: 'In Progress' },
+	{ value: 'completed',  label: 'Completed'   },
+	{ value: 'canceled',   label: 'Canceled'    },
 ];
-
-const STATUS_PCT = { open: 0, closed: 100 };
 
 const PRIORITY_OPTIONS = [
 	{ value: 'none',   label: 'None'   },
@@ -73,7 +73,7 @@ let {
 const searchProfiles = $derived(searchProfilesProp ?? createSearchProfilesFunction(getCurrentPubkey));
 const searchEmojis   = $derived(searchEmojisProp   ?? createSearchEmojisFunction(getCurrentPubkey));
 
-let projectStatus      = $state('open');
+let projectStatus      = $state('planned');
 let statusMenuOpen     = $state(false);
 /** @type {'none' | 'low' | 'medium' | 'high' | 'urgent'} */
 let projectPriority    = $state('none');
@@ -116,8 +116,6 @@ let dueDate = $state('');
 let dueDateInput = $state(null);
 /** Whether the From→To date picker dropdown is open */
 let datePickerOpen = $state(false);
-
-const statusPct = $derived(STATUS_PCT[projectStatus] ?? 0);
 
 function close() { isOpen = false; onclose?.(); }
 
@@ -204,7 +202,7 @@ async function handlePublish() {
 function resetForm() {
 	titleValue         = '';
 	summaryValue       = '';
-	projectStatus      = 'open';
+	projectStatus      = 'planned';
 	projectPriority    = 'none';
 	selectedLabels     = [];
 	pendingMilestones  = [];
@@ -222,7 +220,9 @@ $effect(() => {
 		if (initialData) {
 			titleValue       = initialData.title     ?? '';
 			summaryValue     = initialData.summary   ?? '';
-			projectStatus    = initialData.status    ?? 'open';
+			const statusMigration = { open: 'planned', closed: 'completed', 'in-progress': 'inProgress', 'in-review': 'inProgress' };
+			const rawStatus = initialData.status ?? 'planned';
+			projectStatus    = statusMigration[rawStatus] ?? rawStatus;
 			projectPriority  = /** @type {any} */ (initialData.priority  ?? 'none');
 			startDate        = initialData.startDate ?? '';
 			dueDate          = initialData.dueDate   ?? '';
@@ -277,7 +277,7 @@ $effect(() => {
 							aria-haspopup="listbox"
 							aria-expanded={statusMenuOpen}
 						>
-							<ProjectBox percentage={statusPct} size={24} />
+							<ProjectBox state={projectStatus} size={24} />
 						</button>
 
 						{#if statusMenuOpen}
@@ -298,7 +298,7 @@ $effect(() => {
 										aria-selected={projectStatus === opt.value}
 										onclick={() => { projectStatus = opt.value; statusMenuOpen = false; }}
 									>
-										<ProjectBox percentage={opt.pct} size={18} />
+										<ProjectBox state={opt.value} size={18} />
 										<span class="status-label">{opt.label}</span>
 									</button>
 								{/each}

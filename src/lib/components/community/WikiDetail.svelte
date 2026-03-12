@@ -32,10 +32,14 @@
 	import { publishToRelays } from '$lib/nostr';
 	import { goto } from '$app/navigation';
 
-	/** @type {{ slug?: string, eventId?: string, communityNpub?: string, wikiLinkFn?: (slug: string) => string, onBack?: () => void }} */
+	/** @type {{ slug?: string, eventId?: string, event?: any, profiles?: Map<string,any>|null, communityNpub?: string, wikiLinkFn?: (slug: string) => string, onBack?: () => void }} */
 	let {
 		slug = '',
 		eventId = '',
+		/** Optional pre-loaded event (from navHandoff) — skips the Dexie/relay lookup. */
+		event: preloadedEvent = null,
+		/** Optional pre-loaded profiles (from navHandoff) — skips author/community query. */
+		profiles: preloadedProfiles = null,
 		communityNpub = '',
 		/** Converts a [[slug]] to a URL. Override per context (desktop vs mobile). */
 		wikiLinkFn = (s) => `#${s}`,
@@ -43,14 +47,23 @@
 	} = $props();
 
 	/** @type {any} */
-	let wikiEvent = $state(null);
+	let wikiEvent = $state(preloadedEvent ?? null);
+
+	// Initialize from preloaded profiles synchronously so the header renders on frame 0.
+	const _authorEv = preloadedEvent && preloadedProfiles ? preloadedProfiles.get(preloadedEvent.pubkey) : null;
+	const _commEv = (() => {
+		if (!communityNpub || !preloadedProfiles) return null;
+		try { const d = nip19.decode(communityNpub); return preloadedProfiles.get(d.data) ?? null; } catch { return null; }
+	})();
+	const _commContent = (() => { try { return _commEv ? JSON.parse(_commEv.content || '{}') : null; } catch { return null; } })();
+
 	/** @type {any} */
-	let authorProfile = $state(null);
-	let loading = $state(true);
+	let authorProfile = $state(_authorEv ? parseProfile(_authorEv) : null);
+	let loading = $state(!preloadedEvent);
 	let descriptionExpanded = $state(false);
 	let isTruncated = $state(false);
-	let communityName = $state('');
-	let communityPicture = $state('');
+	let communityName = $state(_commContent?.display_name ?? _commContent?.name ?? '');
+	let communityPicture = $state(_commContent?.picture ?? _commContent?.image ?? '');
 	let communityPubkeyState = $state('');
 
 	const title = $derived(
@@ -206,7 +219,7 @@
 	}
 
 	$effect(() => {
-		if (!communityNpub && !slug && !eventId) {
+		if (!communityNpub && !slug && !eventId && !preloadedEvent) {
 			loading = false;
 			return;
 		}
@@ -222,6 +235,31 @@
 		}
 
 		(async () => {
+			// Preloaded event skips Dexie/relay fetch — jump straight to profile loads.
+			if (preloadedEvent) {
+				wikiEvent = preloadedEvent;
+				loading = false;
+				communityPubkeyState = communityPubkey;
+				const [profileEv, communityEv, communityProfileEv] = await Promise.all([
+					preloadedEvent.pubkey
+						? queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [preloadedEvent.pubkey], limit: 1 })
+						: Promise.resolve(null),
+					communityPubkey
+						? queryEvent({ kinds: [EVENT_KINDS.COMMUNITY], authors: [communityPubkey], limit: 1 })
+						: Promise.resolve(null),
+					communityPubkey
+						? queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [communityPubkey], limit: 1 })
+						: Promise.resolve(null)
+				]);
+				if (profileEv) authorProfile = parseProfile(profileEv);
+				if (communityEv || communityProfileEv) {
+					const cp = communityProfileEv ? parseProfile(communityProfileEv) : null;
+					communityName = cp?.display_name ?? cp?.name ?? communityEv?.tags?.find((t) => t[0] === 'name')?.[1] ?? '';
+					communityPicture = cp?.picture ?? '';
+				}
+				return;
+			}
+
 			loading = true;
 			wikiEvent = null;
 			authorProfile = null;
@@ -335,17 +373,17 @@
 						{wikiSlug}
 					</span>
 				{/if}
-					{#if isOwnWiki && getIsSignedIn()}
-						<button
-							type="button"
-							class="edit-btn"
-							onclick={() => (editModalOpen = true)}
-							aria-label="Edit wiki"
-						>
-							<Pen variant="outline" color="hsl(var(--white66))" size={14} />
-							<span>Edit</span>
-						</button>
-					{/if}
+				{#if isOwnWiki && getIsSignedIn()}
+					<button
+						type="button"
+						class="edit-btn btn-primary-small"
+						onclick={() => (editModalOpen = true)}
+						aria-label="Edit wiki"
+					>
+						<Pen variant="fill" color="hsl(var(--white66))" size={14} />
+						<span>Edit</span>
+					</button>
+				{/if}
 				</div>
 
 				<!-- Summary panel -->
@@ -522,31 +560,8 @@
 	}
 
 	.edit-btn {
-		display: inline-flex;
-		align-items: center;
 		gap: 5px;
-		margin-left: auto;
 		flex-shrink: 0;
-		height: 28px;
-		padding: 0 10px 0 8px;
-		background: hsl(var(--white8));
-		border: none;
-		border-radius: 9999px;
-		font-size: 0.8125rem;
-		font-weight: 500;
-		color: hsl(var(--white66));
-		cursor: pointer;
-		transition:
-			background 0.15s ease,
-			transform 0.15s ease;
-	}
-
-	.edit-btn:hover {
-		background: hsl(var(--white16));
-	}
-
-	.edit-btn:active {
-		transform: scale(0.96);
 	}
 
 	.wiki-summary {

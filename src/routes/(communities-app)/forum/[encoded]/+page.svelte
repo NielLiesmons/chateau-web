@@ -5,6 +5,7 @@ import { browser } from '$app/environment';
 import { nip19 } from 'nostr-tools';
 import { queryEvent } from '$lib/nostr';
 import { EVENT_KINDS } from '$lib/config';
+import { navHandoff } from '$lib/navHandoff.js';
 import ForumPostDetail from '$lib/components/community/ForumPostDetail.svelte';
 import GeneralEventDetail from '$lib/components/community/GeneralEventDetail.svelte';
 
@@ -19,9 +20,16 @@ const eventId = $derived.by(() => {
 	return '';
 });
 
-let communityNpub = $state('');
+// Consume handoff synchronously — provides event, communityNpub, and profiles instantly.
+const _enc = $page.params.encoded ?? '';
+const _h = navHandoff.get(_enc) ?? null;
+if (_h) navHandoff.delete(_enc);
 
+let communityNpub = $state(_h?.communityNpub ?? '');
+
+// Async fallback: only runs when opening the page directly (no handoff).
 $effect(() => {
+	if (_h) return;
 	const id = eventId;
 	if (!browser || !id) { communityNpub = ''; return; }
 	queryEvent({ kinds: [EVENT_KINDS.FORUM_POST], ids: [id], limit: 1 }).then((ev) => {
@@ -38,7 +46,13 @@ $effect(() => {
 </svelte:head>
 
 {#if eventId && communityNpub}
-	<ForumPostDetail {eventId} {communityNpub} onBack={() => history.back()} />
+	<ForumPostDetail
+		{eventId}
+		{communityNpub}
+		event={_h?.event ?? null}
+		profiles={_h?.profiles ?? null}
+		onBack={() => history.back()}
+	/>
 {:else if eventId}
 	<GeneralEventDetail {encoded} onBack={() => history.back()} />
 {/if}

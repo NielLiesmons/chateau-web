@@ -59,7 +59,7 @@ let milestonesLoading     = $state(false);
 let showMilestoneSkeleton = $state(false);
 
 // ── Project progress (derived from closed milestones) ───────────────────
-let projectPercentage = $state(0);
+let _projectPercentage = $state(0);
 
 // ── Derived values ────────────────────────────────────────────────────────
 const title = $derived(projectParsed?.title ?? '');
@@ -293,7 +293,7 @@ $effect(() => {
 			milestoneStatusMap = val ?? new Map();
 			if (milestones.length) {
 				const closed = milestones.filter((m) => milestoneStatusMap.get(`${EVENT_KINDS.MILESTONE}:${m.pubkey}:${m.dTag}`) === 'closed').length;
-				projectPercentage = Math.round((closed / milestones.length) * 100);
+				_projectPercentage = Math.round((closed / milestones.length) * 100);
 			}
 		},
 		error: (e) => console.error('[ProjectDetail] milestone status error', e)
@@ -363,6 +363,7 @@ async function handleEditSubmit({ title: newTitle, slug: newSlug, summary: newSu
 
 // ── Project status event (kind:1983) ─────────────────────────────────────
 let projectStatusValue = $state('Open');
+let projectBoxState    = $state('planned');
 
 $effect(() => {
 	if (!projectParsed || !projectEvent) return;
@@ -372,8 +373,10 @@ $effect(() => {
 		if (evs.length) {
 			const best = evs.reduce((a, b) => (b.created_at > a.created_at ? b : a));
 			const raw = best.tags?.find((t) => t[0] === 'status')?.[1] ?? 'open';
-			const map = { open: 'Open', backlog: 'Backlog', 'in-progress': 'In Progress', 'in-review': 'In Review', closed: 'Closed' };
-			projectStatusValue = map[raw] ?? raw;
+			const labelMap = { open: 'Open', backlog: 'Backlog', 'in-progress': 'In Progress', 'in-review': 'In Review', closed: 'Closed' };
+			const stateMap  = { open: 'planned', backlog: 'backlog', 'in-progress': 'inProgress', 'in-review': 'inProgress', closed: 'completed' };
+			projectStatusValue = labelMap[raw] ?? raw;
+			projectBoxState    = stateMap[raw]  ?? 'planned';
 		}
 	})();
 });
@@ -442,17 +445,17 @@ const allTeamProfiles = $derived([
 				<!-- Title row -->
 				<div class="title-row">
 					<h1 class="project-title">{title}</h1>
-					{#if isOwnProject && getIsSignedIn()}
-						<button
-							type="button"
-							class="edit-btn"
-							onclick={() => (editModalOpen = true)}
-							aria-label="Edit project"
-						>
-							<Pen variant="outline" color="hsl(var(--white66))" size={14} />
-							<span>Edit</span>
-						</button>
-					{/if}
+				{#if isOwnProject && getIsSignedIn()}
+					<button
+						type="button"
+						class="edit-btn btn-primary-small"
+						onclick={() => (editModalOpen = true)}
+						aria-label="Edit project"
+					>
+						<Pen variant="fill" color="hsl(var(--white66))" size={14} />
+						<span>Edit</span>
+					</button>
+				{/if}
 				</div>
 
 			<!-- Summary panel -->
@@ -501,7 +504,7 @@ const allTeamProfiles = $derived([
 						<div class="meta-col">
 							<span class="meta-label">STATUS</span>
 							<div class="meta-line">
-								<ProjectBox percentage={projectPercentage} size={16} />
+								<ProjectBox state={projectBoxState} size={16} />
 								<span class="meta-val">{projectStatusValue}</span>
 							</div>
 							<div class="meta-line meta-priority-line">
@@ -698,24 +701,9 @@ const allTeamProfiles = $derived([
 	}
 
 	.edit-btn {
-		display: inline-flex;
-		align-items: center;
 		gap: 5px;
 		flex-shrink: 0;
-		height: 28px;
-		padding: 0 10px 0 8px;
-		background: hsl(var(--white8));
-		border: none;
-		border-radius: 9999px;
-		font-size: 0.8125rem;
-		font-weight: 500;
-		color: hsl(var(--white66));
-		cursor: pointer;
-		transition: background 0.15s ease, transform 0.15s ease;
 	}
-
-	.edit-btn:hover  { background: hsl(var(--white16)); }
-	.edit-btn:active { transform: scale(0.96); }
 
 	/* ── Summary panel ── */
 	.project-summary-panel {

@@ -1,9 +1,18 @@
+<script module>
+	// Module-level singleton: survives component unmount/remount within the same browser session.
+	// Keyed by communityNpub so each community has its own entry.
+	/** @type {Map<string, { selectedCommunity: any, forumPosts: any[], wikiEvents: any[], taskEvents: any[], projectEvents: any[], profilesByPubkey: Map<string, any> }>} */
+	export const communityCache = new Map();
+</script>
+
 <script lang="js">
 	// @ts-nocheck
 	import { browser } from '$app/environment';
 	import InputTextField from '$lib/components/common/InputTextField.svelte';
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
+	import { goto, beforeNavigate } from '$app/navigation';
+	import { onMount, tick } from 'svelte';
+	import { navHandoff } from '$lib/navHandoff.js';
 	import { nip19 } from 'nostr-tools';
 	import { Plus } from '$lib/components/icons';
 	import { liveQuery, queryEvents, queryEvent, putEvents } from '$lib/nostr';
@@ -52,7 +61,7 @@
 	} from '$lib/stores/auth.svelte.js';
 	import ProfilePic from '$lib/components/common/ProfilePic.svelte';
 	import BackButton from '$lib/components/common/BackButton.svelte';
-	import ForumPost from '$lib/components/ForumPost.svelte';
+	import ForumPost from '$lib/components/ForumPostCard.svelte';
 	import EmptyState from '$lib/components/common/EmptyState.svelte';
 	import CommunityBottomBar from '$lib/components/community/CommunityBottomBar.svelte';
 	import WikiDetail from '$lib/components/community/WikiDetail.svelte';
@@ -130,17 +139,73 @@
 	const currentPubkey = $derived(getCurrentPubkey());
 
 
+	// Synchronously read from module-level cache so frame-0 renders with real data.
+	// onMount is too late — it fires AFTER the first render, causing a visible flash.
+	const _initNpub = $page.params.npub ?? '';
+	const _initCache = communityCache.get(_initNpub);
+
 	let communities = $state([]);
-	let profilesByPubkey = $state(new Map());
-	let selectedCommunity = $state(null);
-	let selectedSection = $state('forum');
-	let forumPosts = $state([]);
+	let profilesByPubkey = $state(_initCache ? new Map(_initCache.profilesByPubkey) : new Map());
+	let selectedCommunity = $state(_initCache?.selectedCommunity ?? null);
+	// Section is stored in the URL (?s=wikis) so browser back restores the exact tab.
+	const selectedSection = $derived($page.url.searchParams.get('s') || 'forum');
+
+	// --- Scroll-position save/restore ---
+	// SvelteKit only restores window.scrollY; the actual scrollable element here is
+	// .panel-content (overflow-y: auto inside the community page), so we do it manually.
+
+	/** The scrollable content panel for the section list view. */
+	function getScrollPanel() {
+		return browser
+			? /** @type {HTMLElement|null} */ (
+					document.querySelector('.panel-content:not(.panel-content-detail)')
+				)
+			: null;
+	}
+
+	// Save scroll before navigating to a detail page (wiki / forum / task / project).
+	beforeNavigate(({ to }) => {
+		if (!browser) return;
+		const toPath = to?.url?.pathname ?? '';
+		const isDetailRoute =
+			toPath.startsWith('/wiki/') ||
+			toPath.startsWith('/forum/') ||
+			toPath.startsWith('/task/') ||
+			toPath.startsWith('/project/');
+		if (!isDetailRoute) return;
+		const panel = getScrollPanel();
+		if (panel) {
+			const key = `chateau-scroll:${$page.url.pathname}${$page.url.search}`;
+			sessionStorage.setItem(key, String(panel.scrollTop));
+		}
+	});
+
+	// Restore scroll position after browser back from a detail page.
+	onMount(async () => {
+		if (!browser) return;
+		const scrollKey = `chateau-scroll:${$page.url.pathname}${$page.url.search}`;
+		const saved = sessionStorage.getItem(scrollKey);
+		if (!saved) return;
+		const target = Number(saved);
+		sessionStorage.removeItem(scrollKey);
+
+		const tryRestore = () => {
+			const panel = getScrollPanel();
+			if (panel) panel.scrollTop = target;
+		};
+
+		await tick();
+		tryRestore();
+		setTimeout(tryRestore, 200);
+	});
+
+	let forumPosts = $state(_initCache ? [..._initCache.forumPosts] : []);
 	let forumMembers = $state([]);
 	/** @type {import('nostr-tools').NostrEvent[]} */
-	let taskEvents = $state([]);
-	let wikiEvents = $state([]);
+	let taskEvents = $state(_initCache ? [..._initCache.taskEvents] : []);
+	let wikiEvents = $state(_initCache ? [..._initCache.wikiEvents] : []);
 	/** @type {import('nostr-tools').NostrEvent[]} */
-	let projectEvents = $state([]);
+	let projectEvents = $state(_initCache ? [..._initCache.projectEvents] : []);
 	/** @type {Map<string, import('nostr-tools').NostrEvent[]>} milestones keyed by project id */
 	let milestonesByProjectId = $state(new Map());
 	/** @type {Map<string, string>} milestone addr → normalised status string */
@@ -278,6 +343,8 @@
 			selectedCommunity = null;
 			return;
 		}
+		// If communities haven't loaded yet, keep any cached value to avoid a flash.
+		if (communities.length === 0) return;
 		try {
 			const decoded = nip19.decode(communityNpub);
 			if (decoded.type !== 'npub') return;
@@ -576,10 +643,10 @@
 		// Live subscription for new comments arriving after load.
 		forumCommentsUnsub = subscribeForumPostComments(relays, postIds, { authors: generalMembers });
 		// Explicit one-shot fetch so Dexie is populated immediately (WebSocket subscription alone is too slow).
+		// Fetch both #E (root marker, uppercase) and #e (lowercase fallback) to catch all NIP-1111 variants.
 		const authorsFilter = generalMembers?.length ? { authors: generalMembers } : {};
-		fetchFromRelays(relays, { kinds: [1111], '#E': postIds, limit: 500, ...authorsFilter }).catch(
-			() => {}
-		);
+		fetchFromRelays(relays, { kinds: [1111], '#E': postIds, limit: 500, ...authorsFilter }).catch(() => {});
+		fetchFromRelays(relays, { kinds: [1111], '#e': postIds, limit: 500, ...authorsFilter }).catch(() => {});
 		return () => {
 			if (forumCommentsUnsub) {
 				forumCommentsUnsub();
@@ -599,7 +666,8 @@
 			};
 			if (forumMembers.length > 0) filter.authors = forumMembers;
 			const events = await queryEvents(filter);
-			return events.map((e) => parseForumPost(e)).filter(Boolean);
+			// Attach _raw so openPost() can hand the raw Nostr event to ForumPostDetail.
+			return events.map((e) => { const p = parseForumPost(e); return p ? { ...p, _raw: e } : null; }).filter(Boolean);
 		}).subscribe({
 			next: (val) => {
 				forumPosts = val || [];
@@ -662,15 +730,13 @@
 					displayable = next;
 				}
 				let count = 0;
-				const rootPubkeys = new Set();
-				for (const { ev, parentId } of displayable) {
+				const treePubkeys = new Set();
+				for (const { ev } of displayable) {
 					count++;
-					if (parentId === postId) {
-						rootPubkeys.add(ev.pubkey);
-						allPubkeys.add(ev.pubkey);
-					}
+					treePubkeys.add(ev.pubkey);
+					allPubkeys.add(ev.pubkey);
 				}
-				if (count > 0) byPostId.set(postId, { count, rootPubkeys });
+				if (count > 0) byPostId.set(postId, { count, treePubkeys });
 			}
 
 			const profileEvs =
@@ -694,10 +760,10 @@
 				}
 			}
 			const out = new Map();
-			for (const [pid, { count, rootPubkeys }] of byPostId) {
+			for (const [pid, { count, treePubkeys }] of byPostId) {
 				out.set(pid, {
 					count,
-					profiles: [...rootPubkeys].map((pk) => {
+					profiles: [...treePubkeys].map((pk) => {
 						const prof = profileByPubkey.get(pk) || {};
 						return { pubkey: pk, displayName: prof.displayName, avatarUrl: prof.avatarUrl };
 					})
@@ -1115,6 +1181,20 @@
 		return () => sub.unsubscribe();
 	});
 
+	// Keep the module-level cache current so back-navigation shows data instantly.
+	// Runs whenever any of the key state values change.
+	$effect(() => {
+		if (!browser || !communityNpub || !selectedCommunity) return;
+		communityCache.set(communityNpub, {
+			selectedCommunity,
+			forumPosts: [...forumPosts],
+			wikiEvents: [...wikiEvents],
+			taskEvents: [...taskEvents],
+			projectEvents: [...projectEvents],
+			profilesByPubkey: new Map(profilesByPubkey)
+		});
+	});
+
 	/** Helper: get parsed project info + milestone shapes for a project event */
 	function getProjectCardData(projectEvent) {
 		const parsed = parseProject(projectEvent);
@@ -1149,6 +1229,11 @@
 		try {
 			const dTag = projEvent.tags?.find((/** @type {string[]} */ t) => t[0] === 'd')?.[1] ?? '';
 			const naddr = nip19.naddrEncode({ kind: projEvent.kind, pubkey: projEvent.pubkey, identifier: dTag });
+			navHandoff.set(naddr, {
+				event: projEvent,
+				communityNpub: selectedCommunity?.npub ?? communityNpub,
+				profiles: handoffProfiles(projEvent.pubkey, selectedCommunity?.pubkey)
+			});
 			goto(`/project/${naddr}`);
 		} catch {
 			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?project=${encodeURIComponent(projEvent.id)}`);
@@ -2636,9 +2721,26 @@
 	/**
 	 * Open a wiki article — navigates to /wiki/[naddr] (real SvelteKit route).
 	 */
+	/** Build a profiles snapshot for the two pubkeys that matter in a detail header. */
+	function handoffProfiles(...pubkeys) {
+		const m = new Map();
+		for (const pk of pubkeys) {
+			if (pk) {
+				const ev = profilesByPubkey.get(pk);
+				if (ev) m.set(pk, ev);
+			}
+		}
+		return m;
+	}
+
 	function openWiki(wikiEvent, slug) {
 		try {
 			const naddr = nip19.naddrEncode({ kind: 30818, pubkey: wikiEvent.pubkey, identifier: slug });
+			navHandoff.set(naddr, {
+				event: wikiEvent,
+				communityNpub: selectedCommunity?.npub ?? communityNpub,
+				profiles: handoffProfiles(wikiEvent.pubkey, selectedCommunity?.pubkey)
+			});
 			goto(`/wiki/${naddr}`);
 		} catch {
 			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?wiki=${encodeURIComponent(slug)}`);
@@ -2651,6 +2753,13 @@
 	function openPost(post) {
 		try {
 			const nevent = nip19.neventEncode({ id: post.id, author: post.pubkey });
+			// post._raw is the raw Nostr event; ForumPostDetail needs the raw event, not the parsed shape.
+			const rawEvent = post._raw ?? post;
+			navHandoff.set(nevent, {
+				event: rawEvent,
+				communityNpub: selectedCommunity?.npub ?? communityNpub,
+				profiles: handoffProfiles(post.pubkey, selectedCommunity?.pubkey)
+			});
 			goto(`/forum/${nevent}`);
 		} catch {
 			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?post=${encodeURIComponent(post.id)}`);
@@ -2664,6 +2773,11 @@
 		try {
 			const dTag = task.tags?.find((/** @type {string[]} */ t) => t[0] === 'd')?.[1] ?? '';
 			const naddr = nip19.naddrEncode({ kind: task.kind, pubkey: task.pubkey, identifier: dTag });
+			navHandoff.set(naddr, {
+				event: task,
+				communityNpub: selectedCommunity?.npub ?? communityNpub,
+				profiles: handoffProfiles(task.pubkey, selectedCommunity?.pubkey)
+			});
 			goto(`/task/${naddr}`);
 		} catch {
 			goto(`/community/${encodeURIComponent(selectedCommunity?.npub ?? communityNpub)}?task=${encodeURIComponent(task.id)}`);
@@ -3026,7 +3140,12 @@
 								class={selectedSection === pill.id
 									? 'btn-primary-small tab-selected'
 									: 'btn-secondary-small'}
-								onclick={() => (selectedSection = pill.id)}
+								onclick={() =>
+								goto(`/community/${encodeURIComponent(communityNpub)}?s=${pill.id}`, {
+									replaceState: true,
+									noScroll: true,
+									keepFocus: true
+								})}
 							>
 								{pill.label}
 							</button>

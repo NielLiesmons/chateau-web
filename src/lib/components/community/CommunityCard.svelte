@@ -19,7 +19,7 @@
 	const CONTENT_PILL_IMG = {
 		forum: '/images/emoji/forum.png',
 		task: '/images/emoji/task.png',
-		project: '/images/emoji/white_board.png',
+		project: '/images/emoji/project.png',
 		wiki: '/images/emoji/wiki.png'
 	};
 

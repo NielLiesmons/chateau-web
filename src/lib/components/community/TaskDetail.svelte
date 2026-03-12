@@ -41,7 +41,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import { goto } from '$app/navigation';
 
-	let { eventId = '', communityNpub = '', onBack = () => {}, isMember = true, onJoinRequired = () => {} } = $props();
+	let { eventId = '', communityNpub = '', event: preloadedEvent = null, profiles: preloadedProfiles = null, onBack = () => {}, isMember = true, onJoinRequired = () => {} } = $props();
 
 	let statusMenuOpen = $state(false);
 	let priorityMenuOpen = $state(false);
@@ -62,13 +62,14 @@
 	let statusMenuPos = $state({ top: 0, left: 0 });
 	let priorityMenuPos = $state({ top: 0, left: 0 });
 
-	/** @type {Array<{ value: 'backlog'|'open'|'inProgress'|'inReview'|'closed', label: string }>} */
+	/** @type {Array<{ value: 'backlog'|'open'|'inProgress'|'inReview'|'closed'|'canceled', label: string }>} */
 	const STATUS_OPTIONS = [
 		{ value: 'backlog',    label: 'Backlog'     },
 		{ value: 'open',       label: 'Open'        },
 		{ value: 'inProgress', label: 'In Progress' },
 		{ value: 'inReview',   label: 'In Review'   },
 		{ value: 'closed',     label: 'Closed'      },
+		{ value: 'canceled',   label: 'Canceled'    },
 	];
 
 	/** @type {Array<{ value: 'none'|'low'|'medium'|'high'|'urgent', label: string }>} */
@@ -86,20 +87,30 @@
 		backlog: 'backlog',
 		inProgress: 'in-progress',
 		inReview: 'in-review',
-		closed: 'closed'
+		closed: 'closed',
+		canceled: 'canceled'
 	};
 
 	/** @type {any} */
-	let task = $state(null);
+	let task = $state(preloadedEvent ?? null);
 	/** @type {any} */
-	let rawTaskEvent = $state(null);
+	let rawTaskEvent = $state(preloadedEvent ?? null);
 	let communityAuthorPubkey = $state('');
+
+	// Initialize from preloaded profiles synchronously so the header renders on frame 0.
+	const _authorEv = preloadedEvent && preloadedProfiles ? preloadedProfiles.get(preloadedEvent.pubkey) : null;
+	const _commEv = (() => {
+		if (!communityNpub || !preloadedProfiles) return null;
+		try { const d = nip19.decode(communityNpub); return preloadedProfiles.get(d.data) ?? null; } catch { return null; }
+	})();
+	const _commContent = (() => { try { return _commEv ? JSON.parse(_commEv.content || '{}') : null; } catch { return null; } })();
+
 	/** @type {any} */
-	let authorProfile = $state(null);
+	let authorProfile = $state(_authorEv ? parseProfile(_authorEv) : null);
 	/** @type {any} */
 	let statusEvent = $state(null);
-	let communityName = $state('');
-	let communityPicture = $state('');
+	let communityName = $state(_commContent?.display_name ?? _commContent?.name ?? '');
+	let communityPicture = $state(_commContent?.picture ?? _commContent?.image ?? '');
 	let descriptionExpanded = $state(false);
 	let isTruncated = $state(false);
 	let comments = $state(/** @type {any[]} */ ([]));
@@ -127,7 +138,8 @@
 		backlog: 'backlog',
 		'in-progress': 'inProgress',
 		'in-review': 'inReview',
-		closed: 'closed'
+		closed: 'closed',
+		canceled: 'canceled'
 	};
 
 	const taskStatus = $derived(
@@ -154,7 +166,8 @@
 		backlog: 'Backlog',
 		inProgress: 'In Progress',
 		inReview: 'In Review',
-		closed: 'Closed'
+		closed: 'Closed',
+		canceled: 'Canceled'
 	};
 	/** @type {Record<string, string>} */
 	const PRIORITY_LABELS = {
@@ -221,8 +234,8 @@
 		communityAuthorPubkey = communityPubkey;
 
 		(async () => {
-			// Query by id only (task events may be addressed, not easily filtered by #h in all impls)
-			const raw =
+			// Fast path: event was handed off from the list — skip Dexie fetch.
+			const raw = preloadedEvent ??
 				(await queryEvent({ kinds: [EVENT_KINDS.TASK], ids: [eventId] })) ??
 				(await queryEvent({ kinds: [EVENT_KINDS.TASK], '#h': [communityPubkey] }));
 

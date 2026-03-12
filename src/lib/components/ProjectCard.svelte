@@ -17,8 +17,8 @@
 	let {
 		title = '',
 		summary = '',
-		/** 0-100 overall project completion */
-		percentage = 0,
+		/** 'backlog' | 'planned' | 'inProgress' | 'completed' | 'canceled' */
+		state = 'planned',
 		/** @type {{ id: string; title: string; percentage: number }[]} */
 		milestones = [],
 		/** @type {{ pubkey: string; name?: string; pictureUrl?: string }|null} */
@@ -77,7 +77,7 @@
 		<!-- Left column: ProjectBox + vertical connector line -->
 		<div class="left-column">
 			<div class="box-wrap">
-				<ProjectBox {percentage} size={28} />
+				<ProjectBox {state} size={28} />
 			</div>
 			{#if hasBottomRow}
 				<div class="connector-vertical-only"></div>

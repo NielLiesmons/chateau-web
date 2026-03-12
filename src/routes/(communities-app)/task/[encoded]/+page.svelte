@@ -4,15 +4,23 @@ import { page } from '$app/stores';
 import { browser } from '$app/environment';
 import { nip19 } from 'nostr-tools';
 import { queryEvent } from '$lib/nostr';
+import { navHandoff } from '$lib/navHandoff.js';
 import TaskDetail from '$lib/components/community/TaskDetail.svelte';
 import GeneralEventDetail from '$lib/components/community/GeneralEventDetail.svelte';
 
 const encoded = $derived($page.params.encoded ?? '');
 
-let eventId = $state('');
-let communityNpub = $state('');
+// Consume handoff synchronously — provides event, communityNpub, and profiles instantly.
+const _enc = $page.params.encoded ?? '';
+const _h = navHandoff.get(_enc) ?? null;
+if (_h) navHandoff.delete(_enc);
 
+let eventId = $state(_h?.event?.id ?? '');
+let communityNpub = $state(_h?.communityNpub ?? '');
+
+// Async fallback: only runs when opening the page directly (no handoff).
 $effect(() => {
+	if (_h) return;
 	const enc = encoded;
 	if (!browser || !enc) { eventId = ''; communityNpub = ''; return; }
 	(async () => {
@@ -38,7 +46,13 @@ $effect(() => {
 </svelte:head>
 
 {#if eventId && communityNpub}
-	<TaskDetail {eventId} {communityNpub} onBack={() => history.back()} />
+	<TaskDetail
+		{eventId}
+		{communityNpub}
+		event={_h?.event ?? null}
+		profiles={_h?.profiles ?? null}
+		onBack={() => history.back()}
+	/>
 {:else if encoded}
 	<GeneralEventDetail {encoded} onBack={() => history.back()} />
 {/if}

@@ -40,16 +40,17 @@ const TASK_LABEL_SUGGESTIONS = [
 	'Docs', 'Marketing', 'Auth', 'Performance', 'Testing', 'Security'
 ];
 
-/** @type {Array<{ value: 'backlog'|'open'|'inProgress'|'inReview'|'closed', label: string }>} */
+/** @type {Array<{ value: 'backlog'|'open'|'inProgress'|'inReview'|'closed'|'canceled', label: string }>} */
 const STATUS_OPTIONS = [
 	{ value: 'backlog',    label: 'Backlog'     },
 	{ value: 'open',       label: 'Open'        },
 	{ value: 'inProgress', label: 'In Progress' },
 	{ value: 'inReview',   label: 'In Review'   },
 	{ value: 'closed',     label: 'Closed'      },
+	{ value: 'canceled',   label: 'Canceled'    },
 ];
 
-/** @type {'backlog' | 'open' | 'inProgress' | 'inReview' | 'closed'} */
+/** @type {'backlog' | 'open' | 'inProgress' | 'inReview' | 'closed' | 'canceled'} */
 let taskStatus = $state('open');
 
 /** @type {'none' | 'low' | 'medium' | 'high' | 'urgent'} */

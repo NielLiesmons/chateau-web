@@ -9,14 +9,19 @@
 	let startTime = $state(0);
 	const MIN_DISPLAY_TIME = 300;
 
-	/** Community-app routes — left panel stays mounted, no full-page load feel needed */
-	const COMMUNITIES_APP_PATHS = ['/communities', '/wiki/', '/forum/', '/task/', '/project/'];
+	/** All communities-app routes — data comes from Dexie, no server round-trip needed. */
+	const COMMUNITIES_APP_PATHS = [
+		'/communities',
+		'/community/',
+		'/wiki/',
+		'/forum/',
+		'/task/',
+		'/project/'
+	];
 	function isCommunitiesAppNav(nav) {
 		if (!nav) return false;
-		const from = nav.from?.url?.pathname ?? '';
 		const to = nav.to?.url?.pathname ?? '';
-		return COMMUNITIES_APP_PATHS.some((p) => from === p || from.startsWith(p)) &&
-		       COMMUNITIES_APP_PATHS.some((p) => to === p || to.startsWith(p));
+		return COMMUNITIES_APP_PATHS.some((p) => to === p || to.startsWith(p));
 	}
 
 	$effect(() => {
