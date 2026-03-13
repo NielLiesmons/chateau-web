@@ -126,9 +126,7 @@
 	});
 
 	// ── Load member profiles (one-shot, no liveQuery subscription) ────────────────
-	// Using liveQuery inside $effect caused Dexie to re-trigger on every write to
-	// the events table (including profile fetches), producing visible 300ms flicker.
-	// A simple one-shot load—first Dexie, then relay backfill—is sufficient here.
+	// Parallel Dexie reads + single relay batch → one state update to avoid flicker.
 	$effect(() => {
 		const members = parsed?.members ?? [];
 		if (!members.length) {
@@ -139,24 +137,32 @@
 		let cancelled = false;
 
 		(async () => {
-			// 1. Populate immediately from whatever Dexie already has.
-			const localMap = new Map();
-			for (const pk of members) {
-				const ev = await queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [pk] });
-				if (ev) {
+			// 1. Fetch all local profiles in parallel.
+			const localEntries = await Promise.all(
+				members.map(async (pk) => {
+					const ev = await queryEvent({ kinds: [EVENT_KINDS.PROFILE], authors: [pk] });
+					if (!ev) return null;
 					try {
-						localMap.set(pk, parseProfile(ev));
-					} catch {}
-				}
-			}
+						return [pk, parseProfile(ev)];
+					} catch {
+						return null;
+					}
+				})
+			);
 			if (cancelled) return;
+			const localMap = new Map(localEntries.filter(Boolean));
+
+			// Show local data immediately (single update — no flicker from serial loop).
 			if (localMap.size) memberProfiles = new Map(localMap);
 
-			// 2. Fetch missing profiles from relays and merge.
+			// 2. Fetch missing profiles from relays and merge in one final update.
 			const results = await fetchProfilesBatch(members).catch(() => new Map());
 			if (cancelled) return;
 			const remoteEvs = [...results.values()].filter(Boolean);
-			if (remoteEvs.length) await putEvents(remoteEvs);
+			if (remoteEvs.length) {
+				// Write to Dexie fire-and-forget so we don't block the UI update.
+				putEvents(remoteEvs).catch(() => {});
+			}
 			if (cancelled) return;
 
 			const merged = new Map(localMap);
@@ -470,8 +476,9 @@
 	.list-detail {
 		display: flex;
 		flex-direction: column;
+		height: 100%;
 		min-height: 0;
-		padding-bottom: 80px;
+		overflow: hidden;
 	}
 
 	.detail-header-wrap {
@@ -481,6 +488,8 @@
 	.content-scroll {
 		flex: 1;
 		min-height: 0;
+		overflow-y: auto;
+		padding-bottom: 80px;
 	}
 
 	.content-inner {

@@ -67,11 +67,10 @@
 	import TaskModal from '$lib/components/modals/TaskModal.svelte';
 	import WikiModal from '$lib/components/modals/WikiModal.svelte';
 	import Checkbox from '$lib/components/common/Checkbox.svelte';
-	import { Pen, Cross, Bell, ChevronRight, Crown } from '$lib/components/icons';
+	import { Pen, Cross, Bell, ChevronRight } from '$lib/components/icons';
 	import BadgeStack from '$lib/components/common/BadgeStack.svelte';
 	import SingleBadge from '$lib/components/common/SingleBadge.svelte';
 	import ProfilePicStack from '$lib/components/common/ProfilePicStack.svelte';
-	import Selector from '$lib/components/common/Selector.svelte';
 	import TaskCard from '$lib/components/TaskCard.svelte';
 	import WikiCard from '$lib/components/WikiCard.svelte';
 	import GeneralEventDetail from '$lib/components/community/GeneralEventDetail.svelte';
@@ -311,9 +310,6 @@
 	/** When true, show "Add content section" modal (enable a preset or custom) */
 	let adminAddSectionOpen = $state(false);
 
-	// Crown admin modal
-	let adminCrownModalOpen = $state(false);
-	let adminCrownSection = $state('General');
 
 	// Form Template management (kind 30168)
 	let adminFormTemplates = $state(
@@ -1409,7 +1405,11 @@
 	const isMember = $derived(
 		selectedCommunity && currentPubkey && forumMembers.includes(currentPubkey)
 	);
-	/** Pills from community content sections + Members + Admin (for admin). General is never shown as a tab. */
+	const isCommunityAdmin = $derived(
+		!!selectedCommunity?.pubkey && !!currentPubkey && selectedCommunity.pubkey === currentPubkey
+	);
+
+	/** Pills from community content sections + Profiles + Admin (for admin). General is never shown as a tab. */
 	const sectionPills = $derived.by(() => {
 		const comm = selectedCommunity?.raw ? parseCommunity(selectedCommunity.raw) : null;
 		const sections = comm?.sections ?? [];
@@ -1420,37 +1420,26 @@
 				label: s.name || 'Section',
 				kinds: s.kinds ?? []
 			}));
-		if (fromSections.length === 0 && sections.length === 0)
-			return SECTION_PILLS.filter((p) => p.id !== 'general');
 		// Always show Profiles tab so admins can manage lists
 		const profilesPill = { id: 'profiles', label: 'Profiles', kinds: [] };
-		return [...fromSections, profilesPill];
+		const adminPill = { id: 'admin', label: 'Admin', kinds: [], isAdmin: true };
+		if (fromSections.length === 0 && sections.length === 0) {
+			const base = SECTION_PILLS.filter((p) => p.id !== 'general');
+			return isCommunityAdmin ? [...base, adminPill] : base;
+		}
+		return isCommunityAdmin
+			? [...fromSections, profilesPill, adminPill]
+			: [...fromSections, profilesPill];
 	});
 	const selectedSectionKinds = $derived(
 		sectionPills.find((p) => p.id === selectedSection)?.kinds ?? []
 	);
 	const isForumSection = $derived(selectedSection === 'forum' || selectedSectionKinds.includes(11));
 	const hasForm = $derived(profileListEvent && parseProfileList(profileListEvent)?.form);
-	const formAddress = $derived(
-		selectedJoinList?.formAddress ??
-			(profileListEvent ? parseProfileList(profileListEvent)?.form : null)
-	);
-	const isCommunityAdmin = $derived(
-		!!selectedCommunity?.pubkey && !!currentPubkey && selectedCommunity.pubkey === currentPubkey
-	);
 
-	/** All profile lists for the admin Profiles tab — section-linked ones first (with sectionName), then any uncategorised ones. */
-	const allAdminProfileLists = $derived.by(() => {
-		const inSections = new Set(membersListData.map((m) => m.listAddress));
-		const uncategorised = adminProfileLists
-			.filter((l) => !inSections.has(l.listAddress))
-			.map((l) => ({ ...l, sectionName: '—' }));
-		return [...membersListData, ...uncategorised];
-	});
-
-	// When Crown admin modal opens, populate admin form from current community (only when first entering or community changes).
+	// When admin tab is entered, populate admin form from current community (only when first entering or community changes).
 	$effect(() => {
-		if (!browser || !selectedCommunity || !adminCrownModalOpen) return;
+		if (!browser || !selectedCommunity || selectedSection !== 'admin') return;
 		const pubkey = selectedCommunity.pubkey;
 		if (lastAdminSyncedPubkey !== pubkey) {
 			lastAdminSyncedPubkey = pubkey;
@@ -1523,13 +1512,9 @@
 		})();
 	});
 
-	// When Crown admin modal is active, load all profile lists for list picker
+	// Load all profile lists for the list picker (admin + profiles tab)
 	$effect(() => {
-		if (
-			!browser ||
-			!selectedCommunity?.pubkey ||
-			(!adminCrownModalOpen && selectedSection !== 'profiles')
-		)
+		if (!browser || !selectedCommunity?.pubkey || selectedSection !== 'profiles' && selectedSection !== 'admin')
 			return;
 		adminProfileLists = [];
 		(async () => {
@@ -1554,13 +1539,13 @@
 		})();
 	});
 
-	// When community info modal or Crown admin modal opens, load profile lists from sections in background.
+	// When community info modal opens or profiles/admin tab is active, load profile lists from sections in background.
 	// Deduplicate by listAddress so one list assigned to multiple sections shows as one panel with "Can write in: A, B, C".
 	$effect(() => {
 		if (
 			!browser ||
 			!selectedCommunity ||
-			(!communityInfoModalOpen && !adminCrownModalOpen && selectedSection !== 'profiles')
+			(!communityInfoModalOpen && selectedSection !== 'profiles' && selectedSection !== 'admin')
 		)
 			return;
 		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
@@ -1639,11 +1624,11 @@
 		})();
 	});
 
-	// When Crown admin modal opens, load form templates (kind 30168) by this community.
+	// Load form templates (kind 30168) whenever the admin is viewing this community.
 	// Checks local DB first (instant display), then fetches from relays to catch any
 	// templates published from other clients that haven't been synced yet.
 	$effect(() => {
-		if (!browser || !selectedCommunity?.pubkey || !adminCrownModalOpen) return;
+		if (!browser || !selectedCommunity?.pubkey || !isCommunityAdmin) return;
 		const pubkey = selectedCommunity.pubkey;
 		const relays = selectedCommunity.relays?.length
 			? selectedCommunity.relays
@@ -2445,18 +2430,17 @@
 				else newTags.push(['r', r]);
 			});
 			blossomList.forEach((b) => newTags.push(['blossom', b]));
-			for (const preset of ADMIN_SECTION_PRESETS) {
-				if (!adminSectionEnabled[preset.id]) continue;
-				const addrs = Array.isArray(adminSectionListAddress[preset.id])
-					? adminSectionListAddress[preset.id].filter((a) => (a || '').trim())
-					: (adminSectionListAddress[preset.id] || '').trim()
-						? [adminSectionListAddress[preset.id].trim()]
-						: [];
-				if (addrs.length === 0) continue;
-				newTags.push(['content', preset.name]);
-				(preset.kinds ?? []).forEach((k) => newTags.push(['k', String(k)]));
-				addrs.forEach((addr) => newTags.push(['a', addr]));
-			}
+		for (const preset of ADMIN_SECTION_PRESETS) {
+			if (!adminSectionEnabled[preset.id]) continue;
+			const addrs = Array.isArray(adminSectionListAddress[preset.id])
+				? adminSectionListAddress[preset.id].filter((a) => (a || '').trim())
+				: (adminSectionListAddress[preset.id] || '').trim()
+					? [adminSectionListAddress[preset.id].trim()]
+					: [];
+			newTags.push(['content', preset.name]);
+			(preset.kinds ?? []).forEach((k) => newTags.push(['k', String(k)]));
+			addrs.forEach((addr) => newTags.push(['a', addr]));
+		}
 			const communityEv = await signEvent({
 				kind: EVENT_KINDS.COMMUNITY,
 				content: '',
@@ -2526,37 +2510,6 @@
 		} finally {
 			communityEditSubmitting = false;
 		}
-	}
-
-	function openAdminCrownModal(section = 'General') {
-		if (!selectedCommunity) return;
-		adminPicture = selectedCommunity.picture ?? '';
-		adminName = selectedCommunity.displayName ?? selectedCommunity.name ?? '';
-		adminDescription = selectedCommunity.about ?? selectedCommunity.description ?? '';
-		adminRelays = (selectedCommunity.relays ?? []).join('\n');
-		const _firstRTag = (selectedCommunity.raw?.tags ?? []).find((t) => t[0] === 'r');
-		adminRelayEnforced = _firstRTag?.[2] === 'enforced';
-		adminBlossom = (selectedCommunity.raw?.tags ?? [])
-			.filter((t) => t[0] === 'blossom')
-			.map((t) => t[1])
-			.join('\n');
-		// Parse content sections synchronously so Content tab is populated immediately
-		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
-		const sections = comm?.sections ?? [];
-		const enabled = {};
-		const listAddress = {};
-		for (const preset of ADMIN_SECTION_PRESETS) {
-			const sec = sections.find((s) => (s.name || '').toLowerCase() === preset.name.toLowerCase());
-			enabled[preset.id] = !!sec;
-			const addrs =
-				sec?.profileListAddresses ?? (sec?.profileListAddress ? [sec.profileListAddress] : []);
-			listAddress[preset.id] = addrs;
-		}
-		adminSectionEnabled = enabled;
-		adminSectionListAddress = listAddress;
-		adminCrownSection = section;
-		adminSaveError = '';
-		adminCrownModalOpen = true;
 	}
 
 	function openFormTemplateModal(mode, item = null) {
@@ -2650,19 +2603,20 @@
 					if (f.selectOptions?.length) opts.options = f.selectOptions;
 					return ['field', id, f.type, f.label.trim(), f.defaultValue ?? '', JSON.stringify(opts)];
 				});
-			const tags = [
-				['d', formTemplateDTag.trim()],
-				['name', formTemplateName.trim()],
-				...(formTemplateDescription.trim()
-					? [['description', formTemplateDescription.trim()]]
-					: []),
-				...fieldTags,
-				...(formTemplateConfirmMsg.trim()
-					? [['confirmation_message', formTemplateConfirmMsg.trim()]]
-					: []),
-				...(formTemplatePublic ? [['public']] : []),
-				...existingTags
-			];
+		const tags = [
+			['d', formTemplateDTag.trim()],
+			['name', formTemplateName.trim()],
+			...(selectedCommunity?.pubkey ? [['h', selectedCommunity.pubkey]] : []),
+			...(formTemplateDescription.trim()
+				? [['description', formTemplateDescription.trim()]]
+				: []),
+			...fieldTags,
+			...(formTemplateConfirmMsg.trim()
+				? [['confirmation_message', formTemplateConfirmMsg.trim()]]
+				: []),
+			...(formTemplatePublic ? [['public']] : []),
+			...existingTags.filter((t) => t[0] !== 'h')
+		];
 			const ev = await signEvent({
 				kind: EVENT_KINDS.FORM_TEMPLATE,
 				tags,
@@ -3120,16 +3074,6 @@
 				</h1>
 			</button>
 			<div class="header-icon-group">
-				{#if isCommunityAdmin}
-					<button
-						type="button"
-						class="notifications-btn"
-						aria-label="Admin settings"
-						onclick={() => openAdminCrownModal()}
-					>
-						<Crown variant="fill" size={15} color="hsl(var(--white33))" />
-					</button>
-				{/if}
 				<button
 					type="button"
 					class="notifications-btn bell-btn"
@@ -3147,9 +3091,13 @@
 			{#each sectionPills as pill}
 				<button
 					type="button"
-					class={selectedSection === pill.id
-						? 'btn-primary-small tab-selected'
-						: 'btn-secondary-small'}
+					class={pill.isAdmin
+						? selectedSection === pill.id
+							? 'btn-primary-small tab-selected tab-admin-pill tab-admin-pill-selected'
+							: 'btn-secondary-small tab-admin-pill'
+						: selectedSection === pill.id
+							? 'btn-primary-small tab-selected'
+							: 'btn-secondary-small'}
 					onclick={() =>
 						goto(`/community/${encodeURIComponent(communityNpub)}?s=${pill.id}`, {
 							replaceState: true,
@@ -3468,6 +3416,388 @@
 						</div>
 					{/each}
 				{/if}
+			</div>
+		{:else if selectedSection === 'forms'}
+			<div class="crown-forms-tab">
+				{#if formTemplateModal}
+					<form
+						class="join-form ft-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							saveFormTemplate();
+						}}
+					>
+						<div class="ft-inline-back">
+							<button
+								type="button"
+								class="ft-back-btn"
+								onclick={() => {
+									formTemplateModal = null;
+									formTemplateError = '';
+								}}>← Back</button
+							>
+							<span class="ft-inline-title"
+								>{formTemplateModal.mode === 'edit' ? 'Edit form' : 'New form'}</span
+							>
+						</div>
+						<div class="join-form-field">
+							<label class="labels-label" for="ft-name">Form name</label>
+							<InputTextField
+								bind:value={formTemplateName}
+								placeholder="e.g. Membership Application"
+								singleLine={true}
+								id="ft-name"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						{#if formTemplateModal.mode === 'add'}
+							<div class="join-form-field">
+								<label class="labels-label" for="ft-dtag">Form ID (slug)</label>
+								<InputTextField
+									bind:value={formTemplateDTag}
+									placeholder="e.g. membership-application"
+									singleLine={true}
+									id="ft-dtag"
+									oninput={() => {}}
+									onkeydown={() => {}}
+									onfocus={() => {}}
+									onblur={() => {}}
+								/>
+							</div>
+						{:else}
+							<p class="ft-id-display">ID: <code>{formTemplateDTag}</code></p>
+						{/if}
+						<div class="join-form-field">
+							<label class="labels-label" for="ft-description">Description</label>
+							<InputTextField
+								bind:value={formTemplateDescription}
+								placeholder="What is this form for?"
+								singleLine={false}
+								size="medium"
+								id="ft-description"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						<div class="ft-section-header">
+							<span class="labels-label">Fields</span>
+							<button type="button" class="ft-add-field-btn" onclick={addFormField}
+								>+ Add field</button
+							>
+						</div>
+						{#each formTemplateFields as field, idx}
+							<div class="ft-field-row">
+								<div class="ft-field-top">
+									<InputTextField
+										bind:value={formTemplateFields[idx].id}
+										placeholder="field-id"
+										singleLine={true}
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+									<select
+										class="ft-type-select"
+										value={field.type}
+										onchange={(e) => updateFormField(idx, 'type', e.currentTarget.value)}
+									>
+										<option value="text">Text</option>
+										<option value="textarea">Textarea</option>
+										<option value="number">Number</option>
+										<option value="email">Email</option>
+										<option value="url">URL</option>
+										<option value="select">Select</option>
+										<option value="checkbox">Checkbox</option>
+										<option value="radio">Radio</option>
+										<option value="date">Date</option>
+									</select>
+									<button
+										type="button"
+										class="ft-remove-btn"
+										onclick={() => removeFormField(idx)}
+										aria-label="Remove field">×</button
+									>
+								</div>
+								<div class="ft-field-bottom">
+									<InputTextField
+										bind:value={formTemplateFields[idx].label}
+										placeholder="Label shown to user"
+										singleLine={true}
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+									<InputTextField
+										bind:value={formTemplateFields[idx].placeholder}
+										placeholder="Placeholder hint"
+										singleLine={true}
+										oninput={() => {}}
+										onkeydown={() => {}}
+										onfocus={() => {}}
+										onblur={() => {}}
+									/>
+									<label class="ft-required-label">
+										<input
+											type="checkbox"
+											checked={field.required}
+											onchange={(e) =>
+												updateFormField(idx, 'required', e.currentTarget.checked)}
+										/>
+										Required
+									</label>
+								</div>
+								{#if field.type === 'select' || field.type === 'radio'}
+									<div class="ft-field-options">
+										<InputTextField
+											value={field.selectOptions.join(', ')}
+											placeholder="Options, comma-separated"
+											singleLine={true}
+											oninput={(e) =>
+												updateFormField(
+													idx,
+													'selectOptions',
+													e.currentTarget.value
+														.split(',')
+														.map((s) => s.trim())
+														.filter(Boolean)
+												)}
+											onkeydown={() => {}}
+											onfocus={() => {}}
+											onblur={() => {}}
+										/>
+									</div>
+								{/if}
+							</div>
+						{/each}
+						{#if formTemplateFields.length === 0}
+							<p class="ft-no-fields">No fields yet. Add one above.</p>
+						{/if}
+						<div class="join-form-field">
+							<label class="labels-label" for="ft-confirm-msg">Confirmation message</label>
+							<InputTextField
+								bind:value={formTemplateConfirmMsg}
+								placeholder="Shown to users after they submit"
+								singleLine={false}
+								size="medium"
+								id="ft-confirm-msg"
+								oninput={() => {}}
+								onkeydown={() => {}}
+								onfocus={() => {}}
+								onblur={() => {}}
+							/>
+						</div>
+						<label class="ft-public-label">
+							<input type="checkbox" bind:checked={formTemplatePublic} />
+							Public responses (unencrypted)
+						</label>
+						{#if formTemplateError}<p class="text-sm text-red-500">{formTemplateError}</p>{/if}
+						<div class="join-modal-actions" style="margin-top: 0.75rem;">
+							<button
+								type="button"
+								class="btn-secondary-small"
+								onclick={() => {
+									formTemplateModal = null;
+									formTemplateError = '';
+								}}>Cancel</button
+							>
+							<button type="submit" class="btn-primary-small" disabled={formTemplateSubmitting}
+								>{formTemplateSubmitting ? 'Saving…' : 'Save'}</button
+							>
+						</div>
+					</form>
+				{:else}
+					{#if adminFormTemplates.length === 0}
+						<EmptyState message="No form templates yet" minHeight={200} />
+					{:else}
+						{#each adminFormTemplates as item}
+							<div class="info-list-panel crown-form-panel">
+								<div class="info-list-panel-meta" style="padding: 0;">
+									<span class="info-list-panel-name"
+										>{item.parsed?.name || item.parsed?.dTag || 'Untitled form'}</span
+									>
+									{#if item.linkedLists.length > 0}
+										<span class="info-list-panel-desc"
+											>Used by: {item.linkedLists.join(', ')}</span
+										>
+									{:else}
+										<span class="info-list-panel-desc crown-form-address">{item.formAddr}</span>
+									{/if}
+								</div>
+								{#if isCommunityAdmin}
+									<div class="info-list-actions" style="margin-top: 0.5rem;">
+										<button
+											type="button"
+											class="btn-primary-small info-list-action-btn"
+											onclick={() => openFormTemplateModal('edit', item)}
+										>
+											<Pen variant="fill" size={13} color="hsl(var(--white66))" />
+											<span>Edit</span>
+										</button>
+									</div>
+								{/if}
+							</div>
+						{/each}
+					{/if}
+					{#if isCommunityAdmin}
+						<div class="admin-section-add-row">
+							<button
+								type="button"
+								class="admin-section-add-btn"
+								onclick={() => openFormTemplateModal('add')}
+							>
+								<Plus variant="outline" size={18} color="hsl(var(--white66))" />
+								<span>New form template</span>
+							</button>
+						</div>
+					{/if}
+				{/if}
+			</div>
+		{:else if selectedSection === 'admin' && isCommunityAdmin}
+			<div class="admin-tab-page">
+				<div class="admin-page-section">
+					<h3 class="admin-page-section-title">Community info</h3>
+					<div class="admin-form-section">
+						<label class="labels-label" for="admin-tab-picture">Picture URL</label>
+						<InputTextField
+							bind:value={adminPicture}
+							placeholder="https://…"
+							singleLine={true}
+							id="admin-tab-picture"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+					</div>
+					<div class="admin-form-section">
+						<label class="labels-label" for="admin-tab-name">Community name</label>
+						<InputTextField
+							bind:value={adminName}
+							placeholder="Name"
+							singleLine={true}
+							id="admin-tab-name"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+					</div>
+					<div class="admin-form-section">
+						<label class="labels-label" for="admin-tab-desc">Description</label>
+						<InputTextField
+							bind:value={adminDescription}
+							placeholder="Description"
+							singleLine={false}
+							size="medium"
+							id="admin-tab-desc"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+					</div>
+				</div>
+
+				<div class="admin-page-section">
+					<h3 class="admin-page-section-title">Content sections</h3>
+					<div class="crown-content-tab">
+						{#each ADMIN_SECTION_PRESETS.filter((p) => adminSectionEnabled[p.id]) as preset}
+							{@const addrs = Array.isArray(adminSectionListAddress[preset.id])
+								? adminSectionListAddress[preset.id]
+								: adminSectionListAddress[preset.id]
+									? [adminSectionListAddress[preset.id]]
+									: []}
+							{@const listItems = adminProfileLists
+								.filter((l) => addrs.includes(l.listAddress))
+								.map((l) => ({ image: l.image, name: l.name }))}
+							<button
+								type="button"
+								class="admin-section-row admin-section-row-clickable"
+								onclick={() => (adminSectionModalPresetId = preset.id)}
+							>
+								<span class="admin-section-emoji-slot"></span>
+								<span class="admin-section-name">{preset.name}</span>
+								<span class="admin-section-badges-wrap">
+									<BadgeStack items={listItems} maxDisplay={3} overlapPx={16} badgeSizePx={32} />
+									<ChevronRight
+										variant="outline"
+										size={16}
+										color="hsl(var(--white33))"
+										className="admin-section-chevron"
+									/>
+								</span>
+							</button>
+						{/each}
+						<div class="admin-section-add-row">
+							<button
+								type="button"
+								class="admin-section-add-btn"
+								onclick={() => (adminAddSectionOpen = true)}
+								aria-label="Add content section"
+							>
+								<Plus variant="outline" size={18} color="hsl(var(--white66))" />
+								<span>Add content section</span>
+							</button>
+						</div>
+					</div>
+				</div>
+
+				<div class="admin-page-section">
+					<h3 class="admin-page-section-title">Hosting</h3>
+					<div class="admin-form-section">
+						<label class="labels-label" for="admin-tab-relays"
+							>Relays (one per line or comma-separated)</label
+						>
+						<InputTextField
+							bind:value={adminRelays}
+							placeholder="wss://…"
+							singleLine={false}
+							size="medium"
+							id="admin-tab-relays"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+						<label class="relay-enforced-label">
+							<input type="checkbox" bind:checked={adminRelayEnforced} />
+							Main relay is enforced
+						</label>
+					</div>
+					<div class="admin-form-section">
+						<label class="labels-label" for="admin-tab-blossom">Blossom servers</label>
+						<InputTextField
+							bind:value={adminBlossom}
+							placeholder="https://…"
+							singleLine={false}
+							size="medium"
+							id="admin-tab-blossom"
+							oninput={() => {}}
+							onkeydown={() => {}}
+							onfocus={() => {}}
+							onblur={() => {}}
+						/>
+					</div>
+				</div>
+
+				{#if adminSaveError}<p class="text-sm text-red-500">{adminSaveError}</p>{/if}
+				<div class="join-modal-actions crown-save-row">
+					<button
+						type="button"
+						class="btn-primary-small"
+						disabled={adminSaveSubmitting}
+						onclick={() => saveCommunityAdminAll()}
+					>
+						{adminSaveSubmitting ? 'Saving…' : 'Save'}
+					</button>
+				</div>
 			</div>
 		{:else}
 			<EmptyState
@@ -4086,477 +4416,8 @@
 	{/if}
 </Modal>
 
-<Modal
-	open={adminCrownModalOpen}
-	onClose={() => {
-		adminCrownModalOpen = false;
-		adminSaveError = '';
-	}}
-	ariaLabel="Admin settings"
-	fillHeight={true}
-	padContent={true}
->
-	{#if adminCrownModalOpen}
-		<div class="crown-modal-layout">
-			<div class="crown-modal-head">
-				<h2 class="join-modal-title crown-modal-title">Admin</h2>
-				<Selector
-					options={['General', 'Content', 'Profiles', 'Forms']}
-					selectedOption={adminCrownSection}
-					onSelect={(opt) => (adminCrownSection = opt)}
-				/>
-				<div class="crown-modal-divider"></div>
-			</div>
-			<div class="crown-modal-body">
-				{#if adminCrownSection === 'General'}
-					<div class="admin-tab crown-admin-general">
-						<div class="admin-form-section">
-							<label class="labels-label" for="crown-admin-picture">Picture URL</label>
-							<InputTextField
-								bind:value={adminPicture}
-								placeholder="https://…"
-								singleLine={true}
-								id="crown-admin-picture"
-								oninput={() => {}}
-								onkeydown={() => {}}
-								onfocus={() => {}}
-								onblur={() => {}}
-							/>
-						</div>
-						<div class="admin-form-section">
-							<label class="labels-label" for="crown-admin-name">Community name</label>
-							<InputTextField
-								bind:value={adminName}
-								placeholder="Name"
-								singleLine={true}
-								id="crown-admin-name"
-								oninput={() => {}}
-								onkeydown={() => {}}
-								onfocus={() => {}}
-								onblur={() => {}}
-							/>
-						</div>
-						<div class="admin-form-section">
-							<label class="labels-label" for="crown-admin-desc">Description</label>
-							<InputTextField
-								bind:value={adminDescription}
-								placeholder="Description"
-								singleLine={false}
-								size="medium"
-								id="crown-admin-desc"
-								oninput={() => {}}
-								onkeydown={() => {}}
-								onfocus={() => {}}
-								onblur={() => {}}
-							/>
-						</div>
-						<div class="admin-form-section">
-							<label class="labels-label" for="crown-admin-relays"
-								>Relays (one per line or comma-separated)</label
-							>
-							<InputTextField
-								bind:value={adminRelays}
-								placeholder="wss://…"
-								singleLine={false}
-								size="medium"
-								id="crown-admin-relays"
-								oninput={() => {}}
-								onkeydown={() => {}}
-								onfocus={() => {}}
-								onblur={() => {}}
-							/>
-							<label class="relay-enforced-label">
-								<input type="checkbox" bind:checked={adminRelayEnforced} />
-								Main relay is enforced (relay filters membership — skip client-side author filter)
-							</label>
-						</div>
-						<div class="admin-form-section">
-							<label class="labels-label" for="crown-admin-blossom">Blossom servers</label>
-							<InputTextField
-								bind:value={adminBlossom}
-								placeholder="https://…"
-								singleLine={false}
-								size="medium"
-								id="crown-admin-blossom"
-								oninput={() => {}}
-								onkeydown={() => {}}
-								onfocus={() => {}}
-								onblur={() => {}}
-							/>
-						</div>
-						{#if adminSaveError}<p class="text-sm text-red-500">{adminSaveError}</p>{/if}
-						<div class="join-modal-actions crown-save-row">
-							<button
-								type="button"
-								class="btn-primary-small"
-								disabled={adminSaveSubmitting}
-								onclick={() => saveCommunityAdminAll()}
-							>
-								{adminSaveSubmitting ? 'Saving…' : 'Save'}
-							</button>
-						</div>
-					</div>
-				{:else if adminCrownSection === 'Content'}
-					<div class="crown-content-tab">
-						{#each ADMIN_SECTION_PRESETS.filter((p) => adminSectionEnabled[p.id]) as preset}
-							{@const addrs = Array.isArray(adminSectionListAddress[preset.id])
-								? adminSectionListAddress[preset.id]
-								: adminSectionListAddress[preset.id]
-									? [adminSectionListAddress[preset.id]]
-									: []}
-							{@const listItems = adminProfileLists
-								.filter((l) => addrs.includes(l.listAddress))
-								.map((l) => ({ image: l.image, name: l.name }))}
-							<button
-								type="button"
-								class="admin-section-row admin-section-row-clickable"
-								onclick={() => (adminSectionModalPresetId = preset.id)}
-							>
-								<span class="admin-section-emoji-slot"></span>
-								<span class="admin-section-name">{preset.name}</span>
-								<span class="admin-section-badges-wrap">
-									<BadgeStack items={listItems} maxDisplay={3} overlapPx={16} badgeSizePx={32} />
-									<ChevronRight
-										variant="outline"
-										size={16}
-										color="hsl(var(--white33))"
-										className="admin-section-chevron"
-									/>
-								</span>
-							</button>
-						{/each}
-						<div class="admin-section-add-row">
-							<button
-								type="button"
-								class="admin-section-add-btn"
-								onclick={() => (adminAddSectionOpen = true)}
-								aria-label="Add content section"
-							>
-								<Plus variant="outline" size={18} color="hsl(var(--white66))" />
-								<span>Add content section</span>
-							</button>
-						</div>
-					</div>
-				{:else if adminCrownSection === 'Profiles'}
-					<div class="crown-profiles-tab">
-						{#if allAdminProfileLists.length === 0}
-							<p class="community-info-profiles-empty">No profile lists yet.</p>
-						{/if}
-						{#each allAdminProfileLists as item}
-							{@const listDisplayName = item.parsed?.name ?? item.name ?? item.sectionName}
-							<div class="info-list-panel">
-								<!-- Section 1: badge + name + description -->
-								<div class="list-panel-section">
-									<SingleBadge
-										image={item.parsed?.image ?? null}
-										name={listDisplayName}
-										sizePx={52}
-									/>
-									<div class="list-panel-meta">
-										<span class="list-panel-name">{listDisplayName}</span>
-										{#if item.parsed?.content}
-											<span class="list-panel-desc">{item.parsed.content}</span>
-										{/if}
-									</div>
-								</div>
-								{#if item.sectionName && item.sectionName !== '—'}
-									<div class="list-panel-divider"></div>
-									<!-- Section 2: CAN WRITE -->
-									<div class="list-panel-section list-panel-section-write">
-										<p class="list-panel-write-label">CAN WRITE</p>
-										<div class="list-panel-type-pills">
-											<span class="list-panel-type-pill"><span>{item.sectionName}</span></span>
-										</div>
-									</div>
-								{/if}
-								<div class="list-panel-divider"></div>
-								<div class="info-list-actions">
-									<button
-										type="button"
-										class="btn-view-more"
-										onclick={() => {
-											adminCrownModalOpen = false;
-											openList(item.listAddress);
-										}}>View All</button
-									>
-									<button
-										type="button"
-										class="btn-primary-small info-list-action-btn"
-										aria-label="Edit list"
-										onclick={() => {
-											adminCrownModalOpen = false;
-											openList(item.listAddress);
-										}}
-									>
-										<Pen variant="fill" size={13} color="hsl(var(--white66))" />
-										<span>Edit</span>
-									</button>
-								</div>
-							</div>
-						{/each}
-						<div class="admin-section-add-row">
-							<button
-								type="button"
-								class="admin-section-add-btn"
-								onclick={() => openListFormModal('add')}
-								aria-label="Add profile list"
-							>
-								<Plus variant="outline" size={18} color="hsl(var(--white66))" />
-								<span>Add profile list</span>
-							</button>
-						</div>
-					</div>
-				{:else if adminCrownSection === 'Forms'}
-					<div class="crown-forms-tab">
-						{#if formTemplateModal}
-							<!-- Inline form editor -->
-							<form
-								class="join-form ft-form"
-								onsubmit={(e) => {
-									e.preventDefault();
-									saveFormTemplate();
-								}}
-							>
-								<div class="ft-inline-back">
-									<button
-										type="button"
-										class="ft-back-btn"
-										onclick={() => {
-											formTemplateModal = null;
-											formTemplateError = '';
-										}}>← Back</button
-									>
-									<span class="ft-inline-title"
-										>{formTemplateModal.mode === 'edit' ? 'Edit form' : 'New form'}</span
-									>
-								</div>
+<!-- crown admin modal removed — admin UI is now the inline Admin tab -->
 
-								<div class="join-form-field">
-									<label class="labels-label" for="ft-name">Form name</label>
-									<InputTextField
-										bind:value={formTemplateName}
-										placeholder="e.g. Membership Application"
-										singleLine={true}
-										id="ft-name"
-										oninput={() => {}}
-										onkeydown={() => {}}
-										onfocus={() => {}}
-										onblur={() => {}}
-									/>
-								</div>
-								{#if formTemplateModal.mode === 'add'}
-									<div class="join-form-field">
-										<label class="labels-label" for="ft-dtag">Form ID (slug)</label>
-										<InputTextField
-											bind:value={formTemplateDTag}
-											placeholder="e.g. membership-application"
-											singleLine={true}
-											id="ft-dtag"
-											oninput={() => {}}
-											onkeydown={() => {}}
-											onfocus={() => {}}
-											onblur={() => {}}
-										/>
-									</div>
-								{:else}
-									<p class="ft-id-display">ID: <code>{formTemplateDTag}</code></p>
-								{/if}
-								<div class="join-form-field">
-									<label class="labels-label" for="ft-description">Description</label>
-									<InputTextField
-										bind:value={formTemplateDescription}
-										placeholder="What is this form for?"
-										singleLine={false}
-										size="medium"
-										id="ft-description"
-										oninput={() => {}}
-										onkeydown={() => {}}
-										onfocus={() => {}}
-										onblur={() => {}}
-									/>
-								</div>
-
-								<div class="ft-section-header">
-									<span class="labels-label">Fields</span>
-									<button type="button" class="ft-add-field-btn" onclick={addFormField}
-										>+ Add field</button
-									>
-								</div>
-								{#each formTemplateFields as field, idx}
-									<div class="ft-field-row">
-										<div class="ft-field-top">
-											<InputTextField
-												bind:value={formTemplateFields[idx].id}
-												placeholder="field-id"
-												singleLine={true}
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
-											<select
-												class="ft-type-select"
-												value={field.type}
-												onchange={(e) => updateFormField(idx, 'type', e.currentTarget.value)}
-											>
-												<option value="text">Text</option>
-												<option value="textarea">Textarea</option>
-												<option value="number">Number</option>
-												<option value="email">Email</option>
-												<option value="url">URL</option>
-												<option value="select">Select</option>
-												<option value="checkbox">Checkbox</option>
-												<option value="radio">Radio</option>
-												<option value="date">Date</option>
-											</select>
-											<button
-												type="button"
-												class="ft-remove-btn"
-												onclick={() => removeFormField(idx)}
-												aria-label="Remove field">×</button
-											>
-										</div>
-										<div class="ft-field-bottom">
-											<InputTextField
-												bind:value={formTemplateFields[idx].label}
-												placeholder="Label shown to user"
-												singleLine={true}
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
-											<InputTextField
-												bind:value={formTemplateFields[idx].placeholder}
-												placeholder="Placeholder hint"
-												singleLine={true}
-												oninput={() => {}}
-												onkeydown={() => {}}
-												onfocus={() => {}}
-												onblur={() => {}}
-											/>
-											<label class="ft-required-label">
-												<input
-													type="checkbox"
-													checked={field.required}
-													onchange={(e) =>
-														updateFormField(idx, 'required', e.currentTarget.checked)}
-												/>
-												Required
-											</label>
-										</div>
-										{#if field.type === 'select' || field.type === 'radio'}
-											<div class="ft-field-options">
-												<InputTextField
-													value={field.selectOptions.join(', ')}
-													placeholder="Options, comma-separated"
-													singleLine={true}
-													oninput={(e) =>
-														updateFormField(
-															idx,
-															'selectOptions',
-															e.currentTarget.value
-																.split(',')
-																.map((s) => s.trim())
-																.filter(Boolean)
-														)}
-													onkeydown={() => {}}
-													onfocus={() => {}}
-													onblur={() => {}}
-												/>
-											</div>
-										{/if}
-									</div>
-								{/each}
-								{#if formTemplateFields.length === 0}
-									<p class="ft-no-fields">No fields yet. Add one above.</p>
-								{/if}
-
-								<div class="join-form-field">
-									<label class="labels-label" for="ft-confirm-msg">Confirmation message</label>
-									<InputTextField
-										bind:value={formTemplateConfirmMsg}
-										placeholder="Shown to users after they submit (e.g. Thank you! We'll review within 48h.)"
-										singleLine={false}
-										size="medium"
-										id="ft-confirm-msg"
-										oninput={() => {}}
-										onkeydown={() => {}}
-										onfocus={() => {}}
-										onblur={() => {}}
-									/>
-								</div>
-								<label class="ft-public-label">
-									<input type="checkbox" bind:checked={formTemplatePublic} />
-									Public responses (unencrypted)
-								</label>
-
-								{#if formTemplateError}<p class="text-sm text-red-500">
-										{formTemplateError}
-									</p>{/if}
-								<div class="join-modal-actions" style="margin-top: 0.75rem;">
-									<button
-										type="button"
-										class="btn-secondary-small"
-										onclick={() => {
-											formTemplateModal = null;
-											formTemplateError = '';
-										}}>Cancel</button
-									>
-									<button type="submit" class="btn-primary-small" disabled={formTemplateSubmitting}
-										>{formTemplateSubmitting ? 'Saving…' : 'Save'}</button
-									>
-								</div>
-							</form>
-						{:else}
-							<!-- Form list -->
-							{#if adminFormTemplates.length === 0}
-								<p class="community-info-profiles-empty">No form templates yet.</p>
-							{:else}
-								{#each adminFormTemplates as item}
-									<div class="info-list-panel crown-form-panel">
-										<div class="info-list-panel-meta" style="padding: 0;">
-											<span class="info-list-panel-name"
-												>{item.parsed?.name || item.parsed?.dTag || 'Untitled form'}</span
-											>
-											{#if item.linkedLists.length > 0}
-												<span class="info-list-panel-desc"
-													>Used by: {item.linkedLists.join(', ')}</span
-												>
-											{:else}
-												<span class="info-list-panel-desc crown-form-address">{item.formAddr}</span>
-											{/if}
-										</div>
-										<div class="info-list-actions" style="margin-top: 0.5rem;">
-											<button
-												type="button"
-												class="btn-primary-small info-list-action-btn"
-												onclick={() => openFormTemplateModal('edit', item)}
-											>
-												<Pen variant="fill" size={13} color="hsl(var(--white66))" />
-												<span>Edit</span>
-											</button>
-										</div>
-									</div>
-								{/each}
-							{/if}
-							<div class="admin-section-add-row">
-								<button
-									type="button"
-									class="admin-section-add-btn"
-									onclick={() => openFormTemplateModal('add')}
-								>
-									<Plus variant="outline" size={18} color="hsl(var(--white66))" />
-									<span>New form template</span>
-								</button>
-							</div>
-						{/if}
-					</div>
-				{/if}
-			</div>
-		</div>
-	{/if}
-</Modal>
 
 <Modal
 	open={joinRequestsModalOpen}
@@ -5549,43 +5410,7 @@
 		pointer-events: none;
 		z-index: 10;
 	}
-	/* Crown admin modal — fillHeight flex layout: fixed head, scrollable body */
-	.crown-modal-layout {
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-		min-height: 0;
-	}
-	.crown-modal-head {
-		flex-shrink: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-		padding: 1.25rem 1.25rem 0;
-	}
-	.crown-modal-title {
-		margin: 0;
-	}
-	.crown-modal-divider {
-		height: 1px;
-		background: hsl(var(--white8));
-		margin: 0.75rem -1.25rem 0;
-	}
-	.crown-modal-body {
-		flex: 1;
-		min-height: 0;
-		overflow-y: auto;
-		display: flex;
-		flex-direction: column;
-		gap: 0.75rem;
-		padding: 1.25rem;
-		scrollbar-width: thin;
-		scrollbar-color: hsl(var(--white16)) transparent;
-	}
-	.crown-admin-general,
-	.crown-content-tab,
-	.crown-profiles-tab,
-	.crown-forms-tab {
+	.crown-content-tab {
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
@@ -5804,6 +5629,15 @@
 	.tab-row.pills-row-under :global(.btn-primary-small:active),
 	.tab-row.pills-row-under :global(.btn-secondary-small:active) {
 		transform: none;
+	}
+	/* Admin tab — always rendered with gold gradient background */
+	.tab-row.pills-row-under :global(.tab-admin-pill) {
+		background: var(--gradient-gold16);
+		color: hsl(var(--foreground));
+	}
+	.tab-row.pills-row-under :global(.tab-admin-pill-selected) {
+		background: var(--gradient-gold33);
+		box-shadow: 0 0 12px hsl(var(--goldColor) / 0.25);
 	}
 	.community-info-modal {
 		position: relative;
@@ -6113,12 +5947,24 @@
 		font-size: 0.9375rem;
 		color: hsl(var(--muted-foreground));
 	}
-	.admin-tab {
+	.admin-tab-page {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
-		padding: 1rem 0;
-		padding-bottom: 100px;
+		gap: 1.5rem;
+		padding: 1rem 0 2rem;
+	}
+	.admin-page-section {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+	.admin-page-section-title {
+		font-size: 0.75rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: hsl(var(--muted-foreground));
+		margin: 0;
 	}
 	.admin-form-section {
 		display: flex;
@@ -6448,9 +6294,12 @@
 		padding: 0;
 		gap: 0;
 	}
-	/* No top padding: title sits 16px below fixed header via ForumPostDetail .content-scroll padding-top */
+	/* Detail views own their padding/scrolling via content-scroll */
 	.panel-content-detail {
-		padding: 0 0 100px;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+		padding: 0;
 	}
 	.forum-list {
 		display: flex;
@@ -6464,9 +6313,15 @@
 		align-items: center;
 		gap: 10px;
 		width: 100%;
-		padding: 10px 16px;
+		padding: 6px 10px 6px 16px;
 		background: hsl(var(--white4));
-		border-bottom: 1.4px solid hsl(var(--white8));
+		border-bottom: 1.4px solid hsl(var(--white11));
+	}
+
+	@media (min-width: 768px) {
+		.task-group-header {
+			padding: 8px 12px 8px 16px;
+		}
 	}
 
 	.task-group-count {

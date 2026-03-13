@@ -514,8 +514,9 @@
 	.wiki-detail {
 		display: flex;
 		flex-direction: column;
+		height: 100%;
 		min-height: 0;
-		padding-bottom: 120px;
+		overflow: hidden;
 	}
 
 	.detail-header-wrap {
@@ -525,6 +526,8 @@
 	.content-scroll {
 		flex: 1;
 		min-height: 0;
+		overflow-y: auto;
+		padding-bottom: 120px;
 	}
 
 	.content-inner {

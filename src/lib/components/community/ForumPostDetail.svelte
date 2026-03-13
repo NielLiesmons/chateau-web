@@ -718,8 +718,9 @@
 	.forum-post-detail {
 		display: flex;
 		flex-direction: column;
+		height: 100%;
 		min-height: 0;
-		padding-bottom: 120px;
+		overflow: hidden;
 	}
 	.detail-header-wrap {
 		flex-shrink: 0;
@@ -728,9 +729,11 @@
 	.content-scroll {
 		flex: 1;
 		min-height: 0;
+		overflow-y: auto;
 		padding-top: 16px;
 		padding-left: 0;
 		padding-right: 0;
+		padding-bottom: 120px;
 	}
 	.content-inner {
 		padding: 0 16px 16px;
