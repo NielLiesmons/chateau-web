@@ -36,6 +36,7 @@ export {
 	subscribeCommunityForumPosts,
 	subscribeForumPostComments,
 	subscribeTaskComments,
+	subscribeTaskStatuses,
 	fetchLabelEvents,
 	publishToRelays,
 	fetchCommunityWikis,

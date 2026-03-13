@@ -33,6 +33,7 @@
 		subscribeCommunityForumPosts,
 		subscribeForumPostComments,
 		subscribeTaskComments,
+		subscribeTaskStatuses,
 		fetchFromRelays,
 		fetchProfilesBatch,
 		publishToRelays,
@@ -328,6 +329,35 @@
 	let formTemplateSubmitting = $state(false);
 	let formTemplateError = $state('');
 
+	// Bootstrap: when landing directly on a community page with empty Dexie (fresh browser),
+	// fetch that specific community by pubkey so the page loads without having to wait for the
+	// global startLiveSubscriptions() subscription to discover it.
+	// Runs only while communities list is empty; stops as soon as any community is in Dexie.
+	$effect(() => {
+		if (!browser || !communityNpub || communities.length > 0) return;
+		let cancelled = false;
+		try {
+			const decoded = nip19.decode(communityNpub);
+			if (decoded.type !== 'npub') return;
+			const pubkey = decoded.data;
+			fetchFromRelays(DEFAULT_COMMUNITY_RELAYS, {
+				kinds: [EVENT_KINDS.COMMUNITY],
+				authors: [pubkey],
+				limit: 5
+			})
+				.then((events) => {
+					if (cancelled || !events.length) return;
+					putEvents(events);
+				})
+				.catch(() => {});
+		} catch {
+			/* invalid npub, ignore */
+		}
+		return () => {
+			cancelled = true;
+		};
+	});
+
 	// Resolve selected community (event + profile) from npub
 	$effect(() => {
 		if (!browser) return;
@@ -609,16 +639,12 @@
 
 	let forumCommentsUnsub = null;
 	// Subscribe + initial fetch for forum post comments so they land in Dexie before the liveQuery fires.
-	// Mirrors the task comments pattern: explicit fetchFromRelays populates Dexie immediately on first load
-	// so the profile stack is visible without having to open a post first.
-	// Waits for generalMembers to resolve so the authors filter matches ForumPostDetail.allowedCommenters exactly.
+	// Does NOT wait for generalMembers — fires immediately when postIds are available so comment counts
+	// appear as fast as possible. The liveQuery (below) applies the member filter client-side.
+	// When generalMembers later resolves from undefined to a value, this effect re-runs and the
+	// subscription is upgraded to use the authors filter, preventing stale/spammy comments going forward.
 	$effect(() => {
-		if (
-			!browser ||
-			!selectedCommunity?.pubkey ||
-			!forumPosts?.length ||
-			generalMembers === undefined
-		) {
+		if (!browser || !selectedCommunity?.pubkey || !forumPosts?.length) {
 			if (forumCommentsUnsub) {
 				forumCommentsUnsub();
 				forumCommentsUnsub = null;
@@ -630,17 +656,14 @@
 		const relays = selectedCommunity.relays?.length
 			? selectedCommunity.relays
 			: DEFAULT_COMMUNITY_RELAYS;
-		// Live subscription for new comments arriving after load.
-		forumCommentsUnsub = subscribeForumPostComments(relays, postIds, { authors: generalMembers });
+		// Live subscription — use authors filter once generalMembers resolves, open without it while loading.
+		forumCommentsUnsub = subscribeForumPostComments(relays, postIds, {
+			authors: generalMembers === undefined ? null : generalMembers
+		});
 		// Explicit one-shot fetch so Dexie is populated immediately (WebSocket subscription alone is too slow).
-		// Fetch both #E (root marker, uppercase) and #e (lowercase fallback) to catch all NIP-1111 variants.
-		const authorsFilter = generalMembers?.length ? { authors: generalMembers } : {};
-		fetchFromRelays(relays, { kinds: [1111], '#E': postIds, limit: 500, ...authorsFilter }).catch(
-			() => {}
-		);
-		fetchFromRelays(relays, { kinds: [1111], '#e': postIds, limit: 500, ...authorsFilter }).catch(
-			() => {}
-		);
+		// No authors filter on the relay fetch: we want all comments in Dexie; the liveQuery filters client-side.
+		fetchFromRelays(relays, { kinds: [1111], '#E': postIds, limit: 500 }).catch(() => {});
+		fetchFromRelays(relays, { kinds: [1111], '#e': postIds, limit: 500 }).catch(() => {});
 		return () => {
 			if (forumCommentsUnsub) {
 				forumCommentsUnsub();
@@ -1016,6 +1039,46 @@
 		return () => sub.unsubscribe();
 	});
 
+	// Live subscription for task status updates (kind 1983).
+	// The one-shot fetch in the tasks $effect seeds Dexie on first load; this keeps statuses current
+	// when other clients change a task's status while you have the page open.
+	let taskStatusUnsub = null;
+	$effect(() => {
+		if (!browser || !selectedCommunity?.pubkey || !taskEvents?.length) {
+			if (taskStatusUnsub) {
+				taskStatusUnsub();
+				taskStatusUnsub = null;
+			}
+			return;
+		}
+		const addrs = taskEvents
+			.map((e) => {
+				const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+				return `${EVENT_KINDS.TASK}:${e.pubkey}:${d}`;
+			})
+			.filter(Boolean);
+		if (!addrs.length) return;
+		const relays = selectedCommunity.relays?.length
+			? selectedCommunity.relays
+			: DEFAULT_COMMUNITY_RELAYS;
+		taskStatusUnsub = subscribeTaskStatuses(relays, addrs);
+		// One-shot fetch ensures we have the latest status events in Dexie immediately,
+		// without waiting for the sequential task-relay-fetch chain to complete.
+		// This is especially important when Dexie already has tasks from a previous session
+		// so statuses load in parallel with tasks rather than after them.
+		fetchFromRelays(relays, { kinds: [EVENT_KINDS.STATUS], '#a': addrs, limit: 1000 })
+			.then((evs) => {
+				if (evs.length) putEvents(evs);
+			})
+			.catch(() => {});
+		return () => {
+			if (taskStatusUnsub) {
+				taskStatusUnsub();
+				taskStatusUnsub = null;
+			}
+		};
+	});
+
 	// liveQuery: wiki events (kind 30818) for the selected community
 	$effect(() => {
 		if (!browser || !selectedCommunity?.pubkey) {
@@ -1178,6 +1241,77 @@
 			error: (e) => console.error('[MilestoneStatus] liveQuery error', e)
 		});
 		return () => sub.unsubscribe();
+	});
+
+	// Tab-aware targeted refresh: when the user switches to a section, fire a fresh one-shot
+	// relay fetch for that section so the feed is current.
+	// Skips the very first run (initial community load already fetches everything).
+	// Has a 60s per-section cooldown to prevent unnecessary Dexie writes (which trigger
+	// liveQuery re-fires and cause profile pics to visually reload).
+	// Forum is excluded: its persistent subscription (subscribeCommunityForumPosts) already
+	// keeps that feed live, so re-fetching on tab switch is redundant.
+	/** @type {Map<string, number>} section → last-refresh timestamp */
+	const _sectionRefreshTs = new Map();
+	let _lastTabSection = /** @type {string|null} */ (null);
+	$effect(() => {
+		const section = selectedSection;
+		const communityPubkey = selectedCommunity?.pubkey;
+		if (!browser || !communityPubkey) {
+			_lastTabSection = null;
+			return;
+		}
+		// First run after community load: record the section, don't fetch (initial load covers it).
+		if (_lastTabSection === null) {
+			_lastTabSection = section;
+			return;
+		}
+		if (_lastTabSection === section) return;
+		_lastTabSection = section;
+
+		// Respect 60s cooldown per section to avoid re-writing identical events to Dexie.
+		const tsKey = `${communityPubkey}:${section}`;
+		const now = Date.now();
+		if (now - (_sectionRefreshTs.get(tsKey) ?? 0) < 60_000) return;
+		_sectionRefreshTs.set(tsKey, now);
+
+		const relays = selectedCommunity.relays?.length
+			? selectedCommunity.relays
+			: DEFAULT_COMMUNITY_RELAYS;
+
+		if (section === 'tasks') {
+			// Tasks have no persistent subscription; refresh tasks + statuses on tab switch.
+			fetchFromRelays(relays, { kinds: [EVENT_KINDS.TASK], '#h': [communityPubkey], limit: 200 })
+				.then(async (events) => {
+					if (events.length) await putEvents(events);
+					const addrs = events
+						.map((e) => {
+							const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+							return `${EVENT_KINDS.TASK}:${e.pubkey}:${d}`;
+						})
+						.filter(Boolean);
+					if (addrs.length) {
+						const statusEvs = await fetchFromRelays(relays, {
+							kinds: [EVENT_KINDS.STATUS],
+							'#a': addrs,
+							limit: 1000
+						});
+						if (statusEvs.length) await putEvents(statusEvs);
+					}
+				})
+				.catch(() => {});
+		} else if (section === 'wikis') {
+			fetchCommunityWikis(relays, communityPubkey)
+				.then((events) => {
+					if (events.length) putEvents(events);
+				})
+				.catch(() => {});
+		} else if (section === 'projects') {
+			fetchCommunityProjects(relays, communityPubkey)
+				.then((evs) => {
+					if (evs.length) putEvents(evs);
+				})
+				.catch(() => {});
+		}
 	});
 
 	// Keep the module-level cache current so back-navigation shows data instantly.
@@ -1436,6 +1570,28 @@
 	);
 	const isForumSection = $derived(selectedSection === 'forum' || selectedSectionKinds.includes(11));
 	const hasForm = $derived(profileListEvent && parseProfileList(profileListEvent)?.form);
+
+	// Task list grouping — kept in script so the tasks section can use CSS hiding instead of {#if}.
+	const TASK_STATUS_ORDER = ['inReview', 'inProgress', 'open', 'backlog', 'closed', 'canceled'];
+	const TASK_STATUS_LABELS = /** @type {Record<string,string>} */ ({
+		inReview: 'IN REVIEW',
+		inProgress: 'IN PROGRESS',
+		open: 'OPEN',
+		backlog: 'BACKLOG',
+		closed: 'CLOSED',
+		canceled: 'CANCELED'
+	});
+	const tasksByStatus = $derived.by(() => {
+		/** @type {Map<string, import('nostr-tools').NostrEvent[]>} */
+		const map = new Map();
+		for (const task of taskEvents.slice().sort((a, b) => b.created_at - a.created_at)) {
+			const { status } = getTaskStatusAndPriority(task);
+			const key = TASK_STATUS_ORDER.includes(status) ? status : 'open';
+			if (!map.has(key)) map.set(key, []);
+			map.get(key).push(task);
+		}
+		return map;
+	});
 
 	// When admin tab is entered, populate admin form from current community (only when first entering or community changes).
 	$effect(() => {
@@ -3111,12 +3267,13 @@
 		</div>
 	</div>
 	<div class="panel-content">
-		{#if isForumSection}
-			<div class="forum-list">
-				{#if forumPosts.length === 0}
-					<EmptyState message="No forum posts yet" minHeight={600} />
-				{:else}
-					{#each forumPosts as post}
+		<!-- forum, tasks, projects, wikis are always in DOM (CSS hidden when inactive) so
+		     profile images stay loaded across tab switches. Profiles/forms/admin are lazy. -->
+		<div class="forum-list" class:section-hidden={!isForumSection}>
+			{#if forumPosts.length === 0}
+				<EmptyState message="No forum posts yet" minHeight={600} />
+			{:else}
+				{#each forumPosts as post (post.id)}
 						{@const authorProfile = profilesByPubkey.get(post.pubkey)}
 						{@const authorContent = authorProfile?.content
 							? (() => {
@@ -3148,51 +3305,23 @@
 							commentCount={postCommenters?.count ?? 0}
 							onClick={() => openPost(post)}
 						/>
-					{/each}
-				{/if}
-			</div>
-		{:else if selectedSection === 'tasks'}
-			<div class="tasks-list">
-				{#if taskEvents.length === 0}
-					<EmptyState message="No tasks yet" minHeight={600} />
-				{:else}
-					{@const STATUS_ORDER = [
-						'inReview',
-						'inProgress',
-						'open',
-						'backlog',
-						'closed',
-						'canceled'
-					]}
-					{@const STATUS_LABELS = {
-						inReview: 'IN REVIEW',
-						inProgress: 'IN PROGRESS',
-						open: 'OPEN',
-						backlog: 'BACKLOG',
-						closed: 'CLOSED',
-						canceled: 'CANCELED'
-					}}
-					{@const tasksByStatus = (() => {
-						/** @type {Map<string, typeof taskEvents>} */
-						const map = new Map();
-						for (const task of taskEvents.slice().sort((a, b) => b.created_at - a.created_at)) {
-							const { status } = getTaskStatusAndPriority(task);
-							const key = STATUS_ORDER.includes(status) ? status : 'open';
-							if (!map.has(key)) map.set(key, []);
-							map.get(key).push(task);
-						}
-						return map;
-					})()}
-					{#each STATUS_ORDER as statusKey}
-						{@const group = tasksByStatus.get(statusKey) ?? []}
-						{#if group.length > 0}
-							<div class="task-group-header">
-								<span class="eyebrow-label-xs">{STATUS_LABELS[statusKey]}</span>
-								<span class="task-group-count">{group.length}</span>
-								<button
-									type="button"
-									class="task-group-add-btn"
-									aria-label="Add task with status {STATUS_LABELS[statusKey]}"
+				{/each}
+		{/if}
+		</div>
+		<div class="tasks-list" class:section-hidden={selectedSection !== 'tasks'}>
+			{#if taskEvents.length === 0}
+				<EmptyState message="No tasks yet" minHeight={600} />
+			{:else}
+				{#each TASK_STATUS_ORDER as statusKey}
+					{@const group = tasksByStatus.get(statusKey) ?? []}
+					{#if group.length > 0}
+						<div class="task-group-header">
+							<span class="eyebrow-label-xs">{TASK_STATUS_LABELS[statusKey]}</span>
+							<span class="task-group-count">{group.length}</span>
+							<button
+								type="button"
+								class="task-group-add-btn"
+								aria-label="Add task with status {TASK_STATUS_LABELS[statusKey]}"
 									onclick={() => {
 										newTaskInitialStatus = statusKey;
 										addTaskModalOpen = true;
@@ -3201,8 +3330,8 @@
 									<Plus size={12} color="hsl(var(--white33))" variant="outline" strokeWidth={2} />
 								</button>
 							</div>
-							{#each group as task}
-								{@const { status, priority } = getTaskStatusAndPriority(task)}
+						{#each group as task (task.id)}
+							{@const { status, priority } = getTaskStatusAndPriority(task)}
 								{@const title = task.tags?.find((t) => t[0] === 'title')?.[1] ?? ''}
 								{@const taskLabels = task.tags?.filter((t) => t[0] === 't').map((t) => t[1]) ?? []}
 								{@const assigneePubkeys =
@@ -3250,12 +3379,11 @@
 					{/each}
 				{/if}
 			</div>
-		{:else if selectedSection === 'projects'}
-			<div class="projects-list">
-				{#if projectEvents.length === 0}
-					<EmptyState message="No projects yet" minHeight={600} />
-				{:else}
-					{#each projectEvents.slice().sort((a, b) => b.created_at - a.created_at) as projEv}
+		<div class="projects-list" class:section-hidden={selectedSection !== 'projects'}>
+			{#if projectEvents.length === 0}
+				<EmptyState message="No projects yet" minHeight={600} />
+			{:else}
+				{#each projectEvents.slice().sort((a, b) => b.created_at - a.created_at) as projEv (projEv.id)}
 						{@const pData = getProjectCardData(projEv)}
 						{@const pAuthor = profilesByPubkey.get(projEv.pubkey)}
 						{@const pAuthorContent = pAuthor?.content
@@ -3285,12 +3413,11 @@
 					{/each}
 				{/if}
 			</div>
-		{:else if selectedSection === 'wikis'}
-			<div class="wiki-list">
-				{#if wikiEvents.length === 0}
-					<EmptyState message="No wiki articles yet" minHeight={600} />
-				{:else}
-					{#each wikiEvents.slice().sort((a, b) => b.created_at - a.created_at) as wiki}
+		<div class="wiki-list" class:section-hidden={selectedSection !== 'wikis'}>
+			{#if wikiEvents.length === 0}
+				<EmptyState message="No wiki articles yet" minHeight={600} />
+			{:else}
+				{#each wikiEvents.slice().sort((a, b) => b.created_at - a.created_at) as wiki (wiki.id)}
 						{@const wTitle = wiki.tags?.find((t) => t[0] === 'title')?.[1] ?? 'Untitled'}
 						{@const wSummary = wiki.tags?.find((t) => t[0] === 'summary')?.[1] ?? ''}
 						{@const wSlug = wiki.tags?.find((t) => t[0] === 'd')?.[1] ?? wiki.id}
@@ -3321,7 +3448,7 @@
 					{/each}
 				{/if}
 			</div>
-		{:else if selectedSection === 'profiles'}
+		{#if selectedSection === 'profiles'}
 			<div class="profiles-list">
 				{#if membersListData.length === 0}
 					<EmptyState message="No profile lists yet" minHeight={200} />
@@ -3418,7 +3545,7 @@
 				{/if}
 			</div>
 		{:else if selectedSection === 'forms'}
-			<div class="crown-forms-tab">
+			<div class="crown-forms-tab"><!-- forms is lazy; no profile images -->
 				{#if formTemplateModal}
 					<form
 						class="join-form ft-form"
@@ -3799,7 +3926,7 @@
 					</button>
 				</div>
 			</div>
-		{:else}
+		{:else if !isForumSection && selectedSection !== 'tasks' && selectedSection !== 'projects' && selectedSection !== 'wikis'}
 			<EmptyState
 				message="{sectionPills.find((p) => p.id === selectedSection)?.label ??
 					selectedSection} coming soon"
@@ -6281,10 +6408,15 @@
 		/* Space for fixed bottom bar */
 		padding-bottom: 100px;
 	}
-	.panel-content:has(.forum-list),
-	.panel-content:has(.tasks-list),
-	.panel-content:has(.projects-list),
-	.panel-content:has(.wiki-list) {
+	/* Hide section divs that aren't the active tab — keeps DOM alive so images stay cached. */
+	.section-hidden {
+		display: none !important;
+	}
+
+	.panel-content:has(.forum-list:not(.section-hidden)),
+	.panel-content:has(.tasks-list:not(.section-hidden)),
+	.panel-content:has(.projects-list:not(.section-hidden)),
+	.panel-content:has(.wiki-list:not(.section-hidden)) {
 		padding: 0 0 100px;
 	}
 

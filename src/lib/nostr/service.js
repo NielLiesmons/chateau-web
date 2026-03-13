@@ -420,6 +420,29 @@ export function subscribeTaskComments(relayUrls, taskAddrs, taskIds = [], onEven
 }
 
 /**
+ * Subscribe to kind 1983 (Status) events for the given task NIP-33 addresses.
+ * Keeps the subscription open so status changes made by other clients arrive
+ * live without requiring a page reload.
+ * @param {string[]} relayUrls
+ * @param {string[]} taskAddrs - NIP-33 addresses e.g. "37060:pubkey:dtag"
+ * @returns {() => void} unsubscribe function
+ */
+export function subscribeTaskStatuses(relayUrls, taskAddrs) {
+	if (!Array.isArray(taskAddrs) || taskAddrs.length === 0) return () => {};
+	const p = getPool();
+	const sub = p.subscribeMany(relayUrls, [{ kinds: [EVENT_KINDS.STATUS], '#a': taskAddrs, limit: 1000 }], {
+		onevent(event) {
+			if (event?.id) bufferEvent(event);
+		},
+		oneose() {},
+		onclose() {}
+	});
+	return () => {
+		try { sub.close(); } catch { /* noop */ }
+	};
+}
+
+/**
  * Fetch kind 1985 label events referencing a specific non-replaceable event.
  *
  * On enforced community relays all stored events are already from allowed members
