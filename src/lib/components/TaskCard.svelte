@@ -61,6 +61,7 @@ const stackText = $derived((() => {
 	return `${a} & ${n - 1} Others`;
 })());
 
+
 const hasBottomRow = $derived(stackProfiles.length > 0 || targets.length > 0 || labels.length > 0);
 </script>
 
@@ -109,13 +110,13 @@ const hasBottomRow = $derived(stackProfiles.length > 0 || targets.length > 0 || 
 				{/if}
 
 				<!-- Creator + assignees + commenters stack -->
-				{#if stackProfiles.length > 0}
-				<ProfilePicStack
-					profiles={stackProfiles}
-					text={stackText}
-					size="xs"
-					onclick={onClick}
-				/>
+			{#if stackProfiles.length > 0}
+			<ProfilePicStack
+				profiles={stackProfiles}
+				text={stackText}
+				size="xs"
+				onclick={onClick}
+			/>
 				{/if}
 
 				<!-- Labels stack, pushed to the far right -->

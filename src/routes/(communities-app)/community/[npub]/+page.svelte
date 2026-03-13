@@ -68,7 +68,7 @@
 	import TaskModal from '$lib/components/modals/TaskModal.svelte';
 	import WikiModal from '$lib/components/modals/WikiModal.svelte';
 	import Checkbox from '$lib/components/common/Checkbox.svelte';
-	import { Pen, Cross, Bell, ChevronRight } from '$lib/components/icons';
+	import { Pen, Cross, Bell, ChevronRight, Crown } from '$lib/components/icons';
 	import BadgeStack from '$lib/components/common/BadgeStack.svelte';
 	import SingleBadge from '$lib/components/common/SingleBadge.svelte';
 	import ProfilePicStack from '$lib/components/common/ProfilePicStack.svelte';
@@ -3243,27 +3243,49 @@
 				</button>
 			</div>
 		</div>
-		<div class="tab-row pills-row-under">
-			{#each sectionPills as pill}
-				<button
-					type="button"
-					class={pill.isAdmin
-						? selectedSection === pill.id
-							? 'btn-primary-small tab-selected tab-admin-pill tab-admin-pill-selected'
-							: 'btn-secondary-small tab-admin-pill'
-						: selectedSection === pill.id
+		<div class="pills-row-wrap">
+			<div class="tab-row pills-row-under">
+				{#each sectionPills.filter((p) => !p.isAdmin) as pill}
+					<button
+						type="button"
+						class={selectedSection === pill.id
 							? 'btn-primary-small tab-selected'
 							: 'btn-secondary-small'}
+						onclick={() =>
+							goto(`/community/${encodeURIComponent(communityNpub)}?s=${pill.id}`, {
+								replaceState: true,
+								noScroll: true,
+								keepFocus: true
+							})}
+					>
+						{pill.label}
+					</button>
+				{/each}
+			</div>
+			{#if isCommunityAdmin}
+				<button
+					type="button"
+					class="tab-admin-fixed-pill {selectedSection === 'admin'
+						? 'tab-admin-fixed-pill-selected'
+						: ''}"
 					onclick={() =>
-						goto(`/community/${encodeURIComponent(communityNpub)}?s=${pill.id}`, {
+						goto(`/community/${encodeURIComponent(communityNpub)}?s=admin`, {
 							replaceState: true,
 							noScroll: true,
 							keepFocus: true
 						})}
+					aria-label="Admin"
 				>
-					{pill.label}
+					<Crown
+					variant="fill"
+					size={14}
+					color={selectedSection === 'admin'
+						? 'hsl(var(--goldColor))'
+						: 'hsl(var(--goldColor66))'}
+				/>
+					<span>Admin</span>
 				</button>
-			{/each}
+			{/if}
 		</div>
 	</div>
 	<div class="panel-content">
@@ -5729,16 +5751,28 @@
 		line-height: 1.55;
 		margin: 0;
 	}
+	/* Pills row wrapper — flex row: scrolling pills + admin button side by side */
+	.pills-row-wrap {
+		display: flex;
+		align-items: center;
+		gap: 0;
+		margin-left: -16px;
+		margin-right: -16px;
+		padding-top: 12px;
+	}
 	.tab-row.pills-row-under {
+		flex: 1;
+		min-width: 0;
 		display: flex;
 		gap: 8px;
 		flex-wrap: nowrap;
 		overflow-x: auto;
-		padding: 12px 16px 0;
-		margin-left: -16px;
-		margin-right: -16px;
+		padding: 0 0 0 16px;
 		border: none;
 		scrollbar-width: none;
+		/* fade out the last ~24px before the admin button */
+		mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
+		-webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
 	}
 	.tab-row.pills-row-under::-webkit-scrollbar {
 		display: none;
@@ -5747,6 +5781,7 @@
 	.tab-row.pills-row-under :global(.btn-secondary-small) {
 		height: 32px;
 		min-height: 32px;
+		flex-shrink: 0;
 	}
 	.tab-row.pills-row-under :global(.btn-primary-small:hover),
 	.tab-row.pills-row-under :global(.btn-secondary-small:hover) {
@@ -5757,14 +5792,35 @@
 	.tab-row.pills-row-under :global(.btn-secondary-small:active) {
 		transform: none;
 	}
-	/* Admin tab — always rendered with gold gradient background */
-	.tab-row.pills-row-under :global(.tab-admin-pill) {
-		background: var(--gradient-gold16);
+	.tab-admin-fixed-pill {
+		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 5px;
+		height: 32px;
+		padding: 0 12px 0 10px;
+		font-size: 14px;
+		font-weight: 500;
 		color: hsl(var(--foreground));
+		background: var(--gradient-gold16);
+		border: none;
+		border-radius: 9999px;
+		cursor: pointer;
+		margin-right: 16px;
 	}
-	.tab-row.pills-row-under :global(.tab-admin-pill-selected) {
+	.tab-admin-fixed-pill-selected {
 		background: var(--gradient-gold33);
-		box-shadow: 0 0 12px hsl(var(--goldColor) / 0.25);
+		box-shadow: 0 0 14px hsl(var(--goldColor) / 0.3);
+	}
+	@media (max-width: 480px) {
+		.tab-admin-fixed-pill {
+			width: 32px;
+			padding: 0;
+		}
+		.tab-admin-fixed-pill :global(span) {
+			display: none;
+		}
 	}
 	.community-info-modal {
 		position: relative;

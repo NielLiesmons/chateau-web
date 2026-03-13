@@ -70,11 +70,13 @@ function handleClick() {
     padding: 0;
     margin: 0;
     font: inherit;
+    min-width: 0;
   }
 
   .stacked-pics {
     display: flex;
     flex-direction: row;
+    flex-shrink: 0;
   }
 
   .stacked-pic {
@@ -100,6 +102,7 @@ function handleClick() {
     background-color: hsl(var(--white8));
     border-radius: 9999px;
     min-width: 0;
+    overflow: hidden;
   }
 
   .text-content {
