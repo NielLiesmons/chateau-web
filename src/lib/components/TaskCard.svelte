@@ -78,10 +78,12 @@ const hasBottomRow = $derived(stackProfiles.length > 0 || targets.length > 0 || 
 		<div class="taskbox-col">
 			<TaskBox state={status} size={24} />
 		</div>
-		<span class="task-title">{title}</span>
-		<div class="priority-col">
-			<PriorityBox {priority} size={22} />
-		</div>
+		<span class="task-title" class:task-title-closed={status === 'closed'}>{title}</span>
+		{#if status !== 'closed'}
+			<div class="priority-col">
+				<PriorityBox {priority} size={22} />
+			</div>
+		{/if}
 	</div>
 
 	<!-- Row 2: L-shape + ProfilePicStack (left) + LabelStack (right) -->
@@ -174,6 +176,10 @@ const hasBottomRow = $derived(stackProfiles.length > 0 || targets.length > 0 || 
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	.task-title-closed {
+		color: hsl(var(--white66));
 	}
 
 	.priority-col {
