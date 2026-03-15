@@ -27,11 +27,13 @@ let { tokens = [] } = $props();
 		<!-- intentional whitespace — nothing to render -->
 
 	{:else if token.type === 'code'}
-		<CodeBlock
-			html={highlightCode(token.text, token.lang ?? '')}
-			code={token.text}
-			language={token.lang ? token.lang.toUpperCase() : ''}
-		/>
+		<div class="code-block-wrap">
+			<CodeBlock
+				html={highlightCode(token.text, token.lang ?? '')}
+				code={token.text}
+				language={token.lang ? token.lang.toUpperCase() : ''}
+			/>
+		</div>
 
 	{:else if token.type === 'heading'}
 		{#if token.depth === 1}
@@ -238,8 +240,8 @@ let { tokens = [] } = $props();
 		border-bottom: none;
 	}
 
-	/* ── Code block margin (CodeBlock component renders itself) ─────────── */
-	:global(.code-block) {
+	/* ── Code block margin ───────────────────────────────────────────────── */
+	.code-block-wrap {
 		margin: 1em 0;
 	}
 </style>

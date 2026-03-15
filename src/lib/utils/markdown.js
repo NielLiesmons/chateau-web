@@ -112,12 +112,18 @@ export function renderNostrMarkdown(text, options = {}) {
     let processed = text;
 
     // 1. Wikilinks  →  standard Markdown links (before marked so it parses them)
+    //    Code spans (`...`) are matched first and passed through unchanged so that
+    //    `[[target]]` inside backticks is never treated as a wikilink.
     if (wikiLinkFn) {
-        processed = processed.replace(/\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g, (_, target, display) => {
-            const slug = normalizeWikiSlug(target);
-            const label = (display ?? target).trim();
-            return `[${label}](${wikiLinkFn(slug)})`;
-        });
+        processed = processed.replace(
+            /(`+)[\s\S]*?\1|\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g,
+            (match, backtick, target, display) => {
+                if (backtick !== undefined) return match;
+                const slug = normalizeWikiSlug(target);
+                const label = (display ?? target).trim();
+                return `[${label}](${wikiLinkFn(slug)})`;
+            }
+        );
     }
 
     // 2. Bare nostr: URIs  →  Markdown links
@@ -174,12 +180,18 @@ export function tokenizeNostrMarkdown(text, options = {}) {
     let processed = text;
 
     // 1. Wikilinks → standard Markdown links
+    //    Code spans are matched first and passed through so `[[target]]` inside
+    //    backticks is never converted.
     if (wikiLinkFn) {
-        processed = processed.replace(/\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g, (_, target, display) => {
-            const slug = normalizeWikiSlug(target);
-            const label = (display ?? target).trim();
-            return `[${label}](${wikiLinkFn(slug)})`;
-        });
+        processed = processed.replace(
+            /(`+)[\s\S]*?\1|\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g,
+            (match, backtick, target, display) => {
+                if (backtick !== undefined) return match;
+                const slug = normalizeWikiSlug(target);
+                const label = (display ?? target).trim();
+                return `[${label}](${wikiLinkFn(slug)})`;
+            }
+        );
     }
 
     // 2. Bare nostr: URIs → Markdown links

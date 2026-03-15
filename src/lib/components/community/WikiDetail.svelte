@@ -28,9 +28,10 @@
 	import { getCurrentPubkey, getIsSignedIn, signEvent } from '$lib/stores/auth.svelte.js';
 	import BottomBar from '$lib/components/social/BottomBar.svelte';
 	import WikiModal from '$lib/components/modals/WikiModal.svelte';
-	import { Pen, Id } from '$lib/components/icons';
+	import { Pen } from '$lib/components/icons';
 	import { publishToRelays } from '$lib/nostr';
 	import { goto } from '$app/navigation';
+	import { navHandoff } from '$lib/navHandoff.js';
 
 	/** @type {{ slug?: string, eventId?: string, event?: any, profiles?: Map<string,any>|null, communityNpub?: string, wikiLinkFn?: (slug: string) => string, onBack?: () => void }} */
 	let {
@@ -230,6 +231,120 @@
 		};
 	}
 
+	/**
+	 * Intercept clicks on /wiki/<slug> links rendered inside the article body.
+	 * Resolves the plain slug to the event's naddr via Dexie then relay (#h scoped),
+	 * sets a navHandoff, and navigates to /wiki/<naddr> so the canonical URL is used.
+	 * Only fires for /wiki/ hrefs that are plain slugs (not already naddr1… encoded).
+	 * Community-page wikilinks use /community/…?wiki=slug hrefs and are not intercepted.
+	 *
+	 * @param {MouseEvent} e
+	 */
+	async function handleWikiLinkClick(e) {
+		const anchor = /** @type {HTMLElement} */ (e.target)?.closest?.('a');
+		if (!anchor) return;
+		const href = anchor.getAttribute('href') ?? '';
+		if (!href.startsWith('/wiki/')) return;
+
+		const pathSlug = href.split('?')[0].replace('/wiki/', '').trim();
+		if (!pathSlug) return;
+
+		// Already a resolved naddr — let default navigation handle it.
+		try {
+			const d = nip19.decode(pathSlug);
+			if (d.type === 'naddr' && d.data.kind === EVENT_KINDS.WIKI) return;
+		} catch {}
+
+		e.preventDefault();
+
+		// Derive community pubkey — prefer communityNpub prop, then fall back to
+		// the #h tag on the current article so navigation works even without the prop.
+		let communityPubkey = '';
+		if (communityNpub) {
+			try {
+				const d = nip19.decode(communityNpub);
+				if (d.type === 'npub') communityPubkey = /** @type {string} */ (d.data);
+			} catch {}
+		}
+		if (!communityPubkey && wikiEvent) {
+			communityPubkey = wikiEvent.tags?.find((/** @type {string[]} */ t) => t[0] === 'h')?.[1] ?? '';
+		}
+
+		const filter = communityPubkey
+			? { kinds: [EVENT_KINDS.WIKI], '#d': [pathSlug], '#h': [communityPubkey], limit: 10 }
+			: { kinds: [EVENT_KINDS.WIKI], '#d': [pathSlug], limit: 10 };
+
+		// Author of the current article — prefer their version when multiple exist
+		const currentAuthor = wikiEvent?.pubkey ?? '';
+
+		// 1. Dexie first (instant, already fetched)
+		let ev = null;
+		try {
+			const candidates = await queryEvents(filter);
+			ev =
+				(currentAuthor && candidates.find((c) => c.pubkey === currentAuthor)) ??
+				candidates[0] ??
+				null;
+		} catch {}
+
+		// 2. Relay fallback — prefer community's declared relays over defaults
+		if (!ev) {
+			try {
+				let relays = DEFAULT_COMMUNITY_RELAYS;
+				if (communityPubkey) {
+					const commEv = await queryEvent({
+						kinds: [EVENT_KINDS.COMMUNITY],
+						authors: [communityPubkey],
+						limit: 1
+					}).catch(() => null);
+					const declared = commEv?.tags
+						?.filter((t) => t[0] === 'r' && t[1])
+						.map((t) => t[1]);
+					if (declared?.length) relays = declared;
+				}
+				const fetched = await fetchFromRelays(relays, filter);
+				if (fetched?.length) {
+					await putEvents(fetched);
+					ev =
+						(currentAuthor && fetched.find((c) => c.pubkey === currentAuthor)) ??
+						fetched[0] ??
+						null;
+				}
+			} catch {}
+		}
+
+		if (!ev) {
+			// Not found — navigate with slug + community so WikiDetail can show empty state
+			// with the correct community context rather than a generic 404.
+			const fallbackCommunity = communityNpub
+				|| (communityPubkey ? nip19.npubEncode(communityPubkey) : '');
+			const fallbackUrl = fallbackCommunity
+				? `/wiki/${encodeURIComponent(pathSlug)}?community=${encodeURIComponent(fallbackCommunity)}`
+				: href;
+			goto(fallbackUrl);
+			return;
+		}
+
+		const naddr = nip19.naddrEncode({
+			kind: EVENT_KINDS.WIKI,
+			pubkey: ev.pubkey,
+			identifier: pathSlug
+		});
+
+		// Resolve the community npub for the URL param (needed when communityNpub
+		// prop was empty and we derived communityPubkey from the article's #h tag).
+		const communityNpubForUrl = communityNpub
+			|| (communityPubkey ? nip19.npubEncode(communityPubkey) : '');
+
+		// navHandoff: best-case instant render if SvelteKit remounts the page.
+		// ?community=: guaranteed fallback if it soft-navigates instead.
+		navHandoff.set(naddr, { event: ev, communityNpub: communityNpubForUrl, profiles: new Map() });
+		const url = communityNpubForUrl
+			? `/wiki/${naddr}?community=${encodeURIComponent(communityNpubForUrl)}`
+			: `/wiki/${naddr}`;
+		goto(url);
+	}
+
 	$effect(() => {
 		if (!communityNpub && !slug && !eventId && !preloadedEvent) {
 			loading = false;
@@ -388,10 +503,7 @@
 				<div class="title-row">
 					<h1 class="wiki-title">{title}</h1>
 					{#if wikiSlug}
-						<span class="wiki-slug">
-							<Id size={12} color="hsl(var(--white33))" />
-							{wikiSlug}
-						</span>
+					<span class="wiki-slug">{wikiSlug}</span>
 					{/if}
 					{#if isOwnWiki && getIsSignedIn()}
 						<button
@@ -416,7 +528,8 @@
 				<!-- Markdown body -->
 				<div class="wiki-body-wrap">
 					<div class="description-container" class:expanded={descriptionExpanded}>
-						<div class="wiki-body" use:checkTruncation>
+						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+						<div class="wiki-body" role="presentation" use:checkTruncation onclick={handleWikiLinkClick}>
 							<MarkdownBody tokens={bodyTokens} />
 						</div>
 						{#if isTruncated && !descriptionExpanded}

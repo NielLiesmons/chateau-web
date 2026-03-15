@@ -443,6 +443,36 @@ export function subscribeTaskStatuses(relayUrls, taskAddrs) {
 }
 
 /**
+ * Subscribe to all kind:1111 comments on the community relay.
+ * The community relay enforces community scope — no additional tag filter is needed.
+ * Events are written to Dexie automatically via bufferEvent.
+ *
+ * @param {string[]} relayUrls
+ * @param {{ onEvent?: Function, since?: number, limit?: number, authors?: string[] | null }} [options]
+ * @returns {() => void} unsubscribe function
+ */
+export function subscribeCommunityComments(relayUrls, options = {}) {
+	if (!Array.isArray(relayUrls) || relayUrls.length === 0) return () => {};
+	const { onEvent, since, limit = 300, authors = null } = options;
+	const p = getPool();
+	/** @type {Record<string,any>} */
+	const filter = { kinds: [EVENT_KINDS.COMMENT], limit };
+	if (since != null) filter.since = since;
+	if (authors?.length) filter.authors = authors;
+	const sub = p.subscribeMany(relayUrls, [filter], {
+		onevent(event) {
+			if (event?.id) {
+				bufferEvent(event);
+				onEvent?.(event);
+			}
+		},
+		oneose() {},
+		onclose() {}
+	});
+	return () => { try { sub.close(); } catch { /* noop */ } };
+}
+
+/**
  * Fetch kind 1985 label events referencing a specific non-replaceable event.
  *
  * On enforced community relays all stored events are already from allowed members

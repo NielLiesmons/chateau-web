@@ -41,6 +41,7 @@
 		fetchCommunityProjects,
 		fetchProjectMilestones,
 		subscribeCommunityProjects,
+		subscribeCommunityComments,
 		parseProject,
 		parseMilestone
 	} from '$lib/nostr';
@@ -78,6 +79,7 @@
 	import ProjectCard from '$lib/components/ProjectCard.svelte';
 	import ProjectDetail from '$lib/components/community/ProjectDetail.svelte';
 	import ProfileListDetail from '$lib/components/community/ProfileListDetail.svelte';
+	import CommentCard from '$lib/components/community/CommentCard.svelte';
 	import ListModal from '$lib/components/modals/ListModal.svelte';
 	import ProjectModal from '$lib/components/modals/ProjectModal.svelte';
 
@@ -204,6 +206,17 @@
 	let milestonesByProjectId = $state(new Map());
 	/** @type {Map<string, string>} milestone addr → normalised status string */
 	let milestoneStatusMap = $state(new Map());
+	/** @type {import('nostr-tools').NostrEvent[]} kind:1111 comments for the Activity tab */
+	let activityComments = $state([]);
+	/** @type {Map<string, import('nostr-tools').NostrEvent>} root event id/addr → root event */
+	let activityRootEvents = $state(new Map());
+	/** @type {Map<string, import('nostr-tools').NostrEvent>} comment id → comment event (for parent lookup) */
+	let activityCommentMap = $derived.by(() => {
+		const m = new Map();
+		for (const ev of activityComments) m.set(ev.id, ev);
+		return m;
+	});
+
 	let projectModalOpen = $state(false);
 	/** @type {Map<string, import('nostr-tools').NostrEvent>} */
 	let taskStatusMap = $state(new Map());
@@ -1251,6 +1264,174 @@
 	// Forum is excluded: its persistent subscription (subscribeCommunityForumPosts) already
 	// keeps that feed live, so re-fetching on tab switch is redundant.
 	/** @type {Map<string, number>} section → last-refresh timestamp */
+	// Activity tab: liveQuery kind:1111 comments that reference community content (forum posts,
+	// tasks, projects). Uses root IDs/addresses for community-scoped Dexie queries.
+	$effect(() => {
+		if (!browser || !selectedCommunity?.pubkey) {
+			activityComments = [];
+			activityRootEvents = new Map();
+			return;
+		}
+
+		const relays = selectedCommunity.relays?.length
+			? selectedCommunity.relays
+			: DEFAULT_COMMUNITY_RELAYS;
+
+		// Root IDs from forum posts (non-replaceable, #e tag)
+		const rootIds = forumPosts.map((p) => p.id).filter(Boolean);
+		// Root addresses from tasks and projects (addressable, #a/#A tag)
+		const taskAddrs = taskEvents
+			.map((e) => {
+				const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+				return d ? `${EVENT_KINDS.TASK}:${e.pubkey}:${d}` : null;
+			})
+			.filter(Boolean);
+		const projectAddrs = projectEvents
+			.map((e) => {
+				const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
+				return d ? `${EVENT_KINDS.PROJECT}:${e.pubkey}:${d}` : null;
+			})
+			.filter(Boolean);
+		const rootAddrs = [...taskAddrs, ...projectAddrs];
+
+		if (rootIds.length === 0 && rootAddrs.length === 0) {
+			activityComments = [];
+			return;
+		}
+
+		// liveQuery from Dexie — reacts to putEvents() from fetch + subscription below
+		const sub = liveQuery(async () => {
+			const queries = [];
+			if (rootIds.length) {
+				queries.push(queryEvents({ kinds: [EVENT_KINDS.COMMENT], '#E': rootIds, limit: 300 }));
+			}
+			if (rootAddrs.length) {
+				queries.push(queryEvents({ kinds: [EVENT_KINDS.COMMENT], '#a': rootAddrs, limit: 300 }));
+				queries.push(queryEvents({ kinds: [EVENT_KINDS.COMMENT], '#A': rootAddrs, limit: 300 }));
+			}
+			const results = await Promise.all(queries);
+			const byId = new Map();
+			for (const evs of results) {
+				for (const ev of evs) byId.set(ev.id, ev);
+			}
+			return Array.from(byId.values()).sort((a, b) => b.created_at - a.created_at);
+		}).subscribe({
+			next: (val) => {
+				activityComments = val || [];
+				for (const ev of activityComments) {
+					resolveActivityRootEvent(ev, relays);
+					scheduleActivityProfileFetch(ev.pubkey);
+				}
+			},
+			error: (e) => console.error('[Activity] liveQuery error', e)
+		});
+
+		// Initial fetch to populate Dexie with community comments
+		if (rootIds.length) {
+			fetchFromRelays(relays, { kinds: [EVENT_KINDS.COMMENT], '#E': rootIds, limit: 500 })
+				.then((evs) => { if (evs?.length) putEvents(evs); })
+				.catch(() => {});
+		}
+		if (rootAddrs.length) {
+			fetchFromRelays(relays, { kinds: [EVENT_KINDS.COMMENT], '#a': rootAddrs, limit: 500 })
+				.then((evs) => { if (evs?.length) putEvents(evs); })
+				.catch(() => {});
+			fetchFromRelays(relays, { kinds: [EVENT_KINDS.COMMENT], '#A': rootAddrs, limit: 500 })
+				.then((evs) => { if (evs?.length) putEvents(evs); })
+				.catch(() => {});
+		}
+
+		// Live subscription — writes to Dexie, liveQuery picks it up
+		const unsub = subscribeCommunityComments(relays, {
+			limit: 100,
+			onEvent: (ev) => {
+				if (ev?.id) putEvents([ev]).catch(() => {});
+			}
+		});
+
+		return () => {
+			sub.unsubscribe();
+			unsub();
+		};
+	});
+
+	/**
+	 * Look up a comment's root event (uppercase E or A tag) from Dexie, then relay.
+	 * @param {import('nostr-tools').NostrEvent} commentEvent
+	 * @param {string[]} relays
+	 */
+	async function resolveActivityRootEvent(commentEvent, relays) {
+		if (!commentEvent?.tags) return;
+		const eRootTag = commentEvent.tags.find((t) => t[0] === 'E' && t[1]);
+		const aRootTag = commentEvent.tags.find((t) => t[0] === 'A' && t[1]);
+		const rootId = eRootTag?.[1] ?? null;
+		const rootAddr = aRootTag?.[1] ?? null;
+		const key = rootId ?? rootAddr;
+		if (!key) return;
+		if (activityRootEvents.has(key)) return;
+
+		let rootEv = null;
+		if (rootId) {
+			rootEv = await queryEvent({ ids: [rootId] }).catch(() => null);
+		} else if (rootAddr) {
+			const parts = rootAddr.split(':');
+			const kind = parseInt(parts[0], 10);
+			const pubkey = parts[1];
+			const dTag = parts.slice(2).join(':');
+			if (kind && pubkey && dTag) {
+				rootEv = await queryEvent({ kinds: [kind], authors: [pubkey], '#d': [dTag] }).catch(() => null);
+			}
+		}
+
+		if (rootEv) {
+			activityRootEvents = new Map(activityRootEvents).set(key, rootEv);
+			return;
+		}
+
+		// Relay fallback when not in Dexie yet
+		try {
+			let arr = [];
+			if (rootId) {
+				arr = await fetchFromRelays(relays, { ids: [rootId], limit: 1 });
+			} else if (rootAddr) {
+				const parts = rootAddr.split(':');
+				const kind = parseInt(parts[0], 10);
+				const pubkey = parts[1];
+				const dTag = parts.slice(2).join(':');
+				arr = await fetchFromRelays(relays, { kinds: [kind], authors: [pubkey], '#d': [dTag], limit: 1 });
+			}
+			if (arr?.[0]) {
+				await putEvents([arr[0]]);
+				activityRootEvents = new Map(activityRootEvents).set(key, arr[0]);
+			}
+		} catch {
+			// non-fatal
+		}
+	}
+
+	/** Debounced profile fetcher for the Activity tab. */
+	const _activityPendingProfiles = new Set();
+	let _activityProfileTimer = null;
+	function scheduleActivityProfileFetch(pubkey) {
+		if (!pubkey || profilesByPubkey.has(pubkey)) return;
+		_activityPendingProfiles.add(pubkey);
+		if (_activityProfileTimer) return;
+		_activityProfileTimer = setTimeout(async () => {
+			_activityProfileTimer = null;
+			const keys = [..._activityPendingProfiles];
+			_activityPendingProfiles.clear();
+			if (!keys.length) return;
+			try {
+				const evs = await fetchProfilesBatch(keys, PROFILE_RELAYS);
+				for (const ev of evs) {
+					profilesByPubkey = new Map(profilesByPubkey).set(ev.pubkey, ev);
+				}
+			} catch {
+				// non-fatal
+			}
+		}, 200);
+	}
+
 	const _sectionRefreshTs = new Map();
 	let _lastTabSection = /** @type {string|null} */ (null);
 	$effect(() => {
@@ -1543,7 +1724,7 @@
 		!!selectedCommunity?.pubkey && !!currentPubkey && selectedCommunity.pubkey === currentPubkey
 	);
 
-	/** Pills from community content sections + Profiles + Admin (for admin). General is never shown as a tab. */
+	/** Pills from community content sections + Profiles + Activity + Admin (for admin). General is never shown as a tab. */
 	const sectionPills = $derived.by(() => {
 		const comm = selectedCommunity?.raw ? parseCommunity(selectedCommunity.raw) : null;
 		const sections = comm?.sections ?? [];
@@ -1554,16 +1735,17 @@
 				label: s.name || 'Section',
 				kinds: s.kinds ?? []
 			}));
-		// Always show Profiles tab so admins can manage lists
+		// Always show Profiles and Activity tabs
 		const profilesPill = { id: 'profiles', label: 'Profiles', kinds: [] };
+		const activityPill = { id: 'activity', label: 'Activity', kinds: [1111] };
 		const adminPill = { id: 'admin', label: 'Admin', kinds: [], isAdmin: true };
 		if (fromSections.length === 0 && sections.length === 0) {
 			const base = SECTION_PILLS.filter((p) => p.id !== 'general');
-			return isCommunityAdmin ? [...base, adminPill] : base;
+			return isCommunityAdmin ? [...base, activityPill, adminPill] : [...base, activityPill];
 		}
 		return isCommunityAdmin
-			? [...fromSections, profilesPill, adminPill]
-			: [...fromSections, profilesPill];
+			? [...fromSections, profilesPill, activityPill, adminPill]
+			: [...fromSections, profilesPill, activityPill];
 	});
 	const selectedSectionKinds = $derived(
 		sectionPills.find((p) => p.id === selectedSection)?.kinds ?? []
@@ -3470,6 +3652,44 @@
 					{/each}
 				{/if}
 			</div>
+		{#if selectedSection === 'activity'}
+		<div class="activity-list">
+			{#if activityComments.length === 0}
+				<EmptyState message="No activity yet" minHeight={600} />
+			{:else}
+				{#each activityComments as commentEv (commentEv.id)}
+					{@const authorEv = profilesByPubkey.get(commentEv.pubkey)}
+					{@const authorContent = authorEv?.content
+						? (() => { try { return JSON.parse(authorEv.content); } catch { return {}; } })()
+						: {}}
+					{@const authorProfile = { name: authorContent.display_name ?? authorContent.name, picture: authorContent.picture, pubkey: commentEv.pubkey }}
+					{@const eRootTag = commentEv.tags?.find((t) => t[0] === 'E' && t[1])}
+					{@const aRootTag = commentEv.tags?.find((t) => t[0] === 'A' && t[1])}
+					{@const rootKey = eRootTag?.[1] ?? aRootTag?.[1] ?? null}
+					{@const rootEvent = rootKey ? activityRootEvents.get(rootKey) ?? null : null}
+					{@const eParentTag = commentEv.tags?.find((t) => t[0] === 'e' && t[1])}
+					{@const parentId = eParentTag?.[1] && eParentTag[1] !== rootKey ? eParentTag[1] : null}
+					{@const parentComment = parentId ? activityCommentMap.get(parentId) ?? null : null}
+					{@const parentAuthorEv = parentComment ? profilesByPubkey.get(parentComment.pubkey) : null}
+					{@const parentAuthorContent = parentAuthorEv?.content
+						? (() => { try { return JSON.parse(parentAuthorEv.content); } catch { return {}; } })()
+						: {}}
+					{@const parentCommentAuthor = parentComment
+						? { name: parentAuthorContent.display_name ?? parentAuthorContent.name, picture: parentAuthorContent.picture, pubkey: parentComment.pubkey }
+						: null}
+					{@const authorNpub = (() => { try { return nip19.npubEncode(commentEv.pubkey); } catch { return ''; } })()}
+					<CommentCard
+						event={commentEv}
+						{authorProfile}
+						{rootEvent}
+						{parentComment}
+						{parentCommentAuthor}
+						profileUrl={authorNpub ? `/profile/${authorNpub}` : ''}
+					/>
+				{/each}
+			{/if}
+		</div>
+	{/if}
 		{#if selectedSection === 'profiles'}
 			<div class="profiles-list">
 				{#if membersListData.length === 0}
@@ -5929,6 +6149,12 @@
 		font-size: 0.875rem;
 		color: hsl(var(--muted-foreground));
 		margin: 0;
+	}
+	.activity-list {
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+		padding: 4px 0;
 	}
 	.profiles-list {
 		display: flex;

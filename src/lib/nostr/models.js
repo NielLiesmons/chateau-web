@@ -382,6 +382,100 @@ export function parseMilestone(event) {
     };
 }
 
+// =============================================================================
+// Content display helpers
+// =============================================================================
+
+/**
+ * Get a one-line label and emoji for any raw Nostr event, for use in the
+ * "root event" row of the CommentCard (Interactions feed).
+ *
+ * Add new kinds here — this is the single place to configure per-kind display.
+ *
+ * @param {import('nostr-tools').NostrEvent | null | undefined} event
+ * @returns {{ label: string, emoji: string }}
+ */
+export function getEventOneliner(event) {
+	if (!event) return { label: 'Unknown event', emoji: '/images/emoji/unknown.png' };
+	const get = (/** @type {string} */ name) => event.tags?.find((t) => t[0] === name)?.[1];
+	const truncate = (/** @type {string|undefined} */ s, n = 80) =>
+		s ? (s.length > n ? s.slice(0, n) + '…' : s) : '';
+
+	switch (event.kind) {
+		// Forum post (kind 11)
+		case 11:
+			return {
+				label: truncate(get('title') || event.content?.split('\n')[0]) || 'Forum post',
+				emoji: '/images/emoji/forum.png'
+			};
+		// Comment (kind 1111) — shown when commenting on a comment
+		case 1111:
+			return {
+				label: truncate(event.content) || 'Comment',
+				emoji: '/images/emoji/comment.png'
+			};
+		// Note (kind 1)
+		case 1:
+			return {
+				label: truncate(event.content) || 'Note',
+				emoji: '/images/emoji/note.png'
+			};
+		// Task (kind 37060)
+		case 37060:
+			return {
+				label: truncate(get('title') || event.content) || 'Task',
+				emoji: '/images/emoji/task.png'
+			};
+		// Project (kind 30315)
+		case 30315:
+			return {
+				label: truncate(get('title') || event.content) || 'Project',
+				emoji: '/images/emoji/project.png'
+			};
+		// Milestone (kind 30316)
+		case 30316:
+			return {
+				label: truncate(get('title') || event.content) || 'Milestone',
+				emoji: '/images/emoji/graph.png'
+			};
+		// Wiki (kind 30818)
+		case 30818:
+			return {
+				label: truncate(get('title') || get('d') || event.content) || 'Wiki article',
+				emoji: '/images/emoji/wiki.png'
+			};
+		// Profile list (kind 30000)
+		case 30000:
+			return {
+				label: truncate(get('name') || get('d')) || 'Profile list',
+				emoji: '/images/emoji/profile.png'
+			};
+		// App (kind 32267)
+		case 32267:
+			return {
+				label: truncate(get('name') || get('d')) || 'App',
+				emoji: '/images/emoji/app.png'
+			};
+		// Label (kind 1985)
+		case 1985:
+			return {
+				label: truncate(event.content) || 'Label',
+				emoji: '/images/emoji/label.png'
+			};
+		// Reaction (kind 7)
+		case 7:
+			return {
+				label: event.content || 'Reaction',
+				emoji: '/images/emoji/joke.png'
+			};
+		default:
+			return {
+				label: truncate(get('title') || event.content) || `Event kind ${event.kind}`,
+				emoji: '/images/emoji/unknown.png'
+			};
+	}
+}
+
 /**
  * Parse kind 11 Forum post
  */

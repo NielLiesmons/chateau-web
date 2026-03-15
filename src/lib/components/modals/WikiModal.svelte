@@ -1,163 +1,208 @@
 <script lang="js">
-/**
- * WikiModal - Bottom sheet for creating a new wiki article (kind 30818).
- * Title input (required, auto-generates d-tag slug) + optional summary +
- * rich Nostr Markdown content editor + labels.
- *
- * onsubmit receives: { title, slug, summary, text, emojiTags, mentions, labels }
- * The parent page is responsible for signing and publishing the event.
- */
-import { fly, fade } from 'svelte/transition';
-import { cubicOut } from 'svelte/easing';
-import ShortTextInput from '$lib/components/common/ShortTextInput.svelte';
-import EmojiPickerModal from '$lib/components/modals/EmojiPickerModal.svelte';
-import ForumPostLabelsModal from '$lib/components/modals/ForumPostLabelsModal.svelte';
-import { Camera, EmojiFill, Plus, Id } from '$lib/components/icons';
-import { createSearchEmojisFunction } from '$lib/services/emoji-search';
-import { createSearchProfilesFunction } from '$lib/services/profile-search';
+	/**
+	 * WikiModal - Bottom sheet for creating a new wiki article (kind 30818).
+	 * Title input (required, auto-generates d-tag slug) + optional summary +
+	 * rich Nostr Markdown content editor + labels.
+	 *
+	 * onsubmit receives: { title, slug, summary, text, emojiTags, mentions, labels }
+	 * The parent page is responsible for signing and publishing the event.
+	 */
+	import { fly, fade } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
+	import ShortTextInput from '$lib/components/common/ShortTextInput.svelte';
+	import EmojiPickerModal from '$lib/components/modals/EmojiPickerModal.svelte';
+	import ForumPostLabelsModal from '$lib/components/modals/ForumPostLabelsModal.svelte';
+	import { Camera, EmojiFill, Plus, Id } from '$lib/components/icons';
+	import { createSearchEmojisFunction } from '$lib/services/emoji-search';
+	import { createSearchProfilesFunction } from '$lib/services/profile-search';
 
-const WIKI_LABEL_SUGGESTIONS = [
-	'Guide', 'Reference', 'Tutorial', 'Overview', 'FAQ', 'Glossary',
-	'Spec', 'Protocol', 'API', 'Architecture', 'Security', 'Onboarding',
-	'Design', 'Nostr', 'Backend', 'Frontend', 'Community', 'Meta'
-];
+	const WIKI_LABEL_SUGGESTIONS = [
+		'Guide',
+		'Reference',
+		'Tutorial',
+		'Overview',
+		'FAQ',
+		'Glossary',
+		'Spec',
+		'Protocol',
+		'API',
+		'Architecture',
+		'Security',
+		'Onboarding',
+		'Design',
+		'Nostr',
+		'Backend',
+		'Frontend',
+		'Community',
+		'Meta'
+	];
 
-let {
-	isOpen = $bindable(false),
-	communityName: _communityName = '',
-	getCurrentPubkey = () => null,
-	searchProfiles: searchProfilesProp = null,
-	searchEmojis: searchEmojisProp = null,
-	/** @type {{ title?: string, slug?: string, summary?: string, text?: string, labels?: string[] } | null} */
-	initialData = null,
-	onsubmit,
-	onclose
-} = $props();
+	let {
+		isOpen = $bindable(false),
+		communityName: _communityName = '',
+		getCurrentPubkey = () => null,
+		searchProfiles: searchProfilesProp = null,
+		searchEmojis: searchEmojisProp = null,
+		/** @type {{ title?: string, slug?: string, summary?: string, text?: string, labels?: string[] } | null} */
+		initialData = null,
+		onsubmit,
+		onclose
+	} = $props();
 
-const searchProfiles = $derived(searchProfilesProp ?? createSearchProfilesFunction(/** @type {any} */ (getCurrentPubkey)));
-const searchEmojis = $derived(searchEmojisProp ?? createSearchEmojisFunction(/** @type {any} */ (getCurrentPubkey)));
+	const searchProfiles = $derived(
+		searchProfilesProp ?? createSearchProfilesFunction(/** @type {any} */ (getCurrentPubkey))
+	);
+	const searchEmojis = $derived(
+		searchEmojisProp ?? createSearchEmojisFunction(/** @type {any} */ (getCurrentPubkey))
+	);
 
-let titleValue = $state('');
-let summaryValue = $state('');
-/** @type {import('$lib/components/common/ShortTextInput.svelte').default | null} */
-let contentInput = $state(null);
-/** @type {HTMLInputElement | null} */
-let titleInput = $state(null);
-let submitting = $state(false);
-let error = $state('');
-let emojiPickerOpen = $state(false);
-let labelsModalOpen = $state(false);
-/** @type {string[]} */
-let selectedLabels = $state([]);
-let slugValue = $state('');
-let slugEdited = $state(false);
+	let titleValue = $state('');
+	let summaryValue = $state('');
+	/** @type {import('$lib/components/common/ShortTextInput.svelte').default | null} */
+	let contentInput = $state(null);
+	/** @type {HTMLInputElement | null} */
+	let titleInput = $state(null);
+	let submitting = $state(false);
+	let error = $state('');
+	let emojiPickerOpen = $state(false);
+	let labelsModalOpen = $state(false);
+	/** @type {string[]} */
+	let selectedLabels = $state([]);
+	let slugValue = $state('');
+	let slugEdited = $state(false);
 
-/** Normalizes a string → d-tag slug: lowercase, non-alphanumeric → '-', collapse/trim dashes. */
-function toSlug(/** @type {string} */ title) {
-	return title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'wiki';
-}
-
-// Auto-populate slug from title unless the user has manually edited it
-$effect(() => {
-	if (!slugEdited) slugValue = toSlug(titleValue);
-});
-
-const slugPreview = $derived(slugValue || toSlug(titleValue));
-
-function handleEmojiTap() { emojiPickerOpen = true; }
-function handleEmojiSelect(/** @type {{ shortcode: string; url: string; source: string }} */ emoji) {
-	contentInput?.insertEmoji?.(emoji.shortcode, emoji.url, emoji.source);
-	contentInput?.focus?.();
-}
-function handleLabelsTap() { labelsModalOpen = true; }
-
-function close() {
-	isOpen = false;
-	onclose?.();
-}
-
-function handleKeydown(/** @type {KeyboardEvent} */ e) {
-	if (e.key === 'Escape') {
-		if (labelsModalOpen || emojiPickerOpen) return;
-		close();
+	/** Normalizes a string → d-tag slug: lowercase, non-alphanumeric → '-', collapse/trim dashes. */
+	function toSlug(/** @type {string} */ title) {
+		return (
+			title
+				.trim()
+				.toLowerCase()
+				.replace(/[^a-z0-9]+/g, '-')
+				.replace(/^-|-$/g, '') || 'wiki'
+		);
 	}
-}
 
-async function handlePublish() {
-	if (!titleValue.trim() || submitting) return;
-	submitting = true;
-	error = '';
-	try {
-		const serialized = contentInput?.getSerializedContent?.() ?? { text: '', emojiTags: [], mentions: [] };
-		await onsubmit?.({
-			title: titleValue.trim(),
-			slug: slugPreview || toSlug(titleValue),
-			summary: summaryValue.trim(),
-			text: serialized.text ?? '',
-			emojiTags: serialized.emojiTags ?? [],
-			mentions: serialized.mentions ?? [],
-			labels: selectedLabels
-		});
-		titleValue = '';
-		summaryValue = '';
-		slugValue = '';
-		slugEdited = false;
-		contentInput?.clear?.();
-		selectedLabels = [];
-		close();
-	} catch (err) {
-		console.error('Failed to publish wiki:', err);
-		error = /** @type {any} */ (err)?.message || 'Failed to publish';
-	} finally {
-		submitting = false;
+	// Auto-populate slug from title unless the user has manually edited it
+	$effect(() => {
+		if (!slugEdited) slugValue = toSlug(titleValue);
+	});
+
+	const slugPreview = $derived(slugValue || toSlug(titleValue));
+
+	function handleEmojiTap() {
+		emojiPickerOpen = true;
 	}
-}
+	function handleEmojiSelect(
+		/** @type {{ shortcode: string; url: string; source: string }} */ emoji
+	) {
+		contentInput?.insertEmoji?.(emoji.shortcode, emoji.url, emoji.source);
+		contentInput?.focus?.();
+	}
+	function handleLabelsTap() {
+		labelsModalOpen = true;
+	}
 
-const isEditMode = $derived(!!initialData);
+	function close() {
+		isOpen = false;
+		onclose?.();
+	}
 
-$effect(() => {
-	if (isOpen) {
-		const t = setTimeout(() => titleInput?.focus(), 80);
-		return () => clearTimeout(t);
-	} else {
-		titleValue = '';
-		summaryValue = '';
-		slugValue = '';
-		slugEdited = false;
+	function handleKeydown(/** @type {KeyboardEvent} */ e) {
+		if (e.key === 'Escape') {
+			if (labelsModalOpen || emojiPickerOpen) return;
+			close();
+		}
+	}
+
+	async function handlePublish() {
+		if (!titleValue.trim() || submitting) return;
+		submitting = true;
 		error = '';
-		submitting = false;
-		emojiPickerOpen = false;
-		labelsModalOpen = false;
-		selectedLabels = [];
+		try {
+			const serialized = contentInput?.getSerializedContent?.() ?? {
+				text: '',
+				emojiTags: [],
+				mentions: []
+			};
+			await onsubmit?.({
+				title: titleValue.trim(),
+				slug: slugPreview || toSlug(titleValue),
+				summary: summaryValue.trim(),
+				text: serialized.text ?? '',
+				emojiTags: serialized.emojiTags ?? [],
+				mentions: serialized.mentions ?? [],
+				labels: selectedLabels
+			});
+			titleValue = '';
+			summaryValue = '';
+			slugValue = '';
+			slugEdited = false;
+			contentInput?.clear?.();
+			selectedLabels = [];
+			close();
+		} catch (err) {
+			console.error('Failed to publish wiki:', err);
+			error = /** @type {any} */ (err)?.message || 'Failed to publish';
+		} finally {
+			submitting = false;
+		}
 	}
-});
 
-$effect(() => {
-	if (isOpen && initialData) {
-		titleValue = initialData.title ?? '';
-		summaryValue = initialData.summary ?? '';
-		if (initialData.slug) {
-			slugValue = initialData.slug;
-			slugEdited = true;
+	const isEditMode = $derived(!!initialData);
+
+	$effect(() => {
+		if (isOpen) {
+			const t = setTimeout(() => titleInput?.focus(), 80);
+			return () => clearTimeout(t);
+		} else {
+			titleValue = '';
+			summaryValue = '';
+			slugValue = '';
+			slugEdited = false;
+			error = '';
+			submitting = false;
+			emojiPickerOpen = false;
+			labelsModalOpen = false;
+			selectedLabels = [];
 		}
-		selectedLabels = [...(initialData.labels ?? [])];
-		if (initialData.text) {
-			const text = initialData.text;
-			setTimeout(() => {
-				contentInput?.setTextContent?.(text);
-			}, 150);
+	});
+
+	$effect(() => {
+		if (isOpen && initialData) {
+			titleValue = initialData.title ?? '';
+			summaryValue = initialData.summary ?? '';
+			if (initialData.slug) {
+				slugValue = initialData.slug;
+				slugEdited = true;
+			}
+			selectedLabels = [...(initialData.labels ?? [])];
+			if (initialData.text) {
+				const text = initialData.text;
+				setTimeout(() => {
+					contentInput?.setTextContent?.(text);
+				}, 150);
+			}
 		}
-	}
-});
+	});
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
 
 {#if isOpen}
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-	<div class="overlay bg-overlay" onclick={close} role="presentation" transition:fade={{ duration: 180 }}></div>
+	<div
+		class="overlay bg-overlay"
+		onclick={close}
+		role="presentation"
+		transition:fade={{ duration: 180 }}
+	></div>
 
-	<div class="wiki-sheet-wrapper" role="dialog" aria-modal="true" aria-label={isEditMode ? 'Edit wiki article' : 'New wiki article'}>
+	<div
+		class="wiki-sheet-wrapper"
+		role="dialog"
+		aria-modal="true"
+		aria-label={isEditMode ? 'Edit wiki article' : 'New wiki article'}
+	>
 		<div
 			class="wiki-sheet"
 			class:child-modal-open={emojiPickerOpen || labelsModalOpen}
@@ -167,58 +212,62 @@ $effect(() => {
 
 			<!-- ── Form box ── -->
 			<div class="post-form-box">
+				<!-- Title row -->
+				<div class="title-area">
+					<input
+						type="text"
+						class="wiki-title-input"
+						placeholder="Title of Wiki"
+						bind:value={titleValue}
+						bind:this={titleInput}
+						disabled={submitting}
+						aria-label="Article title"
+						onkeydown={(e) => {
+							if (e.key === 'Enter') {
+								e.preventDefault();
+								contentInput?.focus?.();
+							}
+						}}
+					/>
+				</div>
 
-			<!-- Title row -->
-			<div class="title-area">
+				<div class="post-form-divider"></div>
+
+				<!-- Slug row -->
+				<div class="slug-area">
+					<Id size={16} color="hsl(var(--white16))" />
+					<input
+						type="text"
+						class="slug-input"
+						placeholder={toSlug(titleValue) || 'wiki'}
+						value={slugEdited ? slugValue : titleValue.trim() ? toSlug(titleValue) : ''}
+						disabled={submitting}
+						aria-label="Article slug (d-tag)"
+						oninput={(e) => {
+							const val = /** @type {HTMLInputElement} */ (e.target).value
+								.toLowerCase()
+								.replace(/[^a-z0-9-]+/g, '-')
+								.replace(/^-+/, '');
+							slugEdited = true;
+							slugValue = val;
+							/** @type {HTMLInputElement} */ (e.target).value = val;
+						}}
+						onblur={() => {
+							if (slugEdited && !slugValue.trim()) {
+								slugEdited = false;
+							} else if (slugEdited) {
+								slugValue = slugValue.replace(/-+$/, '') || toSlug(titleValue);
+							}
+						}}
+					/>
+				</div>
+
+				<div class="post-form-divider"></div>
+
+				<!-- Summary row -->
 				<input
 					type="text"
-					class="wiki-title-input"
-					placeholder="Title of Wiki"
-					bind:value={titleValue}
-					bind:this={titleInput}
-					disabled={submitting}
-					aria-label="Article title"
-					onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); contentInput?.focus?.(); } }}
-				/>
-			</div>
-
-			<div class="post-form-divider"></div>
-
-		<!-- Slug row -->
-		<div class="slug-area">
-			<Id size={13} color="hsl(var(--white33))" />
-			<input
-					type="text"
-					class="slug-input"
-					placeholder={toSlug(titleValue) || 'wiki'}
-					value={slugEdited ? slugValue : (titleValue.trim() ? toSlug(titleValue) : '')}
-					disabled={submitting}
-					aria-label="Article slug (d-tag)"
-					oninput={(e) => {
-						const val = /** @type {HTMLInputElement} */ (e.target).value
-							.toLowerCase()
-							.replace(/[^a-z0-9-]+/g, '-')
-							.replace(/^-+/, '');
-						slugEdited = true;
-						slugValue = val;
-						/** @type {HTMLInputElement} */ (e.target).value = val;
-					}}
-					onblur={() => {
-						if (slugEdited && !slugValue.trim()) {
-							slugEdited = false;
-						} else if (slugEdited) {
-							slugValue = slugValue.replace(/-+$/, '') || toSlug(titleValue);
-						}
-					}}
-				/>
-			</div>
-
-			<div class="post-form-divider"></div>
-
-			<!-- Summary row -->
-			<input
-				type="text"
-				class="wiki-summary-input"
+					class="wiki-summary-input"
 					placeholder="Short summary (optional)"
 					bind:value={summaryValue}
 					disabled={submitting}
@@ -249,7 +298,12 @@ $effect(() => {
 						<button type="button" class="action-btn" aria-label="Add photo" onclick={() => {}}>
 							<Camera variant="fill" color="hsl(var(--white33))" size={20} />
 						</button>
-						<button type="button" class="action-btn" aria-label="Add emoji" onclick={handleEmojiTap}>
+						<button
+							type="button"
+							class="action-btn"
+							aria-label="Add emoji"
+							onclick={handleEmojiTap}
+						>
 							<EmojiFill variant="fill" color="hsl(var(--white33))" size={18} />
 						</button>
 						<button type="button" class="action-btn" aria-label="Add attachment" onclick={() => {}}>
@@ -266,8 +320,19 @@ $effect(() => {
 								<span class="trigger-count">{selectedLabels.length}</span>
 								<span class="trigger-text">Label{selectedLabels.length === 1 ? '' : 's'}</span>
 							</span>
-							<svg class="labels-trigger-tip" width="24" height="32" viewBox="0 0 24 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-								<path d="M0 0 L4 0 Q9 2 14 6 Q19 10 23 14 Q23.5 16 23 18 Q19 22 14 26 Q9 30 4 32 L0 32 Z" fill="var(--trigger-bg)" />
+							<svg
+								class="labels-trigger-tip"
+								width="24"
+								height="32"
+								viewBox="0 0 24 32"
+								fill="none"
+								xmlns="http://www.w3.org/2000/svg"
+								aria-hidden="true"
+							>
+								<path
+									d="M0 0 L4 0 Q9 2 14 6 Q19 10 23 14 Q23.5 16 23 18 Q19 22 14 26 Q9 30 4 32 L0 32 Z"
+									fill="var(--trigger-bg)"
+								/>
 							</svg>
 						</button>
 					</div>
@@ -278,7 +343,13 @@ $effect(() => {
 						onclick={handlePublish}
 						disabled={!titleValue.trim() || submitting}
 					>
-						{submitting ? (isEditMode ? 'Saving…' : 'Publishing…') : (isEditMode ? 'Save' : 'Publish')}
+						{submitting
+							? isEditMode
+								? 'Saving…'
+								: 'Publishing…'
+							: isEditMode
+								? 'Save'
+								: 'Publish'}
 					</button>
 				</div>
 			</div>
@@ -294,14 +365,18 @@ $effect(() => {
 	bind:isOpen={emojiPickerOpen}
 	{getCurrentPubkey}
 	onSelectEmoji={handleEmojiSelect}
-	onclose={() => { emojiPickerOpen = false; }}
+	onclose={() => {
+		emojiPickerOpen = false;
+	}}
 />
 
 <ForumPostLabelsModal
 	bind:isOpen={labelsModalOpen}
 	bind:selectedLabels
 	suggestions={WIKI_LABEL_SUGGESTIONS}
-	onclose={() => { labelsModalOpen = false; }}
+	onclose={() => {
+		labelsModalOpen = false;
+	}}
 />
 
 <style>
@@ -633,7 +708,9 @@ $effect(() => {
 		font-weight: 500;
 		cursor: pointer;
 		flex-shrink: 0;
-		transition: opacity 0.15s ease, transform 0.15s ease;
+		transition:
+			opacity 0.15s ease,
+			transform 0.15s ease;
 	}
 
 	.publish-btn:disabled {

@@ -43,7 +43,8 @@ export {
 	fetchEventsNoStore,
 	fetchCommunityProjects,
 	fetchProjectMilestones,
-	subscribeCommunityProjects
+	subscribeCommunityProjects,
+	subscribeCommunityComments
 } from './service';
 
 // Models (event parsing)
@@ -62,7 +63,8 @@ export {
 	parseFormTemplate,
 	parseForumPost,
 	parseProject,
-	parseMilestone
+	parseMilestone,
+	getEventOneliner
 } from './models';
 
 // Zap utilities
