@@ -5,23 +5,28 @@
  *
  * Layout (2-column flex):
  *
- *   left-col           right-col
- *   ────────           ─────────────────────────────────
- *   :                  [root-row]  emoji-badge + oneliner  (no bg, no border)
- *   :  ← dotted (only when isReply — comment targets another comment, not root directly)
- *   │
+ *   left-col                   right-col
+ *   ──────────────────         ──────────────────────────
+ *   [emoji-badge 24px]         root-label text (same row, aligned)
+ *   │  ← dotted (only when isReply)
  *   │  ← solid (always)
- *   [av]               [bubble]
- *                        ┌─ quote ─┐  ← only when isReply: direct parent inside bubble
- *                        └─────────┘
- *                        comment text
+ *   [avatar]                   [bubble]
+ *                                ┌─ QuotedMessage ─┐  ← only when isReply
+ *                                └─────────────────┘
+ *                                comment text
  *
- * When NOT a reply, the left column line is fully solid.
+ * The vertical line starts from the bottom edge of the emoji-badge and ends
+ * touching the top of the avatar — never gapped.
+ *
+ * Bubble width is driven by the content text only. The QuotedMessage is
+ * wrapped in a sizing-neutral div (width:0; min-width:100%) so it never
+ * forces the bubble wider than the actual message text.
  */
 import { nip19 } from 'nostr-tools';
 import ProfilePic from '$lib/components/common/ProfilePic.svelte';
 import Timestamp from '$lib/components/common/Timestamp.svelte';
 import ShortTextRenderer from '$lib/components/common/ShortTextRenderer.svelte';
+import QuotedMessage from '$lib/components/social/QuotedMessage.svelte';
 import { getEventOneliner } from '$lib/nostr/models.js';
 import { hexToColor, getProfileTextColor, rgbToCssString } from '$lib/utils/color.js';
 import { onMount } from 'svelte';
@@ -38,12 +43,15 @@ let {
 	/** @type {{ name?: string, picture?: string, pubkey: string } | null} */
 	parentCommentAuthor = null,
 	profileUrl = '',
-	className = ''
+	className = '',
+	/** @type {((slug: string) => string) | undefined} */
+	wikiLinkFn = undefined,
+	/** @type {((pubkey: string) => string) | undefined} */
+	resolveMentionLabel = undefined
 } = $props();
 
 // True when this comment is a reply to another comment (not a direct reply on the root event).
 // NIP-22: uppercase E/A = root marker, lowercase e/a = direct parent.
-// isReply is true when there is a lowercase e/a parent tag AND it differs from the root E/A.
 const isReply = $derived.by(() => {
 	if (!event?.tags) return false;
 	const upperRoot = event.tags.find((t) => (t[0] === 'E' || t[0] === 'A') && t[1]);
@@ -52,7 +60,16 @@ const isReply = $derived.by(() => {
 	return upperRoot ? lowerParent[1] !== upperRoot[1] : true;
 });
 
+const showQuote = $derived(isReply && !!parentComment);
+
 const rootOneliner = $derived(getEventOneliner(rootEvent));
+
+// Emoji tags for ShortTextRenderer — extracted from the raw Nostr event tags
+const emojiTags = $derived(
+	(event?.tags ?? [])
+		.filter((t) => t[0] === 'emoji' && t[1] && t[2])
+		.map((t) => ({ shortcode: t[1], url: t[2] }))
+);
 
 function formatNpub(pk) {
 	if (!pk) return '';
@@ -76,6 +93,11 @@ const parentDisplayName = $derived(
 		(parentComment?.pubkey ? formatNpub(parentComment.pubkey) : '')
 );
 
+// Plain-text preview for QuotedMessage (strip nostr: refs for brevity)
+const parentContentPreview = $derived(
+	(parentComment?.content ?? '').replace(/nostr:[a-z0-9]+/gi, '').replace(/\s+/g, ' ').trim()
+);
+
 let isDarkMode = $state(true);
 onMount(() => {
 	const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -92,12 +114,17 @@ const textColor = $derived(getProfileTextColor(profileColor, isDarkMode));
 const nameColorStyle = $derived(rgbToCssString(textColor));
 
 const contentText = $derived(event?.content ?? '');
-const parentContentText = $derived(parentComment?.content ?? '');
 </script>
 
 <div class="comment-card {className}">
-	<!-- Left column: vertical line fills top half, avatar anchored at bottom -->
+	<!--
+		Left column: emoji-badge at top (aligns with root-label), then the vertical
+		line runs from badge bottom all the way down to touch the avatar.
+	-->
 	<div class="left-col">
+		<div class="emoji-badge" aria-hidden="true">
+			<img src={rootOneliner.emoji} alt="" width="14" height="14" />
+		</div>
 		{#if isReply}
 			<div class="line-dotted"></div>
 		{/if}
@@ -123,18 +150,15 @@ const parentContentText = $derived(parentComment?.content ?? '');
 		</div>
 	</div>
 
-	<!-- Right column: root row (no bg/border) above the bubble -->
+	<!-- Right column: root-label aligned with emoji-badge, then the bubble -->
 	<div class="right-col">
-		<!-- Root event row — bare, no background or border -->
-		<div class="root-row">
-			<div class="emoji-badge" aria-hidden="true">
-				<img src={rootOneliner.emoji} alt="" width="14" height="14" />
-			</div>
+		<!-- Root event label row — no background, no border, bare text -->
+		<div class="root-label-row">
 			<span class="root-label">{rootOneliner.label}</span>
 		</div>
 
-		<!-- Bubble — matches MessageBubble styling exactly -->
-		<div class="bubble">
+		<!-- Bubble — same styling as MessageBubble -->
+		<div class="bubble" class:bubble--quoted={showQuote}>
 			<div class="bubble-header">
 				{#if profileUrl}
 					<a href={profileUrl} class="author-name" style="color: {nameColorStyle};"
@@ -146,20 +170,23 @@ const parentContentText = $derived(parentComment?.content ?? '');
 				<Timestamp timestamp={event?.created_at} size="xs" />
 			</div>
 
-			<!-- Quoted parent comment — inside bubble, only when isReply -->
-			{#if isReply && parentComment}
-				<div class="quote">
-					{#if parentDisplayName}
-						<span class="quote-author">{parentDisplayName}</span>
-					{/if}
-					<span class="quote-text"
-						>{parentContentText.slice(0, 160)}{parentContentText.length > 160 ? '…' : ''}</span
-					>
+			<!--
+				Quote wrapper uses width:0; min-width:100% so that QuotedMessage fills
+				the bubble without driving its intrinsic width. The content text remains
+				the sole master of the bubble's width.
+			-->
+			{#if showQuote}
+				<div class="quote-wrap">
+					<QuotedMessage
+						authorName={parentDisplayName || 'Anonymous'}
+						authorPubkey={parentComment?.pubkey ?? null}
+						contentPreview={parentContentPreview}
+					/>
 				</div>
 			{/if}
 
 			<div class="bubble-content">
-				<ShortTextRenderer content={contentText} />
+				<ShortTextRenderer content={contentText} {emojiTags} {wikiLinkFn} {resolveMentionLabel} />
 			</div>
 		</div>
 	</div>
@@ -172,7 +199,7 @@ const parentContentText = $derived(parentComment?.content ?? '');
 		align-items: stretch;
 	}
 
-	/* ── Left column: line fills space, avatar anchored at bottom ── */
+	/* ── Left column ─────────────────────────────────────────────── */
 	.left-col {
 		display: flex;
 		flex-direction: column;
@@ -181,15 +208,27 @@ const parentContentText = $derived(parentComment?.content ?? '');
 		width: 36px;
 	}
 
+	/* 28px rounded-square badge — sits at the very top, line starts below it */
+	.emoji-badge {
+		width: 28px;
+		height: 28px;
+		border-radius: 10px;
+		background: hsl(var(--white8));
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+	}
+
 	.line-dotted {
 		width: 2px;
 		flex: 1;
 		background: repeating-linear-gradient(
 			to bottom,
 			hsl(var(--white16)) 0px,
-			hsl(var(--white16)) 4px,
-			transparent 4px,
-			transparent 8px
+			hsl(var(--white16)) 6px,
+			transparent 6px,
+			transparent 10px
 		);
 	}
 
@@ -197,7 +236,6 @@ const parentContentText = $derived(parentComment?.content ?? '');
 		width: 2px;
 		flex: 1;
 		background: hsl(var(--white16));
-		border-radius: 1px;
 	}
 
 	.avatar-wrap {
@@ -212,7 +250,7 @@ const parentContentText = $derived(parentComment?.content ?? '');
 		opacity: 0.8;
 	}
 
-	/* ── Right column ───────────────────────────────────────────── */
+	/* ── Right column ────────────────────────────────────────────── */
 	.right-col {
 		display: flex;
 		flex-direction: column;
@@ -220,35 +258,25 @@ const parentContentText = $derived(parentComment?.content ?? '');
 		min-width: 0;
 	}
 
-	/* ── Root event row — no background, no border ──────────────── */
-	.root-row {
+	/* Root label row — same height as emoji-badge so they align */
+	.root-label-row {
+		height: 28px;
 		display: flex;
 		align-items: center;
-		gap: 6px;
 		min-width: 0;
 	}
 
-	.emoji-badge {
-		width: 24px;
-		height: 24px;
-		border-radius: 4px;
-		background: hsl(var(--white8));
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-	}
-
 	.root-label {
-		font-size: 0.75rem;
-		color: hsl(var(--white33));
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: hsl(var(--white66));
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		min-width: 0;
 	}
 
-	/* ── Bubble — same as MessageBubble ─────────────────────────── */
+	/* ── Bubble — same as MessageBubble ──────────────────────────── */
 	.bubble {
 		width: fit-content;
 		max-width: 100%;
@@ -256,6 +284,11 @@ const parentContentText = $derived(parentComment?.content ?? '');
 		background-color: hsl(var(--gray66));
 		border-radius: 16px 16px 16px 4px;
 		padding: 8px 12px;
+	}
+
+	/* Slightly wider min-width when a QuotedMessage is present */
+	.bubble--quoted {
+		min-width: 260px;
 	}
 
 	.bubble-header {
@@ -280,34 +313,16 @@ const parentContentText = $derived(parentComment?.content ?? '');
 		opacity: 0.8;
 	}
 
-	/* ── Quoted parent comment (inside bubble) ──────────────────── */
-	.quote {
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-		background: hsl(var(--white8));
-		border-left: 2px solid hsl(var(--white33));
-		border-radius: 0 4px 4px 0;
-		padding: 4px 8px;
-		margin-bottom: 6px;
-		overflow: hidden;
-	}
-
-	.quote-author {
-		font-size: 0.6875rem;
-		font-weight: 600;
-		color: hsl(var(--white66));
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.quote-text {
-		font-size: 0.8125rem;
-		color: hsl(var(--white33));
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+	/*
+	 * quote-wrap: width:0; min-width:100% is the key trick.
+	 * The element contributes zero to the bubble's fit-content width calculation
+	 * (width:0 means it has no intrinsic width), but it stretches to 100% of
+	 * whatever width the bubble ends up being (from the content text).
+	 * This prevents QuotedMessage from ever driving the bubble wider.
+	 */
+	.quote-wrap {
+		width: 0;
+		min-width: 100%;
 	}
 
 	/* ── Comment text ────────────────────────────────────────────── */

@@ -557,9 +557,9 @@
 			forumMembers = [];
 			return;
 		}
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		const parts = forumSection.profileListAddress.split(':');
 		const dTag = parts.length >= 3 ? parts.slice(2).join(':') : '';
 		(async () => {
@@ -617,9 +617,9 @@
 			generalMembers = null;
 			return;
 		}
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		const generalSection = comm.sections?.find((s) => s.name?.toLowerCase() === 'general');
 		if (!generalSection?.profileListAddress) {
 			generalMembers = null;
@@ -666,9 +666,9 @@
 		}
 		const postIds = forumPosts.map((p) => p.id).filter(Boolean);
 		if (postIds.length === 0) return;
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		// Live subscription — use authors filter once generalMembers resolves, open without it while loading.
 		forumCommentsUnsub = subscribeForumPostComments(relays, postIds, {
 			authors: generalMembers === undefined ? null : generalMembers
@@ -833,9 +833,9 @@
 			.filter(Boolean);
 		const taskIds = taskEvents.map((e) => e.id).filter(Boolean);
 		if (taskAddrs.length === 0 && taskIds.length === 0) return;
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		// Subscription for future/live events (all four tag variants)
 		taskCommentsUnsub = subscribeTaskComments(relays, taskAddrs, taskIds);
 		// Explicit fetch so Dexie is populated immediately (subscription return is async)
@@ -989,9 +989,9 @@
 			error: (e) => console.error('[Tasks] liveQuery error', e)
 		});
 		// Also fetch from relays so we get tasks from other clients
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		fetchFromRelays(relays, { kinds: [EVENT_KINDS.TASK], '#h': [communityPubkey], limit: 200 })
 			.then(async (events) => {
 				if (events.length) await putEvents(events);
@@ -1071,9 +1071,9 @@
 			})
 			.filter(Boolean);
 		if (!addrs.length) return;
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		taskStatusUnsub = subscribeTaskStatuses(relays, addrs);
 		// One-shot fetch ensures we have the latest status events in Dexie immediately,
 		// without waiting for the sequential task-relay-fetch chain to complete.
@@ -1111,9 +1111,9 @@
 			},
 			error: (e) => console.error('[Wikis] liveQuery error', e)
 		});
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		fetchCommunityWikis(relays, communityPubkey)
 			.then((events) => {
 				if (events.length) putEvents(events);
@@ -1141,9 +1141,9 @@
 			},
 			error: (e) => console.error('[Projects] liveQuery error', e)
 		});
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		fetchCommunityProjects(relays, communityPubkey)
 			.then((evs) => {
 				if (evs.length) putEvents(evs);
@@ -1194,9 +1194,9 @@
 			error: (e) => console.error('[Milestones] liveQuery error', e)
 		});
 		// Fetch milestones from relay
-		const relays = selectedCommunity?.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity?.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		const allProjectAddrs = projectEvents.map((e) => {
 			const d = e.tags?.find((t) => t[0] === 'd')?.[1] ?? '';
 			return `${EVENT_KINDS.PROJECT}:${e.pubkey}:${d}`;
@@ -1273,9 +1273,9 @@
 			return;
 		}
 
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 
 		// Root IDs from forum posts (non-replaceable, #e tag)
 		const rootIds = forumPosts.map((p) => p.id).filter(Boolean);
@@ -1455,9 +1455,9 @@
 		if (now - (_sectionRefreshTs.get(tsKey) ?? 0) < 60_000) return;
 		_sectionRefreshTs.set(tsKey, now);
 
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 
 		if (section === 'tasks') {
 			// Tasks have no persistent subscription; refresh tasks + statuses on tab switch.
@@ -1817,9 +1817,9 @@
 		}
 		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
 		const sections = comm?.sections ?? [];
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		(async () => {
 			const list = [];
 			const addresses = (sec) =>
@@ -1888,9 +1888,9 @@
 			return;
 		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
 		const sections = comm?.sections ?? [];
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		membersListData = [];
 		(async () => {
 			// listAddress -> { names[], kindsSet }
@@ -1968,9 +1968,9 @@
 	$effect(() => {
 		if (!browser || !selectedCommunity?.pubkey || !isCommunityAdmin) return;
 		const pubkey = selectedCommunity.pubkey;
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 
 		function buildTemplates(evs) {
 			const allLists = membersListData.length > 0 ? membersListData : adminProfileLists;
@@ -2045,9 +2045,9 @@
 		if (!browser || !joinRequestsModalOpen || !isCommunityAdmin || !selectedCommunity?.pubkey)
 			return;
 		const communityPubkey = selectedCommunity.pubkey;
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: DEFAULT_COMMUNITY_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 		(async () => {
 			// Pull any unsynced requests from relay into Dexie first.
 			// This also triggers the liveQuery above to update the badge count.
@@ -2402,9 +2402,9 @@
 		const comm = parseCommunity(selectedCommunity.raw || selectedCommunity);
 		const sections = comm?.sections ?? [];
 		// Per spec: check community's own declared relays first; fall back to write-safe relays.
-		const relays = selectedCommunity.relays?.length
-			? selectedCommunity.relays
-			: COMMUNITY_WRITE_RELAYS;
+		const relays = selectedCommunity.mainRelay
+			? [selectedCommunity.mainRelay]
+			: (selectedCommunity.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS);
 		let cancelled = false;
 		(async () => {
 			// Aggregate sectionNames + sectionKinds from ALL sections per list address
@@ -2478,12 +2478,12 @@
 		joinFormTemplate = null;
 		joinParsedForm = null;
 		joinFieldValues = {};
-		if (!formAddressVal) return;
-		const relays = selectedCommunity?.relays?.length
-			? selectedCommunity.relays
-			: COMMUNITY_WRITE_RELAYS;
+	if (!formAddressVal) return;
+	const relays = selectedCommunity?.mainRelay
+		? [selectedCommunity.mainRelay]
+		: (selectedCommunity?.relays?.length ? selectedCommunity.relays : COMMUNITY_WRITE_RELAYS);
 
-		/** Apply a parsed form and ensure every field has a defined (non-undefined) value. */
+	/** Apply a parsed form and ensure every field has a defined (non-undefined) value. */
 		function applyForm(parsed) {
 			joinParsedForm = parsed;
 			if (parsed?.fields?.length) {
@@ -3475,7 +3475,7 @@
 		     profile images stay loaded across tab switches. Profiles/forms/admin are lazy. -->
 		<div class="forum-list" class:section-hidden={!isForumSection}>
 			{#if forumPosts.length === 0}
-				<EmptyState message="No forum posts yet" minHeight={600} />
+				<EmptyState message="No Forum Posts yet" minHeight={600} />
 			{:else}
 				{#each forumPosts as post (post.id)}
 						{@const authorProfile = profilesByPubkey.get(post.pubkey)}
@@ -3514,7 +3514,7 @@
 		</div>
 		<div class="tasks-list" class:section-hidden={selectedSection !== 'tasks'}>
 			{#if taskEvents.length === 0}
-				<EmptyState message="No tasks yet" minHeight={600} />
+				<EmptyState message="No Tasks yet" minHeight={600} />
 			{:else}
 				{#each TASK_STATUS_ORDER as statusKey}
 					{@const group = tasksByStatus.get(statusKey) ?? []}
@@ -3585,7 +3585,7 @@
 			</div>
 		<div class="projects-list" class:section-hidden={selectedSection !== 'projects'}>
 			{#if projectEvents.length === 0}
-				<EmptyState message="No projects yet" minHeight={600} />
+				<EmptyState message="No Projects yet" minHeight={600} />
 			{:else}
 				{#each projectEvents.slice().sort((a, b) => b.created_at - a.created_at) as projEv (projEv.id)}
 						{@const pData = getProjectCardData(projEv)}
@@ -3619,7 +3619,7 @@
 			</div>
 		<div class="wiki-list" class:section-hidden={selectedSection !== 'wikis'}>
 			{#if wikiEvents.length === 0}
-				<EmptyState message="No wiki articles yet" minHeight={600} />
+				<EmptyState message="No Wiki Articles yet" minHeight={600} />
 			{:else}
 				{#each wikiEvents.slice().sort((a, b) => b.created_at - a.created_at) as wiki (wiki.id)}
 						{@const wTitle = wiki.tags?.find((t) => t[0] === 'title')?.[1] ?? 'Untitled'}
@@ -3655,7 +3655,7 @@
 		{#if selectedSection === 'activity'}
 		<div class="activity-list">
 			{#if activityComments.length === 0}
-				<EmptyState message="No activity yet" minHeight={600} />
+				<EmptyState message="No Activity yet" minHeight={600} />
 			{:else}
 				{#each activityComments as commentEv (commentEv.id)}
 					{@const authorEv = profilesByPubkey.get(commentEv.pubkey)}
@@ -3678,14 +3678,18 @@
 						? { name: parentAuthorContent.display_name ?? parentAuthorContent.name, picture: parentAuthorContent.picture, pubkey: parentComment.pubkey }
 						: null}
 					{@const authorNpub = (() => { try { return nip19.npubEncode(commentEv.pubkey); } catch { return ''; } })()}
-					<CommentCard
-						event={commentEv}
-						{authorProfile}
-						{rootEvent}
-						{parentComment}
-						{parentCommentAuthor}
-						profileUrl={authorNpub ? `/profile/${authorNpub}` : ''}
-					/>
+					<div class="activity-item">
+						<CommentCard
+							event={commentEv}
+							{authorProfile}
+							{rootEvent}
+							{parentComment}
+							{parentCommentAuthor}
+							profileUrl={authorNpub ? `/profile/${authorNpub}` : ''}
+							{wikiLinkFn}
+							resolveMentionLabel={(pk) => profilesByPubkey.get(pk)?.display_name ?? profilesByPubkey.get(pk)?.name ?? pk.slice(0, 8)}
+						/>
+					</div>
 				{/each}
 			{/if}
 		</div>
@@ -3693,7 +3697,7 @@
 		{#if selectedSection === 'profiles'}
 			<div class="profiles-list">
 				{#if membersListData.length === 0}
-					<EmptyState message="No profile lists yet" minHeight={200} />
+					<EmptyState message="No Profile Lists yet" minHeight={200} />
 				{:else}
 					{#each membersListData as item}
 						{@const listMembers = item.parsed?.members ?? []}
@@ -3983,7 +3987,7 @@
 					</form>
 				{:else}
 					{#if adminFormTemplates.length === 0}
-						<EmptyState message="No form templates yet" minHeight={200} />
+						<EmptyState message="No Forms yet" minHeight={200} />
 					{:else}
 						{#each adminFormTemplates as item}
 							<div class="info-list-panel crown-form-panel">
@@ -4169,11 +4173,10 @@
 				</div>
 			</div>
 		{:else if !isForumSection && selectedSection !== 'tasks' && selectedSection !== 'projects' && selectedSection !== 'wikis'}
-			<EmptyState
-				message="{sectionPills.find((p) => p.id === selectedSection)?.label ??
-					selectedSection} coming soon"
-				minHeight={200}
-			/>
+		<EmptyState
+			message="No {sectionPills.find((p) => p.id === selectedSection)?.label ?? selectedSection} yet"
+			minHeight={200}
+		/>
 		{/if}
 	</div>
 	{#if selectedCommunity && !openWikiSlug && !openPostId && !openTaskId && !openProjectId && !openListAddr && !openEventEncoded}
@@ -6153,8 +6156,15 @@
 	.activity-list {
 		display: flex;
 		flex-direction: column;
-		gap: 16px;
-		padding: 4px 0;
+		gap: 0;
+		padding: 0;
+	}
+	.activity-item {
+		padding: 16px;
+		border-bottom: 1px solid hsl(var(--white8));
+	}
+	.activity-item:last-child {
+		border-bottom: none;
 	}
 	.profiles-list {
 		display: flex;
@@ -6686,7 +6696,7 @@
 	.panel-content {
 		flex: 1;
 		overflow-y: auto;
-		padding: 1rem 1.5rem;
+		padding: 16px;
 		/* Space for fixed bottom bar */
 		padding-bottom: 100px;
 	}
@@ -6698,7 +6708,8 @@
 	.panel-content:has(.forum-list:not(.section-hidden)),
 	.panel-content:has(.tasks-list:not(.section-hidden)),
 	.panel-content:has(.projects-list:not(.section-hidden)),
-	.panel-content:has(.wiki-list:not(.section-hidden)) {
+	.panel-content:has(.wiki-list:not(.section-hidden)),
+	.panel-content:has(.activity-list) {
 		padding: 0 0 100px;
 	}
 
@@ -6770,7 +6781,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-		padding: 12px 16px;
+		padding: 16px;
 	}
 	/* Eyebrow label (form step only — centered) */
 	.join-form-header {

@@ -232,7 +232,7 @@ db.version(SCHEMA_VERSION).stores({
 `queryEvents(filter)` is the single NIP-01 → Dexie query engine. It selects the optimal index based on filter shape:
 
 1. **`ids`** → Use `id` primary key (most selective, O(1) per id)
-2. **Selective tag filters** (`#d`, `#a`, `#e`, `#i` with ≤ few values) → Use `_tags` multi-entry index. These tags identify specific entities and are highly selective.
+2. **Selective tag filters** (`#d`, `#a`, `#A`, `#e`, `#E`, `#i`, `#h` with ≤ few values) → Use `_tags` multi-entry index. These tags identify specific entities and are highly selective.
 3. **`kinds.length === 1 && authors.length === 1`** → Use `[kind+pubkey]` compound index
 4. **`kinds.length === 1`** → Use `kind` index
 5. **`authors` only** → Use `pubkey` index with `anyOf`
@@ -410,7 +410,31 @@ Per the [Nostr community spec](../nostr/community.md), **all community content m
 
 An `r` tag with `"enforced"` as its third element means that relay only stores events from profile list members with the community's `h` tag — the relay enforces access control server-side.
 
-**Client-side filtering rule (non-negotiable):**
+### Main Relay Priority (non-negotiable)
+
+`parseCommunity()` returns two relay collections:
+
+| Field | Contents | When to use |
+|-------|----------|-------------|
+| `mainRelay` | Single primary relay (first `r` tag) | **Always** — this is the authoritative source |
+| `relays` | All relays including backups | Fallback only when `mainRelay` is unreachable |
+
+**Every community fetch and subscription MUST target `[mainRelay]` first.** Only fall back to the full `relays` array when the main relay is down or returns no results. Never scatter queries across all relays by default — this causes the community's authoritative relay to be bypassed.
+
+```javascript
+// ✅ CORRECT — main relay first
+const def = parseCommunity(communityEvent);
+const primaryRelays = def.mainRelay ? [def.mainRelay] : (def.relays.length ? def.relays : DEFAULT_COMMUNITY_RELAYS);
+
+// ❌ WRONG — uses all relays indiscriminately
+const relays = def.relays.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
+```
+
+Fallback logic (when `mainRelay` is down): if a fetch against `[mainRelay]` times out or returns empty, retry against `def.relays` (all declared relays). Do NOT pre-emptively query all relays.
+
+### Access Control (non-negotiable)
+
+**Client-side filtering rule:**
 
 1. Parse the community's `kind:10222` with `parseCommunity()` to get `mainRelay`, `relays`, `enforcedRelays`, and `mainRelayEnforced`.
 2. Resolve the target section's profile list (`kind:30000`) to get the allowed member pubkeys.
@@ -425,9 +449,9 @@ An `r` tag with `"enforced"` as its third element means that relay only stores e
 - **Tasks** (kind `37060`), **Wikis** (kind `30818`), etc.: Use the relevant section's profile list.
 
 ```javascript
-// Correct pattern: always pull from community's own relays
+// Correct pattern: main relay first, fallback to full relay list
 const def = parseCommunity(communityEvent);
-const relays = def.relays.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
+const relays = def.mainRelay ? [def.mainRelay] : (def.relays.length ? def.relays : DEFAULT_COMMUNITY_RELAYS);
 const enforced = def.mainRelayEnforced;
 
 let allowedPubkeys = [];
@@ -447,7 +471,8 @@ const labelEvents = await fetchLabelEvents(relays, eventId, communityPubkey, {
 **Current state of fetching across the app:**
 - `fetchCommunityForumPosts` and `subscribeCommunityForumPosts` accept `authorPubkeys` and use community relays correctly.
 - `fetchLabelEvents` respects enforcement: skips `authors` filter on enforced relays, applies it on non-enforced relays.
-- **Known gap:** Comment and zap fetching for community content still falls back to `DEFAULT_SOCIAL_RELAYS` in some paths. This must be corrected to use community-declared relays — per the spec, all community content queries go to the community's own relays.
+- All `$effect` fetch/subscribe blocks in the community page use `[selectedCommunity.mainRelay]` as the primary relay target, falling back to the full relay list when `mainRelay` is absent.
+- Publish operations (`publishToRelays`) intentionally still broadcast to all declared community relays so content reaches every member regardless of which relay they read from.
 
 ## Storage
 

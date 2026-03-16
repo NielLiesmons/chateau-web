@@ -51,6 +51,7 @@ onMount(() => {
 <style>
   .quoted-message {
     display: flex;
+    width: 100%;
     min-height: 0;
     margin-bottom: 8px;
     border-radius: var(--radius-12);
