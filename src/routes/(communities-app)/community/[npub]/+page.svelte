@@ -69,7 +69,8 @@
 	import TaskModal from '$lib/components/modals/TaskModal.svelte';
 	import WikiModal from '$lib/components/modals/WikiModal.svelte';
 	import Checkbox from '$lib/components/common/Checkbox.svelte';
-	import { Pen, Cross, Bell, ChevronRight, Crown } from '$lib/components/icons';
+	import { Pen, Cross, Bell, ChevronRight, ChevronDown, Crown } from '$lib/components/icons';
+	import Spinner from '$lib/components/common/Spinner.svelte';
 	import BadgeStack from '$lib/components/common/BadgeStack.svelte';
 	import SingleBadge from '$lib/components/common/SingleBadge.svelte';
 	import ProfilePicStack from '$lib/components/common/ProfilePicStack.svelte';
@@ -1434,16 +1435,28 @@
 
 	const _sectionRefreshTs = new Map();
 	let _lastTabSection = /** @type {string|null} */ (null);
+	/** Only reset when community pubkey changes, not when selectedCommunity gets a new ref (e.g. profile update). */
+	let _lastEffectCommunityPubkey = /** @type {string|null} */ (null);
+	/** True while fetching section content on tab switch; show spinner in pill. */
+	let loadingSection = $state(false);
 	$effect(() => {
 		const section = selectedSection;
 		const communityPubkey = selectedCommunity?.pubkey;
 		if (!browser || !communityPubkey) {
 			_lastTabSection = null;
+			_lastEffectCommunityPubkey = null;
+			loadingSection = false;
 			return;
+		}
+		const prevCommPubkey = _lastEffectCommunityPubkey;
+		_lastEffectCommunityPubkey = communityPubkey;
+		if (prevCommPubkey !== communityPubkey) {
+			_lastTabSection = null;
 		}
 		// First run after community load: record the section, don't fetch (initial load covers it).
 		if (_lastTabSection === null) {
 			_lastTabSection = section;
+			loadingSection = false;
 			return;
 		}
 		if (_lastTabSection === section) return;
@@ -1460,7 +1473,7 @@
 			: (selectedCommunity.relays?.length ? selectedCommunity.relays : DEFAULT_COMMUNITY_RELAYS);
 
 		if (section === 'tasks') {
-			// Tasks have no persistent subscription; refresh tasks + statuses on tab switch.
+			loadingSection = true;
 			fetchFromRelays(relays, { kinds: [EVENT_KINDS.TASK], '#h': [communityPubkey], limit: 200 })
 				.then(async (events) => {
 					if (events.length) await putEvents(events);
@@ -1479,19 +1492,32 @@
 						if (statusEvs.length) await putEvents(statusEvs);
 					}
 				})
-				.catch(() => {});
+				.catch(() => {})
+				.finally(() => {
+					loadingSection = false;
+				});
 		} else if (section === 'wikis') {
+			loadingSection = true;
 			fetchCommunityWikis(relays, communityPubkey)
 				.then((events) => {
 					if (events.length) putEvents(events);
 				})
-				.catch(() => {});
+				.catch(() => {})
+				.finally(() => {
+					loadingSection = false;
+				});
 		} else if (section === 'projects') {
+			loadingSection = true;
 			fetchCommunityProjects(relays, communityPubkey)
 				.then((evs) => {
 					if (evs.length) putEvents(evs);
 				})
-				.catch(() => {});
+				.catch(() => {})
+				.finally(() => {
+					loadingSection = false;
+				});
+		} else {
+			loadingSection = false;
 		}
 	});
 
@@ -3441,6 +3467,15 @@
 							})}
 					>
 						{pill.label}
+						{#if selectedSection === pill.id}
+							<span class="pill-indicator" class:pill-indicator-chevron={!loadingSection}>
+								{#if loadingSection}
+									<Spinner color="hsl(0 0% 100% / 0.44)" size={14} />
+								{:else}
+									<ChevronDown variant="outline" size={12} color="hsl(0 0% 100% / 0.44)" />
+								{/if}
+							</span>
+						{/if}
 					</button>
 				{/each}
 			</div>
@@ -6005,6 +6040,16 @@
 		height: 32px;
 		min-height: 32px;
 		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.pill-indicator {
+		display: inline-flex;
+		align-items: center;
+	}
+	.pill-indicator.pill-indicator-chevron {
+		margin-top: 2px;
 	}
 	.tab-row.pills-row-under :global(.btn-primary-small:hover),
 	.tab-row.pills-row-under :global(.btn-secondary-small:hover) {

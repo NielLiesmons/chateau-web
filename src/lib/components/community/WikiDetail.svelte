@@ -5,15 +5,26 @@
 	 * Mirrors ForumPostDetail:
 	 *   - DetailHeader with author info + community catalog on the right
 	 *   - Read-more / show-less truncation
-	 *   - SocialTabs (Details tab with raw event; Comments/Zaps empty for now)
+	 *   - SocialTabs (Comments, Zaps, Details tab with raw event)
 	 *   - White body text, code blocks matching DetailsTab, visible bullet markers
 	 */
 	import { nip19 } from 'nostr-tools';
 	import {
 		queryEvents,
 		queryEvent,
+		liveQuery,
 		parseProfile,
+		parseComment,
+		parseCommunity,
+		parseProfileList,
+		parseZapReceipt,
+		publishComment,
 		fetchProfilesBatch,
+		fetchForumPostComments,
+		fetchZapsByEventIds,
+		subscribeForumPostComments,
+		fetchProfileListFromRelays,
+		fetchEventsNoStore,
 		putEvents,
 		fetchFromRelays
 	} from '$lib/nostr';
@@ -78,6 +89,18 @@
 	let communityName = $state(_commContent?.display_name ?? _commContent?.name ?? '');
 	let communityPicture = $state(_commContent?.picture ?? _commContent?.image ?? '');
 	let communityPubkeyState = $state('');
+	let comments = $state([]);
+	let commentsLoading = $state(false);
+	let commentsError = $state('');
+	let zaps = $state([]);
+	let zapsLoading = $state(false);
+	let profiles = $state({});
+	let profilesLoading = $state(false);
+	let zapperProfiles = $state(new Map());
+	/** @type {{ mainRelay: string|null, relays: string[], enforcedRelays: string[], mainRelayEnforced: boolean, sections: any[] } | null} */
+	let communityDef = $state(null);
+	/** @type {string[] | null | undefined} */
+	let allowedCommenters = $state(undefined);
 
 	const title = $derived(
 		wikiEvent?.tags?.find((/** @type {string[]} */ t) => t[0] === 'title')?.[1] ?? 'Untitled'
@@ -146,6 +169,300 @@
 	const searchEmojis = $derived(
 		createSearchEmojisFunction(/** @type {any} */ (() => getCurrentPubkey() ?? ''))
 	);
+
+	const communityRelays = $derived(
+		communityDef?.relays?.length ? communityDef.relays : DEFAULT_COMMUNITY_RELAYS
+	);
+
+	// Resolve allowed commenters from the General section profile list.
+	// When no communityDef (e.g. wiki without community), allow all (null).
+	$effect(() => {
+		const def = communityDef;
+		if (!def) {
+			allowedCommenters = null;
+			return;
+		}
+		if (def.mainRelayEnforced) {
+			allowedCommenters = null;
+			return;
+		}
+		const relays = def.relays?.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
+		const generalSection = def.sections?.find((s) => s.name === 'General');
+		if (!generalSection?.profileListAddress) {
+			allowedCommenters = null;
+			return;
+		}
+		const parts = generalSection.profileListAddress.split(':');
+		const listPubkey = parts[1];
+		const listDTag = parts.slice(2).join(':');
+		allowedCommenters = undefined;
+		let cancelled = false;
+		(async () => {
+			let listEvent =
+				listPubkey && listDTag
+					? await queryEvent({
+							kinds: [EVENT_KINDS.PROFILE_LIST],
+							authors: [listPubkey],
+							'#d': [listDTag]
+						})
+					: null;
+			if (!listEvent) {
+				listEvent = await fetchProfileListFromRelays(relays, generalSection.profileListAddress);
+			}
+			if (cancelled) return;
+			const list = listEvent ? parseProfileList(listEvent) : null;
+			allowedCommenters = list?.members?.length ? list.members : null;
+		})();
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	// Plain vars for coordinating ghost parent fetching across liveQuery re-fires.
+	let _lastParsedAllowed = /** @type {any[]} */ ([]);
+	let _wikiIdRef = '';
+	let _nonMemberById = /** @type {Map<string, { loading?: boolean, comment?: any, notFound?: boolean }>} */ (
+		new Map()
+	);
+
+	function _refreshComments(parsedAllowed) {
+		const nonMemberEntries = [];
+		for (const [, state] of _nonMemberById) {
+			if (state.comment) nonMemberEntries.push(state.comment);
+		}
+		const combined = [...parsedAllowed, ...nonMemberEntries];
+		const combinedIdSet = new Set(combined.map((c) => c.id));
+		for (const c of combined) {
+			if (
+				c.parentId &&
+				c.parentId !== _wikiIdRef &&
+				!combinedIdSet.has(c.parentId) &&
+				!_nonMemberById.has(c.parentId)
+			) {
+				_nonMemberById.set(c.parentId, { loading: true });
+				_fetchNonMemberParent(c.parentId);
+			}
+		}
+		let displayable = combined;
+		let changed = true;
+		while (changed) {
+			const displayIds = new Set(displayable.map((c) => c.id));
+			const next = displayable.filter(
+				(c) => !c.parentId || c.parentId === _wikiIdRef || displayIds.has(c.parentId)
+			);
+			changed = next.length !== displayable.length;
+			displayable = next;
+		}
+		comments = displayable;
+	}
+
+	async function _fetchNonMemberParent(id) {
+		try {
+			const events = await fetchEventsNoStore(
+				DEFAULT_COMMUNITY_RELAYS,
+				[{ ids: [id], kinds: [1111], limit: 1 }],
+				{ timeout: 3000 }
+			);
+			const event = events[0] ?? null;
+			if (event) {
+				const p = parseComment(event);
+				p.npub = nip19.npubEncode(event.pubkey);
+				p.nonMember = true;
+				_nonMemberById.set(id, { comment: p });
+				fetchProfilesBatch([event.pubkey]).then((batch) => {
+					const ev = batch.get(event.pubkey);
+					if (ev?.content) {
+						try {
+							const c = JSON.parse(ev.content);
+							profiles = {
+								...profiles,
+								[event.pubkey]: {
+									displayName: c.display_name ?? c.name,
+									name: c.name,
+									picture: c.picture
+								}
+							};
+						} catch {}
+					}
+				}).catch(() => {});
+			} else {
+				_nonMemberById.set(id, { notFound: true });
+			}
+		} catch {
+			_nonMemberById.set(id, { notFound: true });
+		}
+		_refreshComments(_lastParsedAllowed);
+	}
+
+	// Comments: live from Dexie, filtered by allowedCommenters, backfilled from relay.
+	$effect(() => {
+		const wid = wikiEvent?.id;
+		const def = communityDef;
+		const relays = def?.relays?.length ? def.relays : DEFAULT_COMMUNITY_RELAYS;
+		const allowed = allowedCommenters;
+		if (!wid) {
+			comments = [];
+			_lastParsedAllowed = [];
+			_wikiIdRef = '';
+			_nonMemberById = new Map();
+			return;
+		}
+		if (allowed === undefined) {
+			commentsLoading = true;
+			return;
+		}
+		commentsLoading = true;
+		_wikiIdRef = wid;
+		_nonMemberById = new Map();
+		_lastParsedAllowed = [];
+		const allowedSet = allowed ? new Set(allowed) : null;
+
+		const sub = liveQuery(async () => {
+			const [byE, bye] = await Promise.all([
+				queryEvents({ kinds: [1111], '#E': [wid], limit: 500 }),
+				queryEvents({ kinds: [1111], '#e': [wid], limit: 500 })
+			]);
+			const byId = new Map();
+			for (const ev of [...byE, ...bye]) if (!byId.has(ev.id)) byId.set(ev.id, ev);
+			return Array.from(byId.values()).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+		}).subscribe({
+			next: (events) => {
+				let filtered = events ?? [];
+				if (allowedSet) {
+					filtered = filtered.filter((e) => allowedSet.has(e.pubkey));
+				}
+				const parsedAllowed = filtered.map((e) => {
+					const p = parseComment(e);
+					p.npub = nip19.npubEncode(e.pubkey);
+					return p;
+				});
+				_lastParsedAllowed = parsedAllowed;
+				commentsLoading = false;
+				commentsError = '';
+				_refreshComments(parsedAllowed);
+				const pubkeys = [...new Set(parsedAllowed.map((c) => c.pubkey).filter(Boolean))];
+				if (pubkeys.length > 0) {
+					fetchProfilesBatch(pubkeys).then((batch) => {
+						const next = { ...profiles };
+						for (const pk of pubkeys) {
+							const ev = batch.get(pk);
+							if (ev?.content) {
+								try {
+									const c = JSON.parse(ev.content);
+									next[pk] = {
+										displayName: c.display_name ?? c.name,
+										name: c.name,
+										picture: c.picture
+									};
+								} catch {}
+							}
+						}
+						profiles = next;
+					});
+				}
+			},
+			error: () => {
+				commentsLoading = false;
+				commentsError = 'Failed to load comments';
+			}
+		});
+
+		fetchForumPostComments(wid, { relays, authors: allowed })
+			.then(() => {})
+			.catch(() => {});
+
+		// Live subscription so new comments arrive in real-time (bufferEvent → Dexie → liveQuery)
+		const wikiCommentsUnsub = subscribeForumPostComments(relays, [wid], {
+			authors: allowed ?? undefined
+		});
+
+		return () => {
+			sub.unsubscribe();
+			wikiCommentsUnsub?.();
+		};
+	});
+
+	// Zaps: fetch by wiki event id
+	$effect(() => {
+		const tid = wikiEvent?.id;
+		const relays = communityRelays;
+		if (!tid) return;
+		(async () => {
+			zapsLoading = true;
+			try {
+				const events = await fetchZapsByEventIds([tid], { relays });
+				zaps = events.map((e) => {
+					const z = parseZapReceipt(e);
+					z.id = e.id;
+					return z;
+				});
+				const senders = [...new Set(zaps.map((z) => z.senderPubkey).filter(Boolean))];
+				const next = new Map(zapperProfiles);
+				for (const pk of senders) {
+					const ev = await queryEvent({ kinds: [0], authors: [pk], limit: 1 });
+					if (ev?.content) {
+						try {
+							const c = JSON.parse(ev.content);
+							next.set(pk, {
+								displayName: c.display_name ?? c.name,
+								name: c.name,
+								picture: c.picture
+							});
+						} catch {}
+					}
+				}
+				zapperProfiles = next;
+			} catch (err) {
+				console.error('Failed to load zaps', err);
+			} finally {
+				zapsLoading = false;
+			}
+		})();
+	});
+
+	async function handleCommentSubmit(e) {
+		if (!wikiEvent || !e?.text?.trim()) return;
+		const pubkey = getCurrentPubkey();
+		if (!pubkey) return;
+		const parentId = e.parentId ?? null;
+		const replyToPubkey = e.replyToPubkey ?? wikiEvent.pubkey;
+		const target = {
+			contentType: 'wiki',
+			pubkey: wikiEvent.pubkey,
+			id: wikiEvent.id,
+			kind: EVENT_KINDS.WIKI
+		};
+		try {
+			const signed = await publishComment(
+				e.text,
+				target,
+				signEvent,
+				e.emojiTags ?? [],
+				parentId,
+				replyToPubkey,
+				parentId ? 1111 : EVENT_KINDS.WIKI,
+				e.mentions ?? [],
+				communityRelays
+			);
+			const parsed = parseComment(signed);
+			parsed.npub = nip19.npubEncode(signed.pubkey);
+			if (parentId) parsed.parentId = parentId;
+			comments = [...comments, parsed];
+		} catch (err) {
+			console.error('Comment submit failed', err);
+		}
+	}
+
+	function refetchZaps() {
+		if (!wikiEvent?.id) return;
+		fetchZapsByEventIds([wikiEvent.id], { relays: communityRelays }).then((events) => {
+			zaps = events.map((e) => {
+				const z = parseZapReceipt(e);
+				z.id = e.id;
+				return z;
+			});
+		});
+	}
 
 	const isOwnWiki = $derived(
 		!!wikiEvent?.pubkey && !!getCurrentPubkey() && wikiEvent.pubkey === getCurrentPubkey()
@@ -383,6 +700,7 @@
 						: Promise.resolve(null)
 				]);
 				if (profileEv) authorProfile = parseProfile(profileEv);
+				if (communityEv) communityDef = parseCommunity(communityEv);
 				if (communityEv || communityProfileEv) {
 					const cp = communityProfileEv ? parseProfile(communityProfileEv) : null;
 					communityName =
@@ -438,6 +756,15 @@
 			wikiEvent = ev ?? null;
 			loading = false;
 
+			// Fallback: get community from wiki's #h when not in URL
+			if (!communityPubkey && ev?.tags) {
+				const hTag = ev.tags.find((/** @type {string[]} */ t) => t[0] === 'h')?.[1];
+				if (hTag) {
+					communityPubkey = hTag;
+					communityPubkeyState = hTag;
+				}
+			}
+
 			// Load author profile + community info in parallel
 			const [profileEv, communityEv, communityProfileEv] = await Promise.all([
 				ev?.pubkey
@@ -455,6 +782,7 @@
 				if (pEv) authorProfile = parseProfile(pEv);
 			}
 
+			if (communityEv) communityDef = parseCommunity(communityEv);
 			if (communityEv?.content) {
 				try {
 					const c = JSON.parse(communityEv.content);
@@ -570,22 +898,30 @@
 							delete c._tags;
 							return c;
 						})()}
-						comments={[]}
-						commentsLoading={false}
-						commentsError=""
-						zaps={[]}
-						zapsLoading={false}
-						zapperProfiles={new Map()}
-						profiles={{}}
-						profilesLoading={false}
+						{comments}
+						{commentsLoading}
+						{commentsError}
+						zaps={zaps.map((z) => ({
+							id: z.id,
+							senderPubkey: z.senderPubkey || undefined,
+							amountSats: z.amountSats,
+							createdAt: z.createdAt,
+							comment: z.comment,
+							emojiTags: z.emojiTags ?? [],
+							zappedEventId: z.zappedEventId ?? undefined
+						}))}
+						{zapsLoading}
+						{zapperProfiles}
+						{profiles}
+						{profilesLoading}
 						pubkeyToNpub={(/** @type {string} */ pk) => (pk ? nip19.npubEncode(pk) : '')}
 						{searchProfiles}
 						{searchEmojis}
 						labelEntries={[]}
 						labelsLoading={false}
-						onCommentSubmit={() => {}}
-						onZapReceived={() => {}}
-						onGetStarted={() => {}}
+						onCommentSubmit={handleCommentSubmit}
+						onZapReceived={refetchZaps}
+						onGetStarted={() => goto('/')}
 					/>
 				</div>
 			</div>
@@ -602,13 +938,13 @@
 			onGetStarted={() => goto('/')}
 			{searchProfiles}
 			{searchEmojis}
-			oncommentSubmit={() => {}}
-			onzapReceived={() => {}}
+			oncommentSubmit={handleCommentSubmit}
+			onzapReceived={refetchZaps}
 			onoptions={() => {}}
 			eventId={wikiEvent?.id ?? ''}
 			authorPubkey={wikiEvent?.pubkey ?? ''}
 			communityPubkey={communityPubkeyState}
-			relays={DEFAULT_COMMUNITY_RELAYS}
+			relays={communityRelays}
 		/>
 	{/if}
 </div>

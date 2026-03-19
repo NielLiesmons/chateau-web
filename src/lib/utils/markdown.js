@@ -132,7 +132,7 @@ export function renderNostrMarkdown(text, options = {}) {
     // 3. Custom emoji  →  <img> (before marked so it survives as raw HTML)
     const hasEmoji = Object.keys(emojiMap).length > 0;
     if (hasEmoji) {
-        processed = processed.replace(/:([a-zA-Z0-9_]+):/g, (match, shortcode) => {
+        processed = processed.replace(/:([a-zA-Z0-9_-]+):/g, (match, shortcode) => {
             const url = emojiMap[shortcode];
             if (url && isSafeUrl(url)) {
                 return `<img class="nostr-emoji" src="${url}" alt=":${shortcode}:" title=":${shortcode}:" loading="lazy" />`;
@@ -200,7 +200,7 @@ export function tokenizeNostrMarkdown(text, options = {}) {
     // 3. Custom emoji → <img> inline html (safe — URLs validated before insertion)
     const hasEmoji = Object.keys(emojiMap).length > 0;
     if (hasEmoji) {
-        processed = processed.replace(/:([a-zA-Z0-9_]+):/g, (match, shortcode) => {
+        processed = processed.replace(/:([a-zA-Z0-9_-]+):/g, (match, shortcode) => {
             const url = emojiMap[shortcode];
             if (url && isSafeUrl(url)) {
                 return `<img class="nostr-emoji" src="${url}" alt=":${shortcode}:" title=":${shortcode}:" loading="lazy" />`;
