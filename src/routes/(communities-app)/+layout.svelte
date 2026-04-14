@@ -109,9 +109,10 @@ const currentUserNpub = $derived(
 // liveQuery: communities (kind 10222)
 $effect(() => {
 	if (!browser) return;
-	const since = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
 	const sub = liveQuery(async () => {
-		const events = await queryEvents({ kinds: [EVENT_KINDS.COMMUNITY], limit: 100, since });
+		// No `since` filter: kind 10222 is replaceable (one per pubkey), so time-filtering
+		// would incorrectly hide communities created/published more than N days ago.
+		const events = await queryEvents({ kinds: [EVENT_KINDS.COMMUNITY], limit: 100 });
 		return events.map((e) => ({ raw: e, ...parseCommunity(e) })).filter(Boolean);
 	}).subscribe({
 		next: (val) => { communities = val ?? []; },
